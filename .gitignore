@@ -1,0 +1,27 @@
+# Environments
+venv/
+env/
+ENV/
+
+# API Keys and Secrets
+.env
+.env.local
+config.json
+
+# Python Artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Data Exports
+exports/
+*.csv
+
+# OS generated files
+.DS_Store
+
+# Streamlit
+.streamlit/
+
+# Claude
+.claude/
