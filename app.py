@@ -343,8 +343,8 @@ with tab2:
                 flagged_df = results_df[results_df['red_flag']].copy()
 
                 from scraper.ebay_prices import EbayPriceLookup
-                import json as _json
-                cfg = _json.load(open("config.json"))
+                from scraper.config_loader import load_config
+                cfg = load_config()
                 ebay = EbayPriceLookup(cfg["ebay"]["app_id"], cfg["ebay"]["cert_id"])
 
                 progress_bar = st.progress(0, text="Looking up eBay prices & STR...")

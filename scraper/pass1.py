@@ -84,10 +84,8 @@ class Phase1Scraper:
         self.closing_within_days = 7  # Only include auctions closing within this many days
 
     def _load_config(self, filepath: str) -> dict:
-        if not os.path.exists(filepath):
-            raise FileNotFoundError(f"Configuration file not found at: {filepath}")
-        with open(filepath, 'r') as file:
-            return json.load(file)
+        from .config_loader import load_config
+        return load_config(filepath)
 
     # Patterns that indicate an item is pickup-only (checked against description too)
     _PICKUP_ONLY_RE = re.compile(
