@@ -95,6 +95,9 @@ if 'phase1_leads' not in st.session_state:
 if 'selected_leads' not in st.session_state:
     st.session_state.selected_leads = pd.DataFrame()
 
+if 'current_auction' not in st.session_state:
+    st.session_state.current_auction = None
+
 if 'audit_results' not in st.session_state:
     st.session_state.audit_results = {}
 
@@ -148,6 +151,7 @@ with st.sidebar:
             st.session_state.phase1_leads = df
             st.session_state.audit_results = {}
             st.session_state.selected_leads = pd.DataFrame()
+            st.session_state.current_auction = None
 
             local_count = len(df[df['source'] == "Local Pickup"]) if not df.empty and 'source' in df.columns else len(df)
             ship_count = len(df[df['source'] == "Ship"]) if not df.empty and 'source' in df.columns else 0
@@ -180,17 +184,58 @@ DISCOVERY_COL_ORDER = ["title", "current_bid", "est_cost", "bid_count",
                        "time_left", "lot_link", "category", "logistics_ease"]
 
 
-def _add_leads(new_leads_df):
-    """Helper to add leads to session state, deduplicating by lot_id."""
-    if st.session_state.selected_leads.empty:
-        st.session_state.selected_leads = new_leads_df.copy()
-    else:
-        existing_ids = set(st.session_state.selected_leads['lot_id'].tolist())
-        fresh = new_leads_df[~new_leads_df['lot_id'].isin(existing_ids)]
-        if not fresh.empty:
-            st.session_state.selected_leads = pd.concat(
-                [st.session_state.selected_leads, fresh], ignore_index=True
-            )
+def _load_auction_for_analysis(auction_name, auction_df):
+    """Replace the current analysis target with the given auction's items.
+
+    Clears prior audit/comp results since they're tied to the old auction.
+    """
+    st.session_state.selected_leads = auction_df.copy()
+    st.session_state.current_auction = auction_name
+    st.session_state.audit_results = {}
+
+
+@st.fragment
+def _render_auction_expander(auction_name, auction_df, col_config, col_order):
+    """Render a single auction's expander as an isolated fragment.
+
+    Button clicks inside a fragment only re-render the fragment itself, not the
+    entire page — critical when there are hundreds of auctions on screen.
+    """
+    closing = auction_df['closing_date'].iloc[0] if 'closing_date' in auction_df.columns else ""
+    source = auction_df['source'].iloc[0] if 'source' in auction_df.columns else ""
+    item_count = len(auction_df)
+    avg_bid = auction_df['current_bid'].mean() if 'current_bid' in auction_df.columns else 0
+    easy_count = (auction_df['logistics_ease'] == "EASY").sum() if 'logistics_ease' in auction_df.columns else 0
+
+    subtitle_parts = [f"{item_count} items"]
+    if closing:
+        subtitle_parts.append(f"closes {closing}")
+    if source:
+        subtitle_parts.append(source)
+    subtitle_parts.append(f"avg bid ${avg_bid:.2f}")
+    if easy_count:
+        subtitle_parts.append(f"{easy_count} easy-ship")
+
+    is_active = st.session_state.get('current_auction') == auction_name
+    prefix = "⭐ " if is_active else "🏷️ "
+
+    with st.expander(f"{prefix}**{auction_name}** — {' · '.join(subtitle_parts)}", expanded=False):
+        button_label = f"🎯 Analyze This Auction ({item_count} items)"
+        if is_active:
+            button_label = "✅ Currently Loaded — Re-analyze"
+
+        if st.button(button_label, key=f"load_{auction_name}", type="primary", use_container_width=True):
+            _load_auction_for_analysis(auction_name, auction_df)
+            st.success(f"Loaded {item_count} items from **{auction_name}**. Open the **Phase 2** tab to run the audit.")
+
+        st.dataframe(
+            auction_df,
+            use_container_width=True,
+            key=f"table_{auction_name}",
+            column_config=col_config,
+            column_order=col_order,
+            hide_index=True,
+        )
 
 
 # --- TAB 1: DISCOVERY ---
@@ -207,15 +252,17 @@ with tab1:
             if selected_source != "All":
                 df = df[df['source'] == selected_source]
 
-        # Lead queue status bar
-        lead_count = len(st.session_state.selected_leads)
-        if lead_count > 0:
+        # Active auction banner
+        active_auction = st.session_state.get('current_auction')
+        if active_auction:
+            active_count = len(st.session_state.selected_leads)
             lc1, lc2 = st.columns([3, 1])
             with lc1:
-                st.info(f"📋 **{lead_count} lead(s)** queued for Phase 2 analysis")
+                st.info(f"⭐ **Loaded for analysis:** {active_auction} — {active_count} items. Go to **Phase 2** to audit.")
             with lc2:
-                if st.button("🗑️ Clear Leads", use_container_width=True):
+                if st.button("🗑️ Clear", use_container_width=True):
                     st.session_state.selected_leads = pd.DataFrame()
+                    st.session_state.current_auction = None
                     st.session_state.audit_results = {}
                     st.rerun()
 
@@ -225,67 +272,24 @@ with tab1:
         auction_order = df.groupby('auction')['closing_date'].first().sort_values()
 
         st.subheader(f"Discovery Results — {len(auction_order)} auctions, {len(df)} items")
-        st.caption("Browse auctions below. Select items and add to leads, then run Phase 2 for AI audit + eBay STR.")
+        st.caption("Expand an auction to preview items, then click **🎯 Analyze This Auction** to run Phase 2 on all of its items.")
 
         for auction_name in auction_order.index:
             auction_df = auction_groups.get_group(auction_name).reset_index(drop=True)
-
-            # Auction header info
-            closing = auction_df['closing_date'].iloc[0] if 'closing_date' in auction_df.columns else ""
-            source = auction_df['source'].iloc[0] if 'source' in auction_df.columns else ""
-            item_count = len(auction_df)
-            avg_bid = auction_df['current_bid'].mean() if 'current_bid' in auction_df.columns else 0
-            easy_count = (auction_df['logistics_ease'] == "EASY").sum() if 'logistics_ease' in auction_df.columns else 0
-
-            # Build subtitle
-            subtitle_parts = [f"{item_count} items"]
-            if closing:
-                subtitle_parts.append(f"closes {closing}")
-            if source:
-                subtitle_parts.append(source)
-            subtitle_parts.append(f"avg bid ${avg_bid:.2f}")
-            if easy_count:
-                subtitle_parts.append(f"{easy_count} easy-ship")
-
-            with st.expander(f"🏷️ **{auction_name}** — {' · '.join(subtitle_parts)}", expanded=False):
-                # Per-auction action buttons
-                sel_col, all_col = st.columns(2)
-
-                with all_col:
-                    if st.button(f"📦 Add All {item_count} Items", key=f"all_{auction_name}", use_container_width=True):
-                        _add_leads(auction_df)
-                        st.success(f"Added all {item_count} items from {auction_name}!")
-                        st.rerun()
-
-                # Selectable table for this auction
-                selection = st.dataframe(
-                    auction_df,
-                    use_container_width=True,
-                    selection_mode="multi-row",
-                    on_select="rerun",
-                    key=f"table_{auction_name}",
-                    column_config=DISCOVERY_COL_CONFIG,
-                    column_order=DISCOVERY_COL_ORDER,
-                    hide_index=True,
-                )
-
-                with sel_col:
-                    if st.button("✅ Add Selected", key=f"sel_{auction_name}", type="primary", use_container_width=True):
-                        selected_rows = selection.selection.rows
-                        if selected_rows:
-                            _add_leads(auction_df.iloc[selected_rows])
-                            st.success(f"Added {len(selected_rows)} item(s)!")
-                            st.rerun()
-                        else:
-                            st.warning("Select rows first by clicking on them.")
+            _render_auction_expander(auction_name, auction_df,
+                                     DISCOVERY_COL_CONFIG, DISCOVERY_COL_ORDER)
 
 # --- TAB 2: AI AUDIT ---
 with tab2:
-    st.subheader("Lead Deep Dive")
+    active_auction = st.session_state.get('current_auction')
+    if active_auction:
+        st.subheader(f"🔬 Analyzing: {active_auction}")
+    else:
+        st.subheader("Lead Deep Dive")
     st.markdown("**Step 1:** AI condition audit → **Step 2:** eBay price comps & STR on good+ items only.")
 
     if st.session_state.selected_leads.empty:
-        st.warning("No leads selected yet. Go to **Phase 1** → select rows → click **Add to Leads**.")
+        st.warning("No auction loaded yet. Go to **Phase 1** → expand an auction → click **🎯 Analyze This Auction**.")
     else:
         leads_df = st.session_state.selected_leads
         has_audit = isinstance(st.session_state.get('audit_results'), pd.DataFrame) and not st.session_state.audit_results.empty and 'verdict' in st.session_state.audit_results.columns
@@ -294,7 +298,7 @@ with tab2:
         # --- STEP 1: AI Condition Audit ---
         st.markdown("---")
         st.markdown("### Step 1: AI Condition Audit")
-        st.caption(f"🎯 {len(leads_df)} lead(s) ready for analysis")
+        st.caption(f"🎯 {len(leads_df)} item(s) from this auction ready for analysis")
 
         if has_audit:
             results_df = st.session_state.audit_results
