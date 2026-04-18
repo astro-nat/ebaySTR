@@ -1,18 +1,32 @@
-import httpx
 import re
+import pandas as pd
 from transformers import pipeline
 import warnings
 
 # Suppress HuggingFace warnings for cleaner terminal output
 warnings.filterwarnings("ignore")
 
+# Common filler words to skip when extracting details from descriptions
+_FILLER = {
+    'the', 'a', 'an', 'and', 'or', 'but', 'is', 'are', 'was', 'were', 'be',
+    'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will',
+    'would', 'could', 'should', 'may', 'might', 'shall', 'can', 'this',
+    'that', 'these', 'those', 'it', 'its', 'of', 'in', 'on', 'at', 'to',
+    'for', 'with', 'from', 'by', 'as', 'into', 'about', 'up', 'out',
+    'lot', 'item', 'items', 'listing', 'auction', 'bid', 'bidding',
+    'see', 'photos', 'photo', 'pictures', 'picture', 'image', 'images',
+    'please', 'note', 'description', 'details', 'condition', 'shipping',
+    'sold', 'buyer', 'seller', 'payment', 'terms', 'pickup',
+    'click', 'here', 'more', 'info', 'information', 'view', 'all',
+    'no', 'yes', 'not', 'we', 'our', 'you', 'your', 'if', 'so',
+}
+
+
 class Phase2Scraper:
     def __init__(self):
-        # Initialize the zero-shot classification pipeline
         print("Initializing NLP Engine (this may take a moment if downloading the model)...")
         self.classifier = pipeline("zero-shot-classification", model="facebook/bart-large-mnli")
-        
-        # Define the categories we want the AI to look for
+
         self.risk_labels = [
             "broken, damaged, or for parts",
             "untested or unknown condition",
@@ -20,43 +34,106 @@ class Phase2Scraper:
             "normal wear and tear"
         ]
 
-    async def fetch_item_description(self, client: httpx.AsyncClient, lot_id: str) -> str:
-        """Fetches the full HTML description for a specific lot."""
-        # HiBid API endpoint for specific lot details
-        url = f"https://hibid.com/api/v1/lot/{lot_id}"
-        
-        try:
-            response = await client.get(url, timeout=15.0)
-            response.raise_for_status()
-            data = response.json()
-            
-            # Extract the raw description
-            description = data.get('description', '')
-            
-            # Strip HTML tags for clean NLP processing
-            clean_text = re.sub('<[^<]+?>', ' ', description)
-            return clean_text.strip()
-            
-        except Exception as e:
-            print(f"Error fetching description for Lot {lot_id}: {e}")
-            return ""
+    def _enrich_title(self, original_title: str, description: str) -> str:
+        """Build a detailed, eBay-searchable title from auction title + description.
+
+        Extracts brand names, model numbers, product specifics, and key attributes
+        from the description and combines them with the original title.
+        Returns the enriched title (max ~80 chars for good eBay search results).
+        """
+        if not description or len(description.strip()) < 10:
+            return original_title
+
+        # Strip HTML tags and normalize whitespace
+        clean = re.sub(r'<[^<]+?>', ' ', description)
+        clean = re.sub(r'&\w+;', ' ', clean)
+        clean = re.sub(r'\s+', ' ', clean).strip()
+
+        # Words already in the original title (lowercase)
+        title_words = set(re.findall(r'[a-z0-9]+', original_title.lower()))
+
+        new_details = []
+        seen = set()
+
+        def _add(term):
+            t = term.strip()
+            if not t or len(t) < 2:
+                return
+            low = t.lower()
+            if low in seen or low in _FILLER:
+                return
+            # Skip if every word already in title
+            words = set(re.findall(r'[a-z0-9]+', low))
+            if words and words.issubset(title_words):
+                return
+            seen.add(low)
+            new_details.append(t)
+
+        # 1. Brand / model numbers (e.g. "XR-500", "Model 42B", "HP LaserJet")
+        for m in re.finditer(r'\b([A-Z][A-Za-z]*[\s-]?[A-Z0-9][\w-]*(?:[\s-][A-Z0-9][\w-]*)*)\b', clean):
+            _add(m.group(1))
+
+        # 2. Model / part numbers: alphanumeric with hyphens or dots (e.g. "A1234", "NES-001")
+        for m in re.finditer(r'\b([A-Z]{1,4}[\-.]?\d{2,}[\w\-.]*)\b', clean):
+            _add(m.group(1))
+
+        # 3. Year mentions (e.g. "1943", "2019")
+        for m in re.finditer(r'\b(1[89]\d{2}|20[0-2]\d)\b', clean):
+            _add(m.group(1))
+
+        # 4. Quoted product names (e.g. '"Elvis #1 Hits"')
+        for m in re.finditer(r'["\u201c]([^"\u201d]{3,40})["\u201d]', clean):
+            _add(m.group(1))
+
+        # 5. Key product phrases: "Brand + Product" patterns in first 300 chars
+        first_chunk = clean[:300]
+        # Extract capitalized multi-word phrases (likely product names)
+        for m in re.finditer(r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b', first_chunk):
+            phrase = m.group(1)
+            if len(phrase.split()) <= 4:
+                _add(phrase)
+
+        # 6. Extract first meaningful sentence as fallback context
+        sentences = re.split(r'[.!?\n]', first_chunk)
+        for sent in sentences:
+            sent = sent.strip()
+            if len(sent) > 15 and not any(skip in sent.lower() for skip in
+                                           ['shipping', 'payment', 'pickup', 'bid', 'click', 'terms']):
+                # Pull individual significant words from first sentence
+                for word in sent.split():
+                    w_clean = re.sub(r'[^a-zA-Z0-9\-]', '', word)
+                    if (len(w_clean) > 3
+                            and w_clean.lower() not in _FILLER
+                            and w_clean[0].isupper()):
+                        _add(w_clean)
+                break
+
+        # Build enriched title: original + best new details, up to ~80 chars
+        enriched = original_title.rstrip('.')
+        for detail in new_details:
+            candidate = f"{enriched} {detail}"
+            if len(candidate) > 80:
+                break
+            enriched = candidate
+
+        return enriched
 
     def analyze_condition(self, description_text: str) -> dict:
-        """Runs the HuggingFace model against the text."""
-        if not description_text or len(description_text) < 10:
+        """Runs the HuggingFace model against a single description."""
+        if not description_text or len(description_text.strip()) < 10:
             return {"verdict": "Unknown", "confidence": 0.0, "red_flag": False}
 
-        # Truncate text if it's excessively long to save compute time
-        text_to_analyze = description_text[:1000] 
+        text_to_analyze = re.sub('<[^<]+?>', ' ', description_text)[:1000]
 
-        # Perform zero-shot classification
         result = self.classifier(text_to_analyze, self.risk_labels)
-        
+
         top_label = result['labels'][0]
         top_score = result['scores'][0]
-        
-        # Determine if the top label indicates a risky investment
-        is_red_flag = top_label in ["broken, damaged, or for parts", "untested or unknown condition"]
+
+        is_red_flag = top_label in [
+            "broken, damaged, or for parts",
+            "untested or unknown condition"
+        ]
 
         return {
             "verdict": top_label,
@@ -64,9 +141,44 @@ class Phase2Scraper:
             "red_flag": is_red_flag
         }
 
-    async def run_audit(self, lot_id: str) -> dict:
-        """Executes the full Pass 2 process for a single item."""
-        async with httpx.AsyncClient() as client:
-            description = await self.fetch_item_description(client, lot_id)
-            analysis = self.analyze_condition(description)
-            return analysis
+    def batch_audit(self, df: pd.DataFrame, progress_callback=None) -> pd.DataFrame:
+        """Run AI condition audit on a DataFrame that has a 'description' column.
+
+        Enriches titles using description details and runs condition classification.
+
+        Args:
+            df: DataFrame with at least 'title' and 'description' columns
+            progress_callback: Optional callable(current, total) for progress updates
+
+        Returns:
+            Original DataFrame with 'enriched_title', 'verdict', 'confidence',
+            and 'red_flag' columns added.
+        """
+        enriched_titles = []
+        verdicts = []
+        confidences = []
+        red_flags = []
+
+        total = len(df)
+        for i, (_, row) in enumerate(df.iterrows()):
+            title = row.get('title', '')
+            desc = row.get('description', '')
+
+            # Enrich title from description
+            enriched_titles.append(self._enrich_title(title, desc))
+
+            # Condition audit
+            result = self.analyze_condition(desc)
+            verdicts.append(result['verdict'])
+            confidences.append(result['confidence'])
+            red_flags.append(result['red_flag'])
+
+            if progress_callback:
+                progress_callback(i + 1, total)
+
+        df = df.copy()
+        df['enriched_title'] = enriched_titles
+        df['verdict'] = verdicts
+        df['confidence'] = confidences
+        df['red_flag'] = red_flags
+        return df
