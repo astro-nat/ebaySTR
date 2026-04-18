@@ -193,6 +193,57 @@ def _add_leads(new_leads_df):
             )
 
 
+@st.fragment
+def _render_auction_expander(auction_name, auction_df, col_config, col_order):
+    """Render a single auction's expander as an isolated fragment.
+
+    Button clicks inside a fragment only re-render the fragment itself, not the
+    entire page — critical when there are hundreds of auctions on screen.
+    """
+    closing = auction_df['closing_date'].iloc[0] if 'closing_date' in auction_df.columns else ""
+    source = auction_df['source'].iloc[0] if 'source' in auction_df.columns else ""
+    item_count = len(auction_df)
+    avg_bid = auction_df['current_bid'].mean() if 'current_bid' in auction_df.columns else 0
+    easy_count = (auction_df['logistics_ease'] == "EASY").sum() if 'logistics_ease' in auction_df.columns else 0
+
+    subtitle_parts = [f"{item_count} items"]
+    if closing:
+        subtitle_parts.append(f"closes {closing}")
+    if source:
+        subtitle_parts.append(source)
+    subtitle_parts.append(f"avg bid ${avg_bid:.2f}")
+    if easy_count:
+        subtitle_parts.append(f"{easy_count} easy-ship")
+
+    with st.expander(f"🏷️ **{auction_name}** — {' · '.join(subtitle_parts)}", expanded=False):
+        sel_col, all_col = st.columns(2)
+
+        with all_col:
+            if st.button(f"📦 Add All {item_count} Items", key=f"all_{auction_name}", use_container_width=True):
+                _add_leads(auction_df)
+                st.success(f"Added all {item_count} items from {auction_name}!")
+
+        selection = st.dataframe(
+            auction_df,
+            use_container_width=True,
+            selection_mode="multi-row",
+            on_select="rerun",
+            key=f"table_{auction_name}",
+            column_config=col_config,
+            column_order=col_order,
+            hide_index=True,
+        )
+
+        with sel_col:
+            if st.button("✅ Add Selected", key=f"sel_{auction_name}", type="primary", use_container_width=True):
+                selected_rows = selection.selection.rows
+                if selected_rows:
+                    _add_leads(auction_df.iloc[selected_rows])
+                    st.success(f"Added {len(selected_rows)} item(s)!")
+                else:
+                    st.warning("Select rows first by clicking on them.")
+
+
 # --- TAB 1: DISCOVERY ---
 with tab1:
     if st.session_state.phase1_leads.empty:
@@ -229,55 +280,8 @@ with tab1:
 
         for auction_name in auction_order.index:
             auction_df = auction_groups.get_group(auction_name).reset_index(drop=True)
-
-            # Auction header info
-            closing = auction_df['closing_date'].iloc[0] if 'closing_date' in auction_df.columns else ""
-            source = auction_df['source'].iloc[0] if 'source' in auction_df.columns else ""
-            item_count = len(auction_df)
-            avg_bid = auction_df['current_bid'].mean() if 'current_bid' in auction_df.columns else 0
-            easy_count = (auction_df['logistics_ease'] == "EASY").sum() if 'logistics_ease' in auction_df.columns else 0
-
-            # Build subtitle
-            subtitle_parts = [f"{item_count} items"]
-            if closing:
-                subtitle_parts.append(f"closes {closing}")
-            if source:
-                subtitle_parts.append(source)
-            subtitle_parts.append(f"avg bid ${avg_bid:.2f}")
-            if easy_count:
-                subtitle_parts.append(f"{easy_count} easy-ship")
-
-            with st.expander(f"🏷️ **{auction_name}** — {' · '.join(subtitle_parts)}", expanded=False):
-                # Per-auction action buttons
-                sel_col, all_col = st.columns(2)
-
-                with all_col:
-                    if st.button(f"📦 Add All {item_count} Items", key=f"all_{auction_name}", use_container_width=True):
-                        _add_leads(auction_df)
-                        st.success(f"Added all {item_count} items from {auction_name}!")
-                        st.rerun()
-
-                # Selectable table for this auction
-                selection = st.dataframe(
-                    auction_df,
-                    use_container_width=True,
-                    selection_mode="multi-row",
-                    on_select="rerun",
-                    key=f"table_{auction_name}",
-                    column_config=DISCOVERY_COL_CONFIG,
-                    column_order=DISCOVERY_COL_ORDER,
-                    hide_index=True,
-                )
-
-                with sel_col:
-                    if st.button("✅ Add Selected", key=f"sel_{auction_name}", type="primary", use_container_width=True):
-                        selected_rows = selection.selection.rows
-                        if selected_rows:
-                            _add_leads(auction_df.iloc[selected_rows])
-                            st.success(f"Added {len(selected_rows)} item(s)!")
-                            st.rerun()
-                        else:
-                            st.warning("Select rows first by clicking on them.")
+            _render_auction_expander(auction_name, auction_df,
+                                     DISCOVERY_COL_CONFIG, DISCOVERY_COL_ORDER)
 
 # --- TAB 2: AI AUDIT ---
 with tab2:
