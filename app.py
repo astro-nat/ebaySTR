@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import asyncio
 import os
@@ -133,6 +134,47 @@ if 'known_categories' not in st.session_state:
         "Toys & Games", "Vintage",
     ]
 
+# --- SCREEN WAKE LOCK (mobile keep-awake) ---
+def _keep_screen_awake():
+    """Ask the browser to keep the screen on during a long-running op.
+
+    Uses the Wake Lock API (Chrome/Android, iOS 16.4+). The earlier button
+    click counts as the user gesture most browsers require. On devices
+    where Wake Lock isn't supported this is a silent no-op — users need
+    to set their phone's auto-lock setting manually.
+
+    The script is injected into a zero-height component iframe; it also
+    re-requests the lock when the tab becomes visible again (handy if
+    the user briefly switches apps).
+    """
+    components.html(
+        """
+        <script>
+        (async () => {
+            if (!('wakeLock' in navigator)) return;
+            try {
+                const lock = await navigator.wakeLock.request('screen');
+                window._htFindsWakeLock = lock;
+                lock.addEventListener('release', () => {
+                    window._htFindsWakeLock = null;
+                });
+            } catch (e) { /* user-gesture / permission issue; fail silent */ }
+        })();
+        document.addEventListener('visibilitychange', async () => {
+            if (document.visibilityState === 'visible' &&
+                !window._htFindsWakeLock &&
+                'wakeLock' in navigator) {
+                try {
+                    window._htFindsWakeLock = await navigator.wakeLock.request('screen');
+                } catch (e) {}
+            }
+        });
+        </script>
+        """,
+        height=0,
+    )
+
+
 # --- ASYNC WRAPPER ---
 def run_async_scraper(scraper_instance, progress_callback=None):
     """Safely runs the asyncio scraper within Streamlit's synchronous thread."""
@@ -163,6 +205,7 @@ with st.sidebar:
     st.markdown("---")
 
     if st.button("🚀 Run Phase 1 Discovery", type="primary", use_container_width=True):
+        _keep_screen_awake()
         try:
             scraper = Phase1Scraper(config_path="config.json")
 
@@ -782,6 +825,12 @@ if current_auction and not st.session_state.selected_leads.empty:
     # If the flag is set, we're on the second rerun — do the actual work
     # with the button now rendered disabled above. Clear the flag when done.
     if audit_running:
+        _keep_screen_awake()
+        st.info(
+            "🔋 Keeping screen awake while this runs. "
+            "If your phone still locks, set **Auto-Lock → Never** in your phone's "
+            "display settings before kicking off long runs."
+        )
         try:
             st.session_state.audit_results = _run_ai_audit(leads_df)
             _save_current_auction_to_cache()
@@ -815,6 +864,12 @@ if current_auction and not st.session_state.selected_leads.empty:
             st.rerun()
 
         if comps_running:
+            _keep_screen_awake()
+            st.info(
+                "🔋 Keeping screen awake while this runs. "
+                "If your phone still locks, set **Auto-Lock → Never** in your phone's "
+                "display settings before kicking off long runs."
+            )
             try:
                 combined, found, total = _run_ebay_comps(ar)
                 st.session_state.audit_results = combined
