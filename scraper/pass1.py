@@ -54,11 +54,12 @@ query LotSearch($auctionId: Int!, $pageIndex: Int!, $pageSize: Int!) {
 }
 """
 
-# HiBid GraphQL caps per-page results. 100 appears to be the ceiling — larger
-# values silently clamp to 100. So we page through with pageSize=100 until
-# we've collected totalCount lots.
-LOT_PAGE_SIZE = 100
-MAX_LOT_PAGES = 50  # safety cap: 50 * 100 = 5000 lots per auction, way beyond anything real
+# HiBid's UI has a "single page" toggle that requests every lot in one go.
+# We mirror that: one big pageSize request first, and only fall back to
+# paged fetching if the server clamps us (i.e. returns < totalCount).
+LOT_PAGE_SIZE_SINGLE = 10000  # effectively "all" for any real auction
+LOT_PAGE_SIZE_FALLBACK = 100   # safe per-page size if the server clamps
+MAX_LOT_PAGES = 50              # 50 * 100 = 5000 lots; safety cap
 
 
 class Phase1Scraper:
@@ -200,31 +201,43 @@ class Phase1Scraper:
         return filtered
 
     async def _fetch_all_lot_pages(self, client: httpx.AsyncClient, auction_id: int) -> List[Dict]:
-        """Page through lotSearch until we've collected every lot in the auction.
+        """Fetch every lot in an auction, matching HiBid's "single page" UI toggle.
 
-        HiBid's GraphQL pageSize appears to cap at 100 — any larger value clamps
-        silently, which is how the easy-ship count was getting stuck at 100.
+        Fast path: one GraphQL call with a huge pageSize — identical to what
+        the website does when you flip the "single page" toggle. Nearly every
+        auction comes back in this single round-trip.
+
+        Slow path: if the server clamps results (len(lots) < totalCount), we
+        fall back to paginating with pageSize=100 so nothing gets dropped.
         """
-        lots: List[Dict] = []
-        total_count = None
+        # --- Fast path: request everything at once ---
+        variables = {
+            "auctionId": auction_id,
+            "pageIndex": 0,
+            "pageSize": LOT_PAGE_SIZE_SINGLE,
+        }
+        data = await self._graphql(client, "LotSearch", LOT_SEARCH_QUERY, variables)
+        paged = data.get("lotSearch", {}).get("pagedResults", {}) or {}
+        lots = paged.get("results", []) or []
+        total_count = paged.get("totalCount") or 0
 
+        # If the server honored the big pageSize (or the auction is small), done.
+        if total_count == 0 or len(lots) >= total_count:
+            return lots
+
+        # --- Slow path: server clamped — page through at a safe size ---
+        lots = []
         for page_index in range(MAX_LOT_PAGES):
             variables = {
                 "auctionId": auction_id,
                 "pageIndex": page_index,
-                "pageSize": LOT_PAGE_SIZE,
+                "pageSize": LOT_PAGE_SIZE_FALLBACK,
             }
             data = await self._graphql(client, "LotSearch", LOT_SEARCH_QUERY, variables)
             paged = data.get("lotSearch", {}).get("pagedResults", {}) or {}
             batch = paged.get("results", []) or []
-
-            if total_count is None:
-                total_count = paged.get("totalCount") or 0
-
             lots.extend(batch)
 
-            # Done when we've got everything, or the server returned an empty
-            # page (defensive — shouldn't happen before we've fetched totalCount)
             if not batch:
                 break
             if total_count and len(lots) >= total_count:
