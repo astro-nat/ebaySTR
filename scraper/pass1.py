@@ -82,6 +82,7 @@ class Phase1Scraper:
 
         self.include_nationwide = False
         self.closing_within_days = 7  # Only include auctions closing within this many days
+        self.category_filter: List[str] = []  # Optional list of category substrings (case-insensitive)
 
     def _load_config(self, filepath: str) -> dict:
         from .config_loader import load_config
@@ -207,12 +208,25 @@ class Phase1Scraper:
             except (ValueError, TypeError):
                 closing_fmt = date_end
 
+            # Normalize category filter once per batch
+            cat_keywords = [c.strip().lower() for c in (self.category_filter or []) if c and c.strip()]
+
             processed_lots = []
             for lot in lots:
                 title = lot.get('lead', '')
                 categories = lot.get('category', [])
                 category = categories[0]['categoryName'] if categories else ''
                 description = lot.get('description', '')
+
+                # Apply category filter (substring, case-insensitive, against
+                # category name OR title — auctioneer tagging is inconsistent
+                # so falling back to title catches e.g. a "fishing rod" lot
+                # mis-tagged as "Sporting Goods"-only)
+                if cat_keywords:
+                    haystack = f"{category} {title}".lower()
+                    if not any(kw in haystack for kw in cat_keywords):
+                        continue
+
                 state = lot.get('lotState', {})
                 logistics = self.classify_logistics(title, category, description)
                 current_bid = state.get('highBid', 0.0)

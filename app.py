@@ -101,6 +101,19 @@ if 'current_auction' not in st.session_state:
 if 'audit_results' not in st.session_state:
     st.session_state.audit_results = {}
 
+if 'known_categories' not in st.session_state:
+    # Common HiBid lot categories as a starter set. Grown over time from any
+    # unique category strings we see in scrape results.
+    st.session_state.known_categories = [
+        "Antiques", "Art", "Automotive", "Books & Media",
+        "Clothing & Accessories", "Coins & Currency", "Collectibles",
+        "Electronics", "Firearms", "Fishing", "Furniture",
+        "Glassware", "Home & Garden", "Hunting", "Jewelry",
+        "Kitchen", "Music & Instruments", "Outdoors", "Pottery",
+        "Sporting Goods", "Sports Memorabilia", "Tools",
+        "Toys & Games", "Vintage",
+    ]
+
 # --- ASYNC WRAPPER ---
 def run_async_scraper(scraper_instance, progress_callback=None):
     """Safely runs the asyncio scraper within Streamlit's synchronous thread."""
@@ -114,7 +127,19 @@ with st.sidebar:
     user_zip = st.text_input("Home Zip Code", value="77058")
     radius = st.slider("Local Pickup Radius (mi)", 5, 100, 20)
     include_nationwide = st.checkbox("Include Nationwide (Ship-to-Me)", value=True)
-    closing_days = st.slider("Closing Within (days)", 1, 30, 7)
+    closing_days = st.slider("Closing Within (days)", 1, 30, 1)
+
+    category_filter = st.multiselect(
+        "🏷️ Categories (optional)",
+        options=sorted(set(st.session_state.known_categories)),
+        placeholder="All categories",
+        help=(
+            "Only keep lots whose category matches any selected term (substring, "
+            "case-insensitive). Saves time in Phase 2 by dropping irrelevant items. "
+            "Leave blank to fetch everything. The list grows with any new categories "
+            "seen in prior scrapes."
+        ),
+    )
 
     st.markdown("---")
 
@@ -127,6 +152,7 @@ with st.sidebar:
             scraper.radius = radius
             scraper.include_nationwide = include_nationwide
             scraper.closing_within_days = closing_days
+            scraper.category_filter = category_filter
 
             status_text = st.empty()
             scan_progress = st.progress(0, text="Discovering auctions...")
@@ -145,6 +171,14 @@ with st.sidebar:
             st.session_state.audit_results = {}
             st.session_state.selected_leads = pd.DataFrame()
             st.session_state.current_auction = None
+
+            # Grow the known-category list so future runs can pick from what
+            # HiBid actually returns for this user's area.
+            if not df.empty and 'category' in df.columns:
+                seen = {c for c in df['category'].dropna().astype(str).tolist() if c}
+                st.session_state.known_categories = sorted(
+                    set(st.session_state.known_categories) | seen
+                )
 
             local_count = len(df[df['source'] == "Local Pickup"]) if not df.empty and 'source' in df.columns else len(df)
             ship_count = len(df[df['source'] == "Ship"]) if not df.empty and 'source' in df.columns else 0
