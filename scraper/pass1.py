@@ -37,8 +37,8 @@ query AuctionMap($zip: String, $miles: Int, $searchText: String, $categoryId: Ca
 """
 
 LOT_SEARCH_QUERY = """
-query LotSearch($auctionId: Int!) {
-  lotSearch(input: {auctionId: $auctionId, searchText: ""}) {
+query LotSearch($auctionId: Int!, $pageIndex: Int!, $pageSize: Int!) {
+  lotSearch(input: {auctionId: $auctionId, searchText: "", pageIndex: $pageIndex, pageSize: $pageSize}) {
     pagedResults {
       totalCount
       results {
@@ -53,6 +53,12 @@ query LotSearch($auctionId: Int!) {
   }
 }
 """
+
+# HiBid GraphQL caps per-page results. 100 appears to be the ceiling — larger
+# values silently clamp to 100. So we page through with pageSize=100 until
+# we've collected totalCount lots.
+LOT_PAGE_SIZE = 100
+MAX_LOT_PAGES = 50  # safety cap: 50 * 100 = 5000 lots per auction, way beyond anything real
 
 
 class Phase1Scraper:
@@ -193,15 +199,44 @@ class Phase1Scraper:
                 filtered.append(a)  # Keep if we can't parse the date
         return filtered
 
+    async def _fetch_all_lot_pages(self, client: httpx.AsyncClient, auction_id: int) -> List[Dict]:
+        """Page through lotSearch until we've collected every lot in the auction.
+
+        HiBid's GraphQL pageSize appears to cap at 100 — any larger value clamps
+        silently, which is how the easy-ship count was getting stuck at 100.
+        """
+        lots: List[Dict] = []
+        total_count = None
+
+        for page_index in range(MAX_LOT_PAGES):
+            variables = {
+                "auctionId": auction_id,
+                "pageIndex": page_index,
+                "pageSize": LOT_PAGE_SIZE,
+            }
+            data = await self._graphql(client, "LotSearch", LOT_SEARCH_QUERY, variables)
+            paged = data.get("lotSearch", {}).get("pagedResults", {}) or {}
+            batch = paged.get("results", []) or []
+
+            if total_count is None:
+                total_count = paged.get("totalCount") or 0
+
+            lots.extend(batch)
+
+            # Done when we've got everything, or the server returned an empty
+            # page (defensive — shouldn't happen before we've fetched totalCount)
+            if not batch:
+                break
+            if total_count and len(lots) >= total_count:
+                break
+
+        return lots
+
     async def fetch_lots_for_auction(self, client: httpx.AsyncClient, auction_id: int,
                                      auction_name: str = "", date_end: str = "",
                                      source: str = "Local Pickup") -> List[Dict]:
-        variables = {"auctionId": auction_id}
-
         try:
-            data = await self._graphql(client, "LotSearch", LOT_SEARCH_QUERY, variables)
-            paged = data.get("lotSearch", {}).get("pagedResults", {})
-            lots = paged.get("results", [])
+            lots = await self._fetch_all_lot_pages(client, auction_id)
 
             try:
                 closing_fmt = datetime.fromisoformat(date_end).strftime("%b %d") if date_end else ""
