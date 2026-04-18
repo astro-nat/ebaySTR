@@ -154,18 +154,23 @@ with st.sidebar:
             scraper.closing_within_days = closing_days
             scraper.category_filter = category_filter
 
-            status_text = st.empty()
-            scan_progress = st.progress(0, text="Discovering auctions...")
+            scan_progress = st.progress(0, text="Starting discovery...")
 
-            status_text.caption("Finding open auctions on HiBid...")
-
-            def scan_prog(current, total):
-                pct = current / total if total > 0 else 0
-                scan_progress.progress(min(pct, 1.0), text=f"Fetching lots: auction {current}/{total}...")
+            def scan_prog(current, total, label=""):
+                pct = (current / total) if total > 0 else 0
+                if total == 0:
+                    text = label or "Done"
+                elif current == 0 and total == 1:
+                    # Indeterminate / "working on it" tick — label carries the meaning.
+                    text = label or "Working..."
+                    pct = 0
+                else:
+                    prefix = label if label else "Fetching lots"
+                    text = f"{prefix} — {current}/{total} auctions"
+                scan_progress.progress(min(pct, 1.0), text=text)
 
             df = run_async_scraper(scraper, progress_callback=scan_prog)
             scan_progress.empty()
-            status_text.empty()
 
             st.session_state.phase1_leads = df
             st.session_state.audit_results = {}
