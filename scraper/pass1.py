@@ -336,25 +336,29 @@ class Phase1Scraper:
 
         return all_lots
 
-    async def run(self, progress_callback=None) -> pd.DataFrame:
-        """Run the full scrape.
+    async def fetch_auction_candidates(self, progress_callback=None) -> List[Dict]:
+        """Return the combined local + nationwide auction list WITHOUT fetching lots.
 
-        progress_callback signature: (current:int, total:int, label:str) -> None
-        The label describes the current phase so the UI can show e.g.
-        "Discovering local auctions..." vs "Fetching nationwide lots".
+        This is the cheap first step of the two-step discovery flow: the user
+        picks which auctions are worth a deep scan, then we only pay the
+        per-lot cost on their selection.
+
+        Each returned dict carries `auction_id`, `name`, `city`, `state`,
+        `lot_count`, `date_begin`, `date_end`, `date_info`, `auctioneer`,
+        plus a `source` field ('Local Pickup' or 'Ship') so the caller can
+        preserve that semantic when lots are later fetched.
         """
         def _report(current, total, label):
             if progress_callback:
                 progress_callback(current, total, label)
 
         async with httpx.AsyncClient() as client:
-            # --- Phase 1: fetch BOTH auction lists up front so we know the
-            # grand total before starting any lot-fetching. That way the
-            # progress bar and count are honest from the first tick.
             _report(0, 1, "Discovering local auctions...")
             local_auctions = await self.fetch_auctions(client, self.zip_code, self.radius)
             local_auctions = self._filter_by_closing_date(local_auctions)
             local_ids = {a['auction_id'] for a in local_auctions}
+            for a in local_auctions:
+                a['source'] = 'Local Pickup'
 
             remote_auctions: List[Dict] = []
             if self.include_nationwide:
@@ -363,41 +367,135 @@ class Phase1Scraper:
                 remote_auctions = [a for a in nationwide_raw if a['auction_id'] not in local_ids]
                 remote_auctions = self._filter_by_closing_date(remote_auctions)
                 remote_auctions = sorted(remote_auctions, key=lambda a: a.get('date_end', ''))
+                for a in remote_auctions:
+                    a['source'] = 'Ship'
 
-            grand_total = len(local_auctions) + len(remote_auctions)
+            all_auctions = local_auctions + remote_auctions
+            _report(len(all_auctions), max(len(all_auctions), 1),
+                    f"Found {len(all_auctions)} auctions")
+            return all_auctions
 
-            # If nothing to do, short-circuit with a clean 0/0 tick.
-            if grand_total == 0:
-                _report(0, 0, "No auctions matched the filters")
-                return pd.DataFrame()
+    async def sample_lot_categories(
+        self, client: httpx.AsyncClient, auction_id: int, sample_size: int = 20
+    ) -> List[str]:
+        """Fetch a small lot sample and return the unique category names.
 
-            # --- Phase 2: fetch lots for local, then nationwide, using the
-            # grand total so the bar only moves forward.
-            local_label = (
-                f"Local pickup ({len(local_auctions)})"
-                if not remote_auctions
-                else f"Local pickup ({len(local_auctions)} of {grand_total})"
-            )
-            all_lots = await self._fetch_lots_batch(
-                client, local_auctions, "Local Pickup",
-                progress_callback=progress_callback, progress_offset=0,
-                grand_total=grand_total, phase_label=local_label,
-            )
+        Used by the two-step picker so the user can see what KINDS of stuff
+        are in an auction without paying to fetch every lot. Cheap — one
+        GraphQL call per auction at pageSize=20.
+        """
+        variables = {
+            "auctionId": auction_id,
+            "pageIndex": 0,
+            "pageSize": sample_size,
+        }
+        try:
+            data = await self._graphql(client, "LotSearch", LOT_SEARCH_QUERY, variables)
+        except Exception:
+            return []
+        paged = data.get("lotSearch", {}).get("pagedResults", {}) or {}
+        lots = paged.get("results", []) or []
+        cats = set()
+        for lot in lots:
+            categories = lot.get('category', [])
+            if categories:
+                name = categories[0].get('categoryName', '').strip()
+                if name:
+                    cats.add(name)
+        return sorted(cats)
 
+    async def sample_categories_batch(
+        self, auctions: List[Dict], sample_size: int = 20,
+        batch_size: int = 15, progress_callback=None,
+    ) -> Dict[int, List[str]]:
+        """Sample categories for a batch of auctions concurrently.
+
+        Returns {auction_id: [category_name, ...]}. Useful for the picker UI.
+        """
+        out: Dict[int, List[str]] = {}
+        total = len(auctions)
+        async with httpx.AsyncClient() as client:
+            for i in range(0, total, batch_size):
+                chunk = auctions[i:i + batch_size]
+                tasks = [
+                    self.sample_lot_categories(client, a['auction_id'], sample_size)
+                    for a in chunk
+                ]
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                for a, r in zip(chunk, results):
+                    out[a['auction_id']] = r if isinstance(r, list) else []
+                if progress_callback:
+                    progress_callback(
+                        min(i + batch_size, total), total,
+                        f"Sampling categories ({min(i + batch_size, total)}/{total})",
+                    )
+        return out
+
+    async def fetch_lots_for_selected(
+        self, selected_auctions: List[Dict], progress_callback=None,
+    ) -> pd.DataFrame:
+        """Fetch full lot detail for a caller-supplied list of auctions.
+
+        Each auction dict must have `auction_id`, `name`, and `source`
+        ('Local Pickup' or 'Ship'). Typically comes from
+        `fetch_auction_candidates()` filtered down by the user's picks.
+
+        Applies the same HARD-logistics / CLOSED-status / closing-date
+        filtering as `run()` for consistency.
+        """
+        if not selected_auctions:
+            return pd.DataFrame()
+
+        local_auctions = [a for a in selected_auctions if a.get('source') != 'Ship']
+        remote_auctions = [a for a in selected_auctions if a.get('source') == 'Ship']
+        grand_total = len(local_auctions) + len(remote_auctions)
+
+        async with httpx.AsyncClient() as client:
+            all_lots: List[Dict] = []
+            if local_auctions:
+                local_label = (
+                    f"Local pickup ({len(local_auctions)})"
+                    if not remote_auctions
+                    else f"Local pickup ({len(local_auctions)} of {grand_total})"
+                )
+                all_lots = await self._fetch_lots_batch(
+                    client, local_auctions, "Local Pickup",
+                    progress_callback=progress_callback, progress_offset=0,
+                    grand_total=grand_total, phase_label=local_label,
+                )
             if remote_auctions:
                 nationwide_label = f"Nationwide ({len(remote_auctions)} of {grand_total})"
                 nationwide_lots = await self._fetch_lots_batch(
                     client, remote_auctions, "Ship",
-                    progress_callback=progress_callback, progress_offset=len(local_auctions),
+                    progress_callback=progress_callback,
+                    progress_offset=len(local_auctions),
                     grand_total=grand_total, phase_label=nationwide_label,
                 )
                 all_lots.extend(nationwide_lots)
 
-            df = pd.DataFrame(all_lots)
+        df = pd.DataFrame(all_lots)
+        if not df.empty:
+            df = df[df['logistics_ease'] != "HARD"]
+            df = df[df['status'] != "CLOSED"]
+            df = df[df['time_left'] != "Bidding Closed"]
+            df = df.sort_values('closing_date').reset_index(drop=True)
+        return df
 
-            if not df.empty:
-                df = df[df['logistics_ease'] != "HARD"]
-                df = df[df['status'] != "CLOSED"]
-                df = df[df['time_left'] != "Bidding Closed"]
-                df = df.sort_values('closing_date').reset_index(drop=True)
-            return df
+    async def run(self, progress_callback=None) -> pd.DataFrame:
+        """Run the full scrape (discover + fetch lots for everything).
+
+        Kept for backward compatibility. The two-step flow used by the UI
+        is `fetch_auction_candidates()` + `fetch_lots_for_selected()`.
+
+        progress_callback signature: (current:int, total:int, label:str) -> None
+        """
+        candidates = await self.fetch_auction_candidates(
+            progress_callback=progress_callback
+        )
+        if not candidates:
+            if progress_callback:
+                progress_callback(0, 0, "No auctions matched the filters")
+            return pd.DataFrame()
+        return await self.fetch_lots_for_selected(
+            candidates, progress_callback=progress_callback
+        )
