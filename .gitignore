@@ -25,3 +25,6 @@ exports/
 
 # Claude
 .claude/
+
+# Auction analysis cache (persistent memory across sessions)
+.cache/

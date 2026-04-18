@@ -2,9 +2,14 @@ import streamlit as st
 import pandas as pd
 import asyncio
 import os
+from datetime import datetime
 
 # --- IMPORT MODULES ---
 from scraper import Phase1Scraper
+from scraper.cache import AuctionCache, merge_cached_analysis
+
+# Single shared cache instance; auto-creates the dir on first touch
+_AUCTION_CACHE = AuctionCache()
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
@@ -107,6 +112,14 @@ if 'audit_running' not in st.session_state:
 if 'comps_running' not in st.session_state:
     st.session_state.comps_running = False
 
+if 'cache_ttl_days' not in st.session_state:
+    st.session_state.cache_ttl_days = 14
+
+if 'cache_purged_this_session' not in st.session_state:
+    # Purge expired entries once per session, not every rerun
+    _AUCTION_CACHE.purge_expired(ttl_days=st.session_state.cache_ttl_days)
+    st.session_state.cache_purged_this_session = True
+
 if 'known_categories' not in st.session_state:
     # Common HiBid lot categories as a starter set. Grown over time from any
     # unique category strings we see in scrape results.
@@ -203,6 +216,44 @@ with st.sidebar:
         except Exception as e:
             st.error(f"Scraper failed: {e}")
 
+    # --- Memory / Cache controls ---
+    st.markdown("---")
+    st.header("💾 Memory")
+    cached_list = _AUCTION_CACHE.list_all(ttl_days=st.session_state.cache_ttl_days)
+    fresh_count = sum(1 for c in cached_list if c['fresh'])
+    st.caption(
+        f"**{fresh_count}** auction(s) cached. "
+        f"Audit + price-comp results are reused when you re-open an auction — "
+        f"current bids refresh every discovery run."
+    )
+    st.session_state.cache_ttl_days = st.slider(
+        "Auto-purge after (days)",
+        min_value=1, max_value=30,
+        value=int(st.session_state.cache_ttl_days),
+        help="Cached analyses older than this get deleted automatically. "
+             "Auctions are also purged as soon as their closing date passes.",
+    )
+
+    if cached_list:
+        with st.expander(f"📋 View {len(cached_list)} cached entries", expanded=False):
+            for entry in cached_list[:25]:
+                badge = "🟢" if entry['fresh'] else "🔴 stale"
+                try:
+                    cached_at = datetime.fromisoformat(entry['cached_at'])
+                    age = datetime.now() - cached_at
+                    age_str = f"{age.days}d ago" if age.days > 0 else f"{int(age.seconds / 3600)}h ago"
+                except Exception:
+                    age_str = "?"
+                st.caption(f"{badge} **{entry['auction_name']}** — {entry['items']} items · {age_str}")
+            if len(cached_list) > 25:
+                st.caption(f"...and {len(cached_list) - 25} more")
+
+    if st.button("🗑️ Clear all memory", use_container_width=True,
+                 help="Delete every cached auction analysis. Use if results feel stale."):
+        removed = _AUCTION_CACHE.clear_all()
+        st.success(f"Cleared {removed} cached auction(s).")
+        st.rerun()
+
 # --- MAIN DASHBOARD UI ---
 st.title("🛰️ Auction Intelligence Dashboard")
 st.markdown("Automated sourcing and risk-assessment for H-Town TX Finds.")
@@ -223,11 +274,67 @@ DISCOVERY_COL_ORDER = ["title", "current_bid", "est_cost", "bid_count",
 def _load_auction_for_analysis(auction_name, auction_df):
     """Replace the current analysis target with the given auction's items.
 
-    Clears prior audit/comp results since they're tied to the old auction.
+    If a fresh cached analysis exists for this auction, overlay its audit
+    verdicts and price comps onto the fresh Phase 1 data so the user sees
+    results immediately (with current bids, recomputed ROI).
     """
     st.session_state.selected_leads = auction_df.copy()
     st.session_state.current_auction = auction_name
     st.session_state.audit_results = {}
+
+    # Consult disk cache, keyed by auction_id (pulled from auction_link or a
+    # dedicated column if present)
+    auction_id = _extract_auction_id(auction_df)
+    if auction_id is None:
+        return
+
+    payload = _AUCTION_CACHE.load(auction_id)
+    if not payload:
+        return
+    if not _AUCTION_CACHE.is_fresh(payload, ttl_days=st.session_state.cache_ttl_days):
+        return
+
+    merged = merge_cached_analysis(auction_df, payload)
+    # Only treat as full audit_results if it actually has verdicts
+    if 'verdict' in merged.columns and merged['verdict'].notna().any():
+        st.session_state.selected_leads = merged
+        st.session_state.audit_results = merged
+
+
+def _extract_auction_id(auction_df: pd.DataFrame):
+    """Pull the HiBid auction_id from the DataFrame.
+
+    Discovery rows store it as a URL like https://hibid.com/auction/12345 in
+    the 'auction_link' column. We parse the trailing int.
+    """
+    if 'auction_link' not in auction_df.columns or auction_df.empty:
+        return None
+    link = str(auction_df['auction_link'].iloc[0])
+    if '/auction/' not in link:
+        return None
+    try:
+        return int(link.rsplit('/auction/', 1)[1].split('/')[0].split('?')[0])
+    except (ValueError, IndexError):
+        return None
+
+
+def _save_current_auction_to_cache():
+    """Persist the current audit_results DataFrame to the disk cache."""
+    ar = st.session_state.get('audit_results')
+    if not isinstance(ar, pd.DataFrame) or ar.empty:
+        return
+    auction_id = _extract_auction_id(ar)
+    if auction_id is None:
+        return
+    auction_name = st.session_state.get('current_auction') or ""
+    closing_date = ""
+    if 'closing_date' in ar.columns and not ar.empty:
+        closing_date = str(ar['closing_date'].iloc[0])
+    try:
+        _AUCTION_CACHE.save(auction_id, auction_name, ar, closing_date)
+    except Exception as e:
+        # Don't crash the app over a cache write failure
+        st.warning(f"Could not save analysis to cache: {e}")
 
 
 def _render_auction_card(auction_name, auction_df):
@@ -251,7 +358,17 @@ def _render_auction_card(auction_name, auction_df):
     if easy_count:
         subtitle_parts.append(f"{easy_count} easy-ship")
 
-    with st.expander(f"🏷️ **{auction_name}** — {' · '.join(subtitle_parts)}", expanded=False):
+    # Cache hit indicator on the expander label
+    auction_id = _extract_auction_id(auction_df)
+    cache_prefix = ""
+    if auction_id is not None:
+        payload = _AUCTION_CACHE.load(auction_id)
+        if payload and _AUCTION_CACHE.is_fresh(payload, ttl_days=st.session_state.cache_ttl_days):
+            cache_prefix = "💾 "
+
+    with st.expander(f"{cache_prefix}🏷️ **{auction_name}** — {' · '.join(subtitle_parts)}", expanded=False):
+        if cache_prefix:
+            st.caption("💾 Previously analyzed — cached audit + price comps will load instantly on Analyze.")
         if st.button(
             f"🎯 Analyze This Auction ({item_count} items)",
             key=f"load_{auction_name}",
@@ -611,7 +728,26 @@ if current_auction and not st.session_state.selected_leads.empty:
             st.rerun()
     with bc2:
         st.subheader(f"🔬 {current_auction}")
-        st.caption(f"{len(leads_df)} items loaded")
+        caption_bits = [f"{len(leads_df)} items loaded"]
+
+        # If the current analysis came from cache, indicate that + when.
+        auction_id = _extract_auction_id(leads_df)
+        if auction_id is not None:
+            payload = _AUCTION_CACHE.load(auction_id)
+            if payload and _AUCTION_CACHE.is_fresh(
+                payload, ttl_days=st.session_state.cache_ttl_days
+            ):
+                try:
+                    cached_at = datetime.fromisoformat(payload.get('cached_at', ''))
+                    age = datetime.now() - cached_at
+                    age_str = (
+                        f"{age.days}d ago" if age.days > 0
+                        else f"{int(age.seconds / 3600)}h ago"
+                    )
+                except Exception:
+                    age_str = "earlier"
+                caption_bits.append(f"💾 cached analysis from {age_str} · current bids refreshed")
+        st.caption(" · ".join(caption_bits))
 
     has_audit = (
         isinstance(st.session_state.get('audit_results'), pd.DataFrame)
@@ -648,6 +784,7 @@ if current_auction and not st.session_state.selected_leads.empty:
     if audit_running:
         try:
             st.session_state.audit_results = _run_ai_audit(leads_df)
+            _save_current_auction_to_cache()
         except Exception as e:
             st.error(f"Audit failed: {e}")
         finally:
@@ -681,6 +818,7 @@ if current_auction and not st.session_state.selected_leads.empty:
             try:
                 combined, found, total = _run_ebay_comps(ar)
                 st.session_state.audit_results = combined
+                _save_current_auction_to_cache()
                 st.success(f"Found price comps for {found}/{total} good+ leads.")
             except Exception as e:
                 st.error(f"Price comps failed: {e}")
