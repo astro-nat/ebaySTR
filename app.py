@@ -116,13 +116,6 @@ with st.sidebar:
     include_nationwide = st.checkbox("Include Nationwide (Ship-to-Me)", value=True)
     closing_days = st.slider("Closing Within (days)", 1, 30, 7)
 
-    st.header("💰 Financial Targets")
-    target_roi = st.number_input("Target ROI Multiplier", value=3.0, step=0.5, format="%.1f",
-                                  help="Minimum resale-to-cost ratio. e.g. 3x means sell for 3x what you paid.")
-    target_str = st.number_input("Target eBay STR %", value=70.0, step=5.0, format="%.0f",
-                                  min_value=0.0, max_value=100.0,
-                                  help="Minimum sell-through rate on eBay. Higher = faster-selling items.")
-
     st.markdown("---")
 
     if st.button("🚀 Run Phase 1 Discovery", type="primary", use_container_width=True):
@@ -248,8 +241,12 @@ def _run_ai_audit(leads_df):
     return results_df
 
 
-def _run_ebay_comps(results_df, target_roi_val):
-    """Run eBay + Mercari price comps on the good+ items in results_df."""
+def _run_ebay_comps(results_df):
+    """Run eBay + Mercari price comps on the good+ items in results_df.
+
+    Max bid is NOT computed here — it's recomputed on every render so the
+    Target ROI slider in the results section updates it live.
+    """
     # Clear previous comp data so re-runs start fresh
     for col in ['est_resale', 'price_low', 'price_high', 'comp_count',
                 'ebay_comps', 'mercari_comps',
@@ -281,66 +278,118 @@ def _run_ebay_comps(results_df, target_roi_val):
         / comps_df.loc[mask, 'est_cost'] * 100
     ).round(0)
 
-    # Max bid
-    ebay_fee_pct = 0.1325
-    ebay_fee_flat = 0.30
-    buyer_premium_pct = cfg.get("shipping", {}).get("buyer_premium_pct", 15.0) / 100.0
-    ship_cost = cfg.get("shipping", {}).get("bundled_ship_cost", 25.0)
-
-    comps_df['max_bid'] = None
-    resale_mask = comps_df['est_resale'].notna()
-    if resale_mask.any():
-        resale = comps_df.loc[resale_mask, 'est_resale']
-        net_resale = resale * (1 - ebay_fee_pct) - ebay_fee_flat
-        item_ship = comps_df.loc[resale_mask, 'source'].apply(
-            lambda s: ship_cost if s == "Ship" else 0
-        )
-        max_bid = (net_resale / target_roi_val - item_ship) / (1 + buyer_premium_pct)
-        comps_df.loc[resale_mask, 'max_bid'] = max_bid.clip(lower=0).round(2)
-
     combined = pd.concat([comps_df, flagged_df], ignore_index=True)
     progress_bar.empty()
     return combined, comps_df['est_resale'].notna().sum(), len(good_df)
 
 
-def _render_results_table(results_df, target_str_val, target_roi_val):
-    """Render the filtered results table with all comp/audit columns."""
-    filtered_df = results_df.copy()
-    filters_applied = []
+def _compute_max_bid(df, target_roi_val):
+    """Back out the max bid that still hits target_roi_val × cost.
 
-    if 'ebay_str' in filtered_df.columns:
-        meets_str = filtered_df['ebay_str'].notna() & (filtered_df['ebay_str'] >= target_str_val)
-        no_str = filtered_df['ebay_str'].isna()
-        filtered_df = filtered_df[meets_str | no_str]
-        filters_applied.append(f"STR ≥ {target_str_val:.0f}%")
+    Returns a new DataFrame with 'max_bid' column set (or left as None where
+    no est_resale is available).
+    """
+    from scraper.config_loader import load_config
+    cfg = load_config()
+    ebay_fee_pct = 0.1325
+    ebay_fee_flat = 0.30
+    buyer_premium_pct = cfg.get("shipping", {}).get("buyer_premium_pct", 15.0) / 100.0
+    ship_cost = cfg.get("shipping", {}).get("bundled_ship_cost", 25.0)
 
-    if 'est_roi' in filtered_df.columns:
-        meets_roi = filtered_df['est_roi'].notna() & (filtered_df['est_roi'] >= (target_roi_val - 1) * 100)
-        no_roi = filtered_df['est_roi'].isna()
-        filtered_df = filtered_df[meets_roi | no_roi]
-        filters_applied.append(f"ROI ≥ {target_roi_val:.1f}x")
+    out = df.copy()
+    out['max_bid'] = None
+    if 'est_resale' not in out.columns:
+        return out
+    resale_mask = out['est_resale'].notna()
+    if resale_mask.any():
+        resale = out.loc[resale_mask, 'est_resale']
+        net_resale = resale * (1 - ebay_fee_pct) - ebay_fee_flat
+        item_ship = out.loc[resale_mask, 'source'].apply(
+            lambda s: ship_cost if s == "Ship" else 0
+        ) if 'source' in out.columns else 0
+        max_bid = (net_resale / target_roi_val - item_ship) / (1 + buyer_premium_pct)
+        out.loc[resale_mask, 'max_bid'] = max_bid.clip(lower=0).round(2)
+    return out
 
-    if filters_applied:
-        hidden = len(results_df) - len(filtered_df)
-        if hidden > 0:
-            st.caption(f"Filters applied: {', '.join(filters_applied)} — {hidden} item(s) hidden")
 
-    # Metrics
+def _render_results_table(results_df):
+    """Render the results table with live ROI/STR threshold highlighting.
+
+    Rather than hiding items below threshold, rows are color-coded:
+      - green = meets BOTH target ROI and target STR
+      - yellow = meets ONE of them
+      - no tint = below both thresholds (or missing data)
+
+    Sorted by est_roi descending by default.
+    """
+    # --- Threshold controls (live) ---
+    st.markdown("#### 🎯 Profitability Targets")
+    st.caption(
+        "Adjust these knobs to see which items meet your goals. "
+        "**Green** rows meet both targets, **yellow** meet one, **uncolored** miss both or lack data. "
+        "The **Max Bid** column recomputes from the ROI target."
+    )
+    tc1, tc2 = st.columns(2)
+    with tc1:
+        target_roi_val = st.number_input(
+            "Target ROI Multiplier",
+            value=3.0, step=0.5, format="%.1f",
+            min_value=1.0,
+            help="Sell for Nx what you paid (3x = sell for 3× total cost). "
+                 "Drives both the highlight and the Max Bid column.",
+            key="target_roi_live",
+        )
+    with tc2:
+        target_str_val = st.number_input(
+            "Target eBay STR %",
+            value=70.0, step=5.0, format="%.0f",
+            min_value=0.0, max_value=100.0,
+            help="Minimum sell-through rate on eBay. Higher = faster-selling items.",
+            key="target_str_live",
+        )
+
+    # --- Recompute max_bid with current target (dynamic) ---
+    working = _compute_max_bid(results_df, target_roi_val)
+
+    # --- Sort by ROI descending ---
+    if 'est_roi' in working.columns:
+        working['_roi_sort'] = pd.to_numeric(working['est_roi'], errors='coerce')
+        working = working.sort_values(
+            '_roi_sort', ascending=False, na_position='last'
+        ).drop(columns=['_roi_sort']).reset_index(drop=True)
+
+    # --- Threshold masks (for highlight + metrics) ---
+    roi_threshold = (target_roi_val - 1) * 100
+    meets_roi = (
+        working['est_roi'].notna() & (pd.to_numeric(working['est_roi'], errors='coerce') >= roi_threshold)
+        if 'est_roi' in working.columns
+        else pd.Series(False, index=working.index)
+    )
+    meets_str_mask = (
+        working['ebay_str'].notna() & (pd.to_numeric(working['ebay_str'], errors='coerce') >= target_str_val)
+        if 'ebay_str' in working.columns
+        else pd.Series(False, index=working.index)
+    )
+    meets_both = meets_roi & meets_str_mask
+    meets_either = (meets_roi | meets_str_mask) & ~meets_both
+
+    # --- Metrics ---
     col1, col2, col3 = st.columns(3)
-    col1.metric("Leads", len(filtered_df))
-    if 'est_resale' in filtered_df.columns:
-        col2.metric("Comps", filtered_df['est_resale'].notna().sum())
-        if 'est_roi' in filtered_df.columns:
-            profitable = (filtered_df['est_roi'].notna() & (filtered_df['est_roi'] > 0)).sum()
-            col3.metric("Profitable", profitable)
+    col1.metric("Leads", len(working))
+    if 'est_resale' in working.columns:
+        col2.metric("Comps", working['est_resale'].notna().sum())
+    col3.metric("✅ Meets Both Targets", int(meets_both.sum()))
 
-    col4, col5 = st.columns(2)
-    if 'ebay_str' in filtered_df.columns:
-        has_str = filtered_df['ebay_str'].notna().sum()
-        avg_str = filtered_df['ebay_str'].mean()
-        col4.metric("Avg STR", f"{avg_str:.0f}%" if has_str > 0 else "N/A")
-    if 'red_flag' in filtered_df.columns:
-        col5.metric("Red Flags", int(filtered_df['red_flag'].sum()))
+    col4, col5, col6 = st.columns(3)
+    col4.metric("🟡 Meets One", int(meets_either.sum()))
+    if 'ebay_str' in working.columns:
+        has_str = working['ebay_str'].notna().sum()
+        avg_str = pd.to_numeric(working['ebay_str'], errors='coerce').mean()
+        col5.metric("Avg STR", f"{avg_str:.0f}%" if has_str > 0 else "N/A")
+    if 'red_flag' in working.columns:
+        col6.metric("Red Flags", int(working['red_flag'].sum()))
+
+    filtered_df = working
 
     # Columns
     title_col = 'enriched_title' if 'enriched_title' in filtered_df.columns else 'title'
@@ -391,8 +440,27 @@ def _render_results_table(results_df, target_str_val, target_roi_val):
         col_config["confidence"] = st.column_config.ProgressColumn("Confidence", min_value=0, max_value=100, format="%.1f%%")
         col_config["red_flag"] = st.column_config.CheckboxColumn("Red Flag")
 
+    final_cols = [c for c in display_cols if c in filtered_df.columns]
+    display_df = filtered_df[final_cols].copy()
+
+    # Row-level highlighting based on the threshold masks computed above.
+    # Re-index the masks to match display_df (preserve filter_df's row order).
+    local_meets_both = meets_both.reindex(filtered_df.index).fillna(False).reset_index(drop=True)
+    local_meets_either = meets_either.reindex(filtered_df.index).fillna(False).reset_index(drop=True)
+    display_df = display_df.reset_index(drop=True)
+
+    def _row_style(row):
+        i = row.name
+        if local_meets_both.iloc[i]:
+            return ['background-color: rgba(46, 204, 113, 0.28)'] * len(row)
+        if local_meets_either.iloc[i]:
+            return ['background-color: rgba(241, 196, 15, 0.22)'] * len(row)
+        return [''] * len(row)
+
+    styled = display_df.style.apply(_row_style, axis=1)
+
     st.dataframe(
-        filtered_df[[c for c in display_cols if c in filtered_df.columns]],
+        styled,
         use_container_width=True,
         column_config=col_config,
     )
@@ -452,7 +520,7 @@ if current_auction and not st.session_state.selected_leads.empty:
         st.caption(f"💰 {len(good_df)} good+ items eligible for lookup ({len(flagged_df)} red-flagged skipped)")
 
         if st.button("💰 Run Price Comps on Good+ Items", type="primary", use_container_width=True):
-            combined, found, total = _run_ebay_comps(ar, target_roi)
+            combined, found, total = _run_ebay_comps(ar)
             st.session_state.audit_results = combined
             st.success(f"Found price comps for {found}/{total} good+ leads.")
             st.rerun()
@@ -464,7 +532,7 @@ if current_auction and not st.session_state.selected_leads.empty:
     ):
         st.markdown("---")
         st.markdown("### Results")
-        _render_results_table(st.session_state.audit_results, target_str, target_roi)
+        _render_results_table(st.session_state.audit_results)
 
 # ---- DISCOVERY VIEW: no auction loaded ----
 elif not st.session_state.phase1_leads.empty:
