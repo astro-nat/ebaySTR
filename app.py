@@ -101,6 +101,12 @@ if 'current_auction' not in st.session_state:
 if 'audit_results' not in st.session_state:
     st.session_state.audit_results = {}
 
+if 'audit_running' not in st.session_state:
+    st.session_state.audit_running = False
+
+if 'comps_running' not in st.session_state:
+    st.session_state.comps_running = False
+
 if 'known_categories' not in st.session_state:
     # Common HiBid lot categories as a starter set. Grown over time from any
     # unique category strings we see in scrape results.
@@ -265,18 +271,70 @@ def _render_auction_card(auction_name, auction_df):
         )
 
 
-def _run_ai_audit(leads_df):
-    """Run Phase 2 AI condition audit on the leads DataFrame."""
+@st.cache_resource(show_spinner=False)
+def _get_auditor():
+    """Load (and cache) the Phase2Scraper with its NLP model.
+
+    First call: ~1.6GB download on cold cache, ~30s model load on warm cache.
+    Subsequent calls in the same session return instantly.
+    """
     from scraper import Phase2Scraper
+    return Phase2Scraper()
 
-    progress_bar = st.progress(0, text="Loading NLP model...")
-    auditor = Phase2Scraper()
 
-    def ai_progress(current, total):
-        progress_bar.progress(current / total, text=f"Analyzing condition {current}/{total}...")
+def _run_ai_audit(leads_df):
+    """Run Phase 2 AI condition audit with detailed phase-by-phase status."""
+    total = len(leads_df)
 
-    results_df = auditor.batch_audit(leads_df, progress_callback=ai_progress)
-    progress_bar.empty()
+    with st.status("🧠 Running AI Condition Audit…", expanded=True) as status:
+        # Phase 1: model load
+        st.write(
+            "**📥 Step 1/3 — Loading NLP model** "
+            "(`facebook/bart-large-mnli`, ~1.6GB). "
+            "Downloads on first run, cached after — may take a minute."
+        )
+        auditor = _get_auditor()
+        st.write("✅ Model ready.")
+
+        # Phase 2: title enrichment + condition classification
+        st.write(
+            f"**🔍 Step 2/3 — Enriching titles and classifying condition** "
+            f"for {total} items."
+        )
+        st.caption(
+            "Each item: pull model numbers / brands from the description into "
+            "the title, then run zero-shot classification across "
+            "*mint / normal-wear / untested / broken*."
+        )
+        progress_bar = st.progress(0, text=f"Starting — 0/{total}")
+        current_item_placeholder = st.empty()
+
+        def ai_progress(current, total_items):
+            pct = current / total_items if total_items > 0 else 1.0
+            # Show the title of the item just processed for a live "what's happening now" feel
+            try:
+                row = leads_df.iloc[current - 1]
+                title_preview = str(row.get('title', ''))[:70]
+            except Exception:
+                title_preview = ""
+            progress_bar.progress(
+                min(pct, 1.0),
+                text=f"Analyzing condition {current}/{total_items}…",
+            )
+            if title_preview:
+                current_item_placeholder.caption(f"🔎 Just analyzed: *{title_preview}*")
+
+        results_df = auditor.batch_audit(leads_df, progress_callback=ai_progress)
+
+        # Phase 3: summarize
+        good = int((~results_df['red_flag']).sum()) if 'red_flag' in results_df.columns else 0
+        flagged = int(results_df['red_flag'].sum()) if 'red_flag' in results_df.columns else 0
+        st.write(
+            f"**📊 Step 3/3 — Summary:** "
+            f"✅ {good} good-condition · ⚠️ {flagged} red-flagged"
+        )
+        status.update(label="✅ AI audit complete", state="complete", expanded=False)
+
     return results_df
 
 
@@ -302,24 +360,53 @@ def _run_ebay_comps(results_df):
     cfg = load_config()
     ebay = EbayPriceLookup(cfg["ebay"]["app_id"], cfg["ebay"]["cert_id"])
 
-    progress_bar = st.progress(0, text="Looking up eBay + Mercari prices & STR...")
+    total = len(good_df)
 
-    def price_progress(current, total):
-        progress_bar.progress(current / total, text=f"Looking up item {current}/{total}...")
+    with st.status("💰 Running Price Comps & STR…", expanded=True) as status:
+        st.write(
+            f"**🔗 Looking up eBay sold listings + Mercari sold listings** "
+            f"for {total} good-condition items."
+        )
+        st.caption(
+            "For each item: scrape recent sold prices from both marketplaces, "
+            "apply IQR outlier filtering, pool into median / 25th / 75th percentile, "
+            "then compute eBay sell-through rate from the active vs sold ratio."
+        )
+        progress_bar = st.progress(0, text=f"Starting — 0/{total}")
+        current_item_placeholder = st.empty()
 
-    comps_df = ebay.batch_lookup(good_df, progress_callback=price_progress)
+        def price_progress(current, total_items):
+            pct = current / total_items if total_items > 0 else 1.0
+            try:
+                row = good_df.iloc[current - 1]
+                title_preview = str(
+                    row.get('enriched_title') or row.get('title') or ''
+                )[:70]
+            except Exception:
+                title_preview = ""
+            progress_bar.progress(
+                min(pct, 1.0),
+                text=f"Looking up item {current}/{total_items}…",
+            )
+            if title_preview:
+                current_item_placeholder.caption(f"🔎 Just priced: *{title_preview}*")
 
-    # ROI
-    comps_df['est_roi'] = None
-    mask = comps_df['est_resale'].notna() & (comps_df['est_cost'] > 0)
-    comps_df.loc[mask, 'est_roi'] = (
-        (comps_df.loc[mask, 'est_resale'] - comps_df.loc[mask, 'est_cost'])
-        / comps_df.loc[mask, 'est_cost'] * 100
-    ).round(0)
+        comps_df = ebay.batch_lookup(good_df, progress_callback=price_progress)
+
+        # ROI
+        comps_df['est_roi'] = None
+        mask = comps_df['est_resale'].notna() & (comps_df['est_cost'] > 0)
+        comps_df.loc[mask, 'est_roi'] = (
+            (comps_df.loc[mask, 'est_resale'] - comps_df.loc[mask, 'est_cost'])
+            / comps_df.loc[mask, 'est_cost'] * 100
+        ).round(0)
+
+        found = int(comps_df['est_resale'].notna().sum())
+        st.write(f"**📊 Summary:** found price comps for {found}/{total} items.")
+        status.update(label="✅ Price comps complete", state="complete", expanded=False)
 
     combined = pd.concat([comps_df, flagged_df], ignore_index=True)
-    progress_bar.empty()
-    return combined, comps_df['est_resale'].notna().sum(), len(good_df)
+    return combined, found, total
 
 
 def _compute_max_bid(df, target_roi_val):
@@ -542,8 +629,29 @@ if current_auction and not st.session_state.selected_leads.empty:
         flagged_count = ar['red_flag'].sum()
         st.success(f"Audit complete — **{good_count} good+** condition, {flagged_count} red-flagged")
 
-    if st.button("🧠 Run AI Condition Audit", type="primary", use_container_width=True):
-        st.session_state.audit_results = _run_ai_audit(leads_df)
+    audit_running = st.session_state.get('audit_running', False)
+    comps_running = st.session_state.get('comps_running', False)
+    audit_btn_label = "⏳ Running audit…" if audit_running else "🧠 Run AI Condition Audit"
+
+    if st.button(
+        audit_btn_label,
+        type="primary",
+        use_container_width=True,
+        disabled=audit_running or comps_running,
+        key="run_audit_btn",
+    ):
+        st.session_state.audit_running = True
+        st.rerun()
+
+    # If the flag is set, we're on the second rerun — do the actual work
+    # with the button now rendered disabled above. Clear the flag when done.
+    if audit_running:
+        try:
+            st.session_state.audit_results = _run_ai_audit(leads_df)
+        except Exception as e:
+            st.error(f"Audit failed: {e}")
+        finally:
+            st.session_state.audit_running = False
         st.rerun()
 
     # Step 2: eBay + Mercari comps (only after audit)
@@ -558,10 +666,26 @@ if current_auction and not st.session_state.selected_leads.empty:
         flagged_df = ar[ar['red_flag']]
         st.caption(f"💰 {len(good_df)} good+ items eligible for lookup ({len(flagged_df)} red-flagged skipped)")
 
-        if st.button("💰 Run Price Comps on Good+ Items", type="primary", use_container_width=True):
-            combined, found, total = _run_ebay_comps(ar)
-            st.session_state.audit_results = combined
-            st.success(f"Found price comps for {found}/{total} good+ leads.")
+        comps_btn_label = "⏳ Running price comps…" if comps_running else "💰 Run Price Comps on Good+ Items"
+        if st.button(
+            comps_btn_label,
+            type="primary",
+            use_container_width=True,
+            disabled=audit_running or comps_running,
+            key="run_comps_btn",
+        ):
+            st.session_state.comps_running = True
+            st.rerun()
+
+        if comps_running:
+            try:
+                combined, found, total = _run_ebay_comps(ar)
+                st.session_state.audit_results = combined
+                st.success(f"Found price comps for {found}/{total} good+ leads.")
+            except Exception as e:
+                st.error(f"Price comps failed: {e}")
+            finally:
+                st.session_state.comps_running = False
             st.rerun()
 
     # Results table (if anything exists)
