@@ -82,6 +82,7 @@ class Phase1Scraper:
 
         self.include_nationwide = False
         self.closing_within_days = 7  # Only include auctions closing within this many days
+        self.category_filter: List[str] = []  # Optional list of category substrings (case-insensitive)
 
     def _load_config(self, filepath: str) -> dict:
         from .config_loader import load_config
@@ -207,12 +208,25 @@ class Phase1Scraper:
             except (ValueError, TypeError):
                 closing_fmt = date_end
 
+            # Normalize category filter once per batch
+            cat_keywords = [c.strip().lower() for c in (self.category_filter or []) if c and c.strip()]
+
             processed_lots = []
             for lot in lots:
                 title = lot.get('lead', '')
                 categories = lot.get('category', [])
                 category = categories[0]['categoryName'] if categories else ''
                 description = lot.get('description', '')
+
+                # Apply category filter (substring, case-insensitive, against
+                # category name OR title — auctioneer tagging is inconsistent
+                # so falling back to title catches e.g. a "fishing rod" lot
+                # mis-tagged as "Sporting Goods"-only)
+                if cat_keywords:
+                    haystack = f"{category} {title}".lower()
+                    if not any(kw in haystack for kw in cat_keywords):
+                        continue
+
                 state = lot.get('lotState', {})
                 logistics = self.classify_logistics(title, category, description)
                 current_bid = state.get('highBid', 0.0)
@@ -243,10 +257,18 @@ class Phase1Scraper:
 
     async def _fetch_lots_batch(self, client: httpx.AsyncClient, auctions: List[Dict],
                                 source: str, batch_size: int = 20,
-                                progress_callback=None, progress_offset: int = 0) -> List[Dict]:
-        """Fetch lots for a list of auctions in concurrent batches."""
+                                progress_callback=None, progress_offset: int = 0,
+                                grand_total: int = None, phase_label: str = "") -> List[Dict]:
+        """Fetch lots for a list of auctions in concurrent batches.
+
+        `grand_total` is the total auction count across ALL phases; when
+        provided, progress is reported against it so the bar doesn't reset
+        when switching from local -> nationwide. `phase_label` is included
+        in the progress text so the user knows which phase is running.
+        """
         all_lots = []
         total = len(auctions)
+        effective_total = grand_total if grand_total is not None else total
 
         for i in range(0, total, batch_size):
             batch = auctions[i:i + batch_size]
@@ -261,33 +283,65 @@ class Phase1Scraper:
                 all_lots.extend(sublist)
 
             if progress_callback:
-                progress_callback(progress_offset + min(i + batch_size, total), progress_offset + total)
+                current = progress_offset + min(i + batch_size, total)
+                progress_callback(current, effective_total, phase_label)
 
         return all_lots
 
     async def run(self, progress_callback=None) -> pd.DataFrame:
+        """Run the full scrape.
+
+        progress_callback signature: (current:int, total:int, label:str) -> None
+        The label describes the current phase so the UI can show e.g.
+        "Discovering local auctions..." vs "Fetching nationwide lots".
+        """
+        def _report(current, total, label):
+            if progress_callback:
+                progress_callback(current, total, label)
+
         async with httpx.AsyncClient() as client:
-            # --- Local auctions ---
+            # --- Phase 1: fetch BOTH auction lists up front so we know the
+            # grand total before starting any lot-fetching. That way the
+            # progress bar and count are honest from the first tick.
+            _report(0, 1, "Discovering local auctions...")
             local_auctions = await self.fetch_auctions(client, self.zip_code, self.radius)
             local_auctions = self._filter_by_closing_date(local_auctions)
             local_ids = {a['auction_id'] for a in local_auctions}
 
+            remote_auctions: List[Dict] = []
+            if self.include_nationwide:
+                _report(0, 1, "Discovering nationwide auctions...")
+                nationwide_raw = await self.fetch_auctions(client, "", 0)
+                remote_auctions = [a for a in nationwide_raw if a['auction_id'] not in local_ids]
+                remote_auctions = self._filter_by_closing_date(remote_auctions)
+                remote_auctions = sorted(remote_auctions, key=lambda a: a.get('date_end', ''))
+
+            grand_total = len(local_auctions) + len(remote_auctions)
+
+            # If nothing to do, short-circuit with a clean 0/0 tick.
+            if grand_total == 0:
+                _report(0, 0, "No auctions matched the filters")
+                return pd.DataFrame()
+
+            # --- Phase 2: fetch lots for local, then nationwide, using the
+            # grand total so the bar only moves forward.
+            local_label = (
+                f"Local pickup ({len(local_auctions)})"
+                if not remote_auctions
+                else f"Local pickup ({len(local_auctions)} of {grand_total})"
+            )
             all_lots = await self._fetch_lots_batch(
                 client, local_auctions, "Local Pickup",
-                progress_callback=progress_callback, progress_offset=0
+                progress_callback=progress_callback, progress_offset=0,
+                grand_total=grand_total, phase_label=local_label,
             )
 
-            # --- Nationwide shipping auctions ---
-            if self.include_nationwide:
-                nationwide_auctions = await self.fetch_auctions(client, "", 0)
-                # Remove duplicates already in local results, filter by closing date
-                remote = [a for a in nationwide_auctions if a['auction_id'] not in local_ids]
-                remote = self._filter_by_closing_date(remote)
-                remote = sorted(remote, key=lambda a: a.get('date_end', ''))
-
+            if remote_auctions:
+                nationwide_label = f"Nationwide ({len(remote_auctions)} of {grand_total})"
                 nationwide_lots = await self._fetch_lots_batch(
-                    client, remote, "Ship",
-                    progress_callback=progress_callback, progress_offset=len(local_auctions)
+                    client, remote_auctions, "Ship",
+                    progress_callback=progress_callback, progress_offset=len(local_auctions),
+                    grand_total=grand_total, phase_label=nationwide_label,
                 )
                 all_lots.extend(nationwide_lots)
 
