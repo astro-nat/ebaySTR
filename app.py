@@ -469,18 +469,74 @@ if current_auction and not st.session_state.selected_leads.empty:
 # ---- DISCOVERY VIEW: no auction loaded ----
 elif not st.session_state.phase1_leads.empty:
     df = st.session_state.phase1_leads
+    total_items = len(df)
+    total_auctions = df['auction'].nunique() if 'auction' in df.columns else 0
 
-    # Source filter
-    sources = df['source'].unique().tolist() if 'source' in df.columns else []
-    if len(sources) > 1:
-        selected_source = st.radio("Filter by source:", ["All"] + sources, horizontal=True)
-        if selected_source != "All":
-            df = df[df['source'] == selected_source]
+    # --- Filters ---
+    with st.container():
+        fc1, fc2 = st.columns([2, 1])
+        with fc1:
+            search_query = st.text_input(
+                "🔎 Search",
+                placeholder="Search auctions, item titles, or descriptions (e.g. 'fishing', 'vintage', 'Weber')",
+                key="discovery_search",
+            ).strip()
+        with fc2:
+            categories = (
+                sorted(df['category'].dropna().unique().tolist())
+                if 'category' in df.columns else []
+            )
+            selected_categories = st.multiselect(
+                "🏷️ Category",
+                options=categories,
+                placeholder="All categories",
+                key="discovery_category",
+            )
+
+        # Source filter (only if multiple sources)
+        sources = df['source'].unique().tolist() if 'source' in df.columns else []
+        if len(sources) > 1:
+            selected_source = st.radio("Source:", ["All"] + sources, horizontal=True)
+            if selected_source != "All":
+                df = df[df['source'] == selected_source]
+
+    # --- Apply search + category filters ---
+    if search_query:
+        q = search_query.lower()
+        title_col = 'title' if 'title' in df.columns else None
+        desc_col = 'description' if 'description' in df.columns else None
+        auction_col = 'auction' if 'auction' in df.columns else None
+
+        mask = pd.Series(False, index=df.index)
+        if auction_col:
+            mask = mask | df[auction_col].fillna("").str.lower().str.contains(q, regex=False)
+        if title_col:
+            mask = mask | df[title_col].fillna("").str.lower().str.contains(q, regex=False)
+        if desc_col:
+            mask = mask | df[desc_col].fillna("").str.lower().str.contains(q, regex=False)
+        df = df[mask]
+
+    if selected_categories and 'category' in df.columns:
+        df = df[df['category'].isin(selected_categories)]
+
+    if df.empty:
+        st.warning(
+            f"No matches for your filters. (Started with {total_auctions} auctions, {total_items} items.) "
+            "Try broadening the search or clearing the category filter."
+        )
+        st.stop()
 
     auction_groups = df.groupby('auction', sort=False)
     auction_order = df.groupby('auction')['closing_date'].first().sort_values()
 
-    st.subheader(f"Discovery Results — {len(auction_order)} auctions, {len(df)} items")
+    filter_bits = []
+    if search_query:
+        filter_bits.append(f"search \"{search_query}\"")
+    if selected_categories:
+        filter_bits.append(f"{len(selected_categories)} category filter(s)")
+    filter_suffix = f" — filtered by {', '.join(filter_bits)}" if filter_bits else ""
+
+    st.subheader(f"Discovery Results — {len(auction_order)} auctions, {len(df)} items{filter_suffix}")
     st.caption("Expand an auction to preview items, then click **🎯 Analyze This Auction** to run the full Phase 2 analysis.")
 
     for auction_name in auction_order.index:
