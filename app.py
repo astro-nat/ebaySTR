@@ -121,6 +121,24 @@ if 'cache_purged_this_session' not in st.session_state:
     _AUCTION_CACHE.purge_expired(ttl_days=st.session_state.cache_ttl_days)
     st.session_state.cache_purged_this_session = True
 
+if 'auction_candidates' not in st.session_state:
+    # List of dicts from Phase1Scraper.fetch_auction_candidates() — the
+    # "step 1" output, before the user picks which auctions to deep-scan.
+    st.session_state.auction_candidates = []
+
+if 'category_samples' not in st.session_state:
+    # {auction_id: [category_name, ...]} from sample_categories_batch()
+    st.session_state.category_samples = {}
+
+if 'discover_running' not in st.session_state:
+    st.session_state.discover_running = False
+
+if 'fetch_lots_running' not in st.session_state:
+    st.session_state.fetch_lots_running = False
+
+if 'sampling_running' not in st.session_state:
+    st.session_state.sampling_running = False
+
 if 'known_categories' not in st.session_state:
     # Common HiBid lot categories as a starter set. Grown over time from any
     # unique category strings we see in scrape results.
@@ -182,6 +200,13 @@ def run_async_scraper(scraper_instance, progress_callback=None):
     asyncio.set_event_loop(loop)
     return loop.run_until_complete(scraper_instance.run(progress_callback=progress_callback))
 
+
+def run_async(coro):
+    """Run an arbitrary coroutine from Streamlit's sync thread."""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    return loop.run_until_complete(coro)
+
 # --- SIDEBAR CONTROLS ---
 with st.sidebar:
     st.header("📍 Sourcing")
@@ -204,60 +229,36 @@ with st.sidebar:
 
     st.markdown("---")
 
-    if st.button("🚀 Run Phase 1 Discovery", type="primary", use_container_width=True):
-        _keep_screen_awake()
-        try:
-            scraper = Phase1Scraper(config_path="config.json")
+    # --- Step 1: discover auction candidates (cheap — no per-lot fetch) ---
+    discover_running = st.session_state.get('discover_running', False)
+    fetch_lots_running = st.session_state.get('fetch_lots_running', False)
+    sampling_running = st.session_state.get('sampling_running', False)
+    any_running = discover_running or fetch_lots_running or sampling_running
 
-            # Apply UI settings
-            scraper.zip_code = user_zip
-            scraper.radius = radius
-            scraper.include_nationwide = include_nationwide
-            scraper.closing_within_days = closing_days
-            scraper.category_filter = category_filter
+    discover_label = "⏳ Discovering…" if discover_running else "🔍 Discover Auctions"
+    if st.button(
+        discover_label,
+        type="primary",
+        use_container_width=True,
+        disabled=any_running,
+        key="discover_btn",
+        help="Step 1 of 2: fetch the LIST of open auctions (no per-lot data yet). "
+             "You'll then pick which ones are worth a deep scan.",
+    ):
+        # Stash settings for the second-rerun work block so they survive
+        # the flag/rerun dance.
+        st.session_state._sourcing_cfg = {
+            "zip": user_zip,
+            "radius": radius,
+            "include_nationwide": include_nationwide,
+            "closing_days": closing_days,
+            "category_filter": category_filter,
+        }
+        st.session_state.discover_running = True
+        st.rerun()
 
-            scan_progress = st.progress(0, text="Starting discovery...")
-
-            def scan_prog(current, total, label=""):
-                pct = (current / total) if total > 0 else 0
-                if total == 0:
-                    text = label or "Done"
-                elif current == 0 and total == 1:
-                    # Indeterminate / "working on it" tick — label carries the meaning.
-                    text = label or "Working..."
-                    pct = 0
-                else:
-                    prefix = label if label else "Fetching lots"
-                    text = f"{prefix} — {current}/{total} auctions"
-                scan_progress.progress(min(pct, 1.0), text=text)
-
-            df = run_async_scraper(scraper, progress_callback=scan_prog)
-            scan_progress.empty()
-
-            st.session_state.phase1_leads = df
-            st.session_state.audit_results = {}
-            st.session_state.selected_leads = pd.DataFrame()
-            st.session_state.current_auction = None
-
-            # Grow the known-category list so future runs can pick from what
-            # HiBid actually returns for this user's area.
-            if not df.empty and 'category' in df.columns:
-                seen = {c for c in df['category'].dropna().astype(str).tolist() if c}
-                st.session_state.known_categories = sorted(
-                    set(st.session_state.known_categories) | seen
-                )
-
-            local_count = len(df[df['source'] == "Local Pickup"]) if not df.empty and 'source' in df.columns else len(df)
-            ship_count = len(df[df['source'] == "Ship"]) if not df.empty and 'source' in df.columns else 0
-            auction_count = df['auction'].nunique() if not df.empty else 0
-            msg = f"Found {len(df)} items across {auction_count} auctions! ({local_count} local"
-            if ship_count:
-                msg += f", {ship_count} shippable"
-            msg += ")"
-            st.success(msg)
-            st.rerun()
-        except Exception as e:
-            st.error(f"Scraper failed: {e}")
+    # NOTE: the work block itself is rendered in the MAIN area (not here)
+    # so mobile users with the sidebar collapsed actually SEE the progress.
 
     # --- Memory / Cache controls ---
     st.markdown("---")
@@ -300,6 +301,104 @@ with st.sidebar:
 # --- MAIN DASHBOARD UI ---
 st.title("🛰️ Auction Intelligence Dashboard")
 st.markdown("Automated sourcing and risk-assessment for H-Town TX Finds.")
+
+# --- Surface any persisted discover/fetch status so errors don't vanish on rerun ---
+_status = st.session_state.pop('_discover_status', None)
+if _status:
+    if _status.get('error'):
+        st.error(f"❌ Discovery failed: {_status['error']}")
+        tb = st.session_state.get('_last_discover_traceback')
+        if tb:
+            with st.expander("🔍 Full traceback (share this if you ask for help)"):
+                st.code(tb, language="python")
+    elif _status.get('msg'):
+        # Show success/warning briefly at the top
+        msg = _status['msg']
+        if msg.startswith("⚠️"):
+            st.warning(msg)
+        else:
+            st.success(msg)
+
+
+# ================================================================
+# WORK BLOCK: Discover Auctions (lives in main area so mobile users
+# with collapsed sidebar can actually SEE progress / errors)
+# ================================================================
+if st.session_state.get('discover_running'):
+    _keep_screen_awake()
+    discover_error = None
+    discover_result_msg = None
+    with st.status("🔍 Discovering auctions…", expanded=True) as status_box:
+        try:
+            cfg = st.session_state.get('_sourcing_cfg', {})
+            scraper = Phase1Scraper(config_path="config.json")
+            scraper.zip_code = cfg.get("zip", "")
+            scraper.radius = cfg.get("radius", 20)
+            scraper.include_nationwide = cfg.get("include_nationwide", True)
+            scraper.closing_within_days = cfg.get("closing_days", 1)
+            scraper.category_filter = cfg.get("category_filter", [])
+
+            st.write(
+                f"Querying HiBid near **{scraper.zip_code}** within "
+                f"**{scraper.radius} mi**, closing within "
+                f"**{scraper.closing_within_days} day(s)**"
+                + (", including nationwide shippable." if scraper.include_nationwide else ".")
+            )
+            scan_progress = st.progress(0, text="Starting...")
+
+            def discover_prog(current, total, label=""):
+                if total == 0:
+                    pct, text = 0.0, (label or "Done")
+                elif current == 0 and total == 1:
+                    pct, text = 0.0, (label or "Working...")
+                else:
+                    pct = current / total if total > 0 else 0
+                    text = label or f"{current}/{total}"
+                scan_progress.progress(min(pct, 1.0), text=text)
+
+            candidates = run_async(
+                scraper.fetch_auction_candidates(progress_callback=discover_prog)
+            )
+            scan_progress.empty()
+
+            # Reset downstream state: a new candidate list invalidates prior picks + lots
+            st.session_state.auction_candidates = candidates
+            st.session_state.category_samples = {}
+            st.session_state.phase1_leads = pd.DataFrame()
+            st.session_state.audit_results = {}
+            st.session_state.selected_leads = pd.DataFrame()
+            st.session_state.current_auction = None
+
+            if candidates:
+                discover_result_msg = (
+                    f"✅ Found {len(candidates)} candidate auction(s). "
+                    "Pick which to deep-scan below."
+                )
+                status_box.update(
+                    label=f"✅ Found {len(candidates)} auctions",
+                    state="complete", expanded=False,
+                )
+            else:
+                discover_result_msg = "⚠️ No auctions matched your filters."
+                status_box.update(
+                    label="⚠️ No matching auctions",
+                    state="error", expanded=True,
+                )
+        except Exception as e:
+            import traceback
+            discover_error = f"{type(e).__name__}: {e}"
+            st.session_state._last_discover_traceback = traceback.format_exc()
+            st.error(f"❌ {discover_error}")
+            st.code(traceback.format_exc(), language="python")
+            status_box.update(label="❌ Discovery failed", state="error", expanded=True)
+        finally:
+            st.session_state.discover_running = False
+
+    st.session_state._discover_status = {
+        "error": discover_error,
+        "msg": discover_result_msg,
+    }
+    st.rerun()
 
 # --- Shared column config for discovery tables ---
 DISCOVERY_COL_CONFIG = {
@@ -899,6 +998,259 @@ if current_auction and not st.session_state.selected_leads.empty:
         st.markdown("### Results")
         _render_results_table(st.session_state.audit_results)
 
+# ---- SELECTION VIEW: candidates loaded, user picking which to deep-scan ----
+elif st.session_state.get('auction_candidates') and st.session_state.phase1_leads.empty:
+    candidates = st.session_state.auction_candidates
+    cat_samples = st.session_state.get('category_samples', {})
+
+    st.subheader(f"📋 Step 2: Pick which auctions to deep-scan")
+    st.caption(
+        f"Found **{len(candidates)}** open auctions matching your filters. "
+        "Check the ones worth a full item-level scan, then click **📥 Fetch items** "
+        "to pull every lot, current bids, and descriptions for those auctions only. "
+        "Big auctions (1000+ items) take noticeably longer — pick selectively."
+    )
+
+    # --- Build the picker DataFrame ---
+    rows = []
+    for c in candidates:
+        aid = c['auction_id']
+        cats = cat_samples.get(aid, [])
+        cat_preview = ", ".join(cats[:6]) + (f" (+{len(cats) - 6})" if len(cats) > 6 else "")
+        closing_raw = c.get('date_end', '')
+        try:
+            closing_fmt = datetime.fromisoformat(closing_raw).strftime("%b %d %I:%M%p") if closing_raw else ""
+        except (ValueError, TypeError):
+            closing_fmt = closing_raw
+        rows.append({
+            "select": False,
+            "auction_id": aid,
+            "name": c.get('name', ''),
+            "items": c.get('lot_count', 0),
+            "source": c.get('source', ''),
+            "location": f"{c.get('city', '')}, {c.get('state', '')}".strip(", "),
+            "closes": closing_fmt,
+            "categories_sampled": cat_preview or ("—" if aid in cat_samples else "(not sampled)"),
+            "auction_link": f"https://hibid.com/auction/{aid}",
+        })
+    picker_df = pd.DataFrame(rows)
+
+    # --- Filters: search + source ---
+    pc1, pc2 = st.columns([2, 1])
+    with pc1:
+        picker_search = st.text_input(
+            "🔎 Search auction name / categories",
+            key="picker_search",
+            placeholder="e.g. 'fishing', 'estate', 'tools'",
+        ).strip().lower()
+    with pc2:
+        sources_avail = picker_df['source'].unique().tolist()
+        source_filter = st.radio(
+            "Source:", ["All"] + sources_avail,
+            horizontal=True, key="picker_source",
+        ) if len(sources_avail) > 1 else "All"
+
+    shown = picker_df.copy()
+    if picker_search:
+        mask = (
+            shown['name'].fillna("").str.lower().str.contains(picker_search, regex=False)
+            | shown['categories_sampled'].fillna("").str.lower().str.contains(picker_search, regex=False)
+        )
+        shown = shown[mask]
+    if source_filter != "All":
+        shown = shown[shown['source'] == source_filter]
+
+    # Sort by item count desc by default — biggest auctions surface first
+    # (user said "some of these have 4000 items" — they'll want to SEE those)
+    shown = shown.sort_values(['items', 'closes'], ascending=[False, True]).reset_index(drop=True)
+
+    sampling_running = st.session_state.get('sampling_running', False)
+    fetch_lots_running = st.session_state.get('fetch_lots_running', False)
+
+    # --- Bulk actions row ---
+    ac1, ac2, ac3 = st.columns([1, 1, 1])
+    with ac1:
+        if st.button("✅ Select all shown", use_container_width=True,
+                     disabled=sampling_running or fetch_lots_running):
+            st.session_state._bulk_select_ids = set(shown['auction_id'].tolist())
+            st.rerun()
+    with ac2:
+        if st.button("⬜ Deselect all", use_container_width=True,
+                     disabled=sampling_running or fetch_lots_running):
+            st.session_state._bulk_select_ids = set()
+            st.rerun()
+    with ac3:
+        sample_label = "⏳ Sampling…" if sampling_running else "🏷️ Sample categories"
+        if st.button(
+            sample_label, use_container_width=True,
+            disabled=sampling_running or fetch_lots_running,
+            help=(
+                "Fetch a small (~20-lot) preview per auction to see what kinds "
+                "of items are in each. Cheap — makes it easy to skip auctions "
+                "full of irrelevant junk without a full scan."
+            ),
+        ):
+            st.session_state.sampling_running = True
+            st.rerun()
+
+    # --- Pre-apply bulk selection to the DataFrame BEFORE the editor renders ---
+    bulk_ids = st.session_state.get('_bulk_select_ids', None)
+    if bulk_ids is not None:
+        shown['select'] = shown['auction_id'].isin(bulk_ids)
+        # Consumed — clear so future reruns don't override user clicks
+        st.session_state._bulk_select_ids = None
+
+    # --- Main editor ---
+    edited = st.data_editor(
+        shown,
+        use_container_width=True,
+        hide_index=True,
+        disabled=['auction_id', 'name', 'items', 'source', 'location',
+                  'closes', 'categories_sampled', 'auction_link'],
+        column_config={
+            "select": st.column_config.CheckboxColumn("Pick", width="small"),
+            "auction_id": None,
+            "name": st.column_config.TextColumn("Auction", width="large"),
+            "items": st.column_config.NumberColumn("Items", format="%d"),
+            "source": st.column_config.TextColumn("Source", width="small"),
+            "location": st.column_config.TextColumn("Location"),
+            "closes": st.column_config.TextColumn("Closes"),
+            "categories_sampled": st.column_config.TextColumn("Category preview"),
+            "auction_link": st.column_config.LinkColumn("Link", display_text="Open"),
+        },
+        key="auction_picker_editor",
+    )
+
+    selected_rows = edited[edited['select']]
+    selected_ids = set(selected_rows['auction_id'].tolist())
+    selected_item_total = int(selected_rows['items'].sum()) if not selected_rows.empty else 0
+
+    st.markdown("---")
+    sc1, sc2 = st.columns([1, 2])
+    with sc1:
+        st.metric("Selected", f"{len(selected_ids)} auctions")
+    with sc2:
+        st.metric("Items to scan", f"≈{selected_item_total:,}")
+
+    fetch_disabled = (
+        len(selected_ids) == 0 or fetch_lots_running or sampling_running
+    )
+    fetch_label = "⏳ Fetching lots…" if fetch_lots_running else (
+        f"📥 Fetch items from {len(selected_ids)} selected auction(s)"
+        if selected_ids else "📥 Select at least one auction"
+    )
+    if st.button(
+        fetch_label, type="primary", use_container_width=True,
+        disabled=fetch_disabled, key="fetch_lots_btn",
+    ):
+        st.session_state._selected_auction_ids = list(selected_ids)
+        st.session_state.fetch_lots_running = True
+        st.rerun()
+
+    # --- Sampling work block (second rerun) ---
+    if sampling_running:
+        _keep_screen_awake()
+        st.info("🔋 Keeping screen awake while we sample categories…")
+        try:
+            # Only sample auctions visible in the current filter — user's
+            # narrowed their view so cheap to sample just those.
+            to_sample = [c for c in candidates
+                         if c['auction_id'] in set(shown['auction_id'].tolist())
+                         and c['auction_id'] not in cat_samples]
+
+            if not to_sample:
+                st.info("Already sampled the visible auctions. Adjust filters to sample more.")
+            else:
+                sample_progress = st.progress(0, text=f"Sampling 0/{len(to_sample)} auctions…")
+
+                def sample_prog(current, total, label=""):
+                    pct = current / total if total > 0 else 1.0
+                    sample_progress.progress(min(pct, 1.0), text=label or f"{current}/{total}")
+
+                scraper = Phase1Scraper(config_path="config.json")
+                new_samples = run_async(
+                    scraper.sample_categories_batch(
+                        to_sample, sample_size=20,
+                        progress_callback=sample_prog,
+                    )
+                )
+                sample_progress.empty()
+                merged = dict(cat_samples)
+                merged.update(new_samples)
+                st.session_state.category_samples = merged
+                st.success(f"Sampled categories for {len(new_samples)} auction(s).")
+        except Exception as e:
+            st.error(f"Sampling failed: {e}")
+        finally:
+            st.session_state.sampling_running = False
+        st.rerun()
+
+    # --- Fetch-lots work block (second rerun) ---
+    if fetch_lots_running:
+        _keep_screen_awake()
+        st.info(
+            "🔋 Keeping screen awake while we fetch items. "
+            "Big auctions can take a minute each — sit tight."
+        )
+        try:
+            sel_ids = set(st.session_state.get('_selected_auction_ids', []))
+            selected_candidates = [c for c in candidates if c['auction_id'] in sel_ids]
+
+            # Apply the sidebar category filter (substring, case-insensitive)
+            # to the lot-fetch so we don't drag in irrelevant lots.
+            cfg = st.session_state.get('_sourcing_cfg', {})
+            scraper = Phase1Scraper(config_path="config.json")
+            scraper.category_filter = cfg.get("category_filter", [])
+
+            fetch_progress = st.progress(0, text="Fetching lots…")
+
+            def fetch_prog(current, total, label=""):
+                if total == 0:
+                    pct = 0.0
+                    text = label or "Done"
+                else:
+                    pct = current / total if total > 0 else 0
+                    text = f"{label} — {current}/{total} auctions" if label else f"{current}/{total}"
+                fetch_progress.progress(min(pct, 1.0), text=text)
+
+            df = run_async(
+                scraper.fetch_lots_for_selected(
+                    selected_candidates, progress_callback=fetch_prog
+                )
+            )
+            fetch_progress.empty()
+
+            st.session_state.phase1_leads = df
+
+            # Grow the known-category list for the sidebar filter
+            if not df.empty and 'category' in df.columns:
+                seen = {c for c in df['category'].dropna().astype(str).tolist() if c}
+                st.session_state.known_categories = sorted(
+                    set(st.session_state.known_categories) | seen
+                )
+
+            local_count = int((df['source'] == "Local Pickup").sum()) if not df.empty and 'source' in df.columns else 0
+            ship_count = int((df['source'] == "Ship").sum()) if not df.empty and 'source' in df.columns else 0
+            auction_count = df['auction'].nunique() if not df.empty else 0
+            msg = f"Scanned {len(df)} items across {auction_count} auction(s)."
+            if local_count or ship_count:
+                msg += f" ({local_count} local, {ship_count} shippable)"
+            st.success(msg)
+        except Exception as e:
+            st.error(f"Lot fetch failed: {e}")
+        finally:
+            st.session_state.fetch_lots_running = False
+        st.rerun()
+
+    # --- Reset / back control ---
+    st.markdown("---")
+    if st.button("🔄 Start over (discard candidate list)", use_container_width=False):
+        st.session_state.auction_candidates = []
+        st.session_state.category_samples = {}
+        st.session_state.phase1_leads = pd.DataFrame()
+        st.rerun()
+
+
 # ---- DISCOVERY VIEW: no auction loaded ----
 elif not st.session_state.phase1_leads.empty:
     df = st.session_state.phase1_leads
@@ -1023,4 +1375,11 @@ elif not st.session_state.phase1_leads.empty:
 
 # ---- EMPTY STATE: nothing discovered yet ----
 else:
-    st.info("👋 Configure your filters in the sidebar and click **🚀 Run Phase 1 Discovery** to get started.")
+    st.info(
+        "👋 **Two-step discovery:**\n\n"
+        "1. Configure your filters in the sidebar and click **🔍 Discover Auctions** — "
+        "pulls the list of open auctions (no per-lot data yet, so it's fast).\n"
+        "2. Pick which auctions are worth deep-scanning. Optionally click "
+        "**🏷️ Sample categories** on each to preview what's inside before committing.\n"
+        "3. Click **📥 Fetch items** to pull every lot for just your picks."
+    )
