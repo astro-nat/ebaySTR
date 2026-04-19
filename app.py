@@ -303,16 +303,20 @@ st.title("🛰️ Auction Intelligence Dashboard")
 st.markdown("Automated sourcing and risk-assessment for H-Town TX Finds.")
 
 # --- Surface any persisted discover/fetch status so errors don't vanish on rerun ---
-_status = st.session_state.pop('_discover_status', None)
-if _status:
+for _key, _tb_key, _label in (
+    ('_discover_status', '_last_discover_traceback', 'Discovery'),
+    ('_fetch_status', '_last_fetch_traceback', 'Lot fetch'),
+):
+    _status = st.session_state.pop(_key, None)
+    if not _status:
+        continue
     if _status.get('error'):
-        st.error(f"❌ Discovery failed: {_status['error']}")
-        tb = st.session_state.get('_last_discover_traceback')
+        st.error(f"❌ {_label} failed: {_status['error']}")
+        tb = st.session_state.get(_tb_key)
         if tb:
             with st.expander("🔍 Full traceback (share this if you ask for help)"):
                 st.code(tb, language="python")
     elif _status.get('msg'):
-        # Show success/warning briefly at the top
         msg = _status['msg']
         if msg.startswith("⚠️"):
             st.warning(msg)
@@ -399,6 +403,159 @@ if st.session_state.get('discover_running'):
         "msg": discover_result_msg,
     }
     st.rerun()
+
+
+# ================================================================
+# WORK BLOCK: Sample categories (runs at top of main area so progress
+# is visible regardless of scroll position / collapsed sidebar)
+# ================================================================
+if st.session_state.get('sampling_running'):
+    _keep_screen_awake()
+    with st.status("🏷️ Sampling categories…", expanded=True) as status_box:
+        try:
+            candidates = st.session_state.get('auction_candidates', [])
+            cat_samples = st.session_state.get('category_samples', {})
+            visible_ids = set(st.session_state.get('_sampling_auction_ids', []))
+            to_sample = [c for c in candidates
+                         if c['auction_id'] in visible_ids
+                         and c['auction_id'] not in cat_samples]
+
+            if not to_sample:
+                st.info("Already sampled the visible auctions — nothing new to fetch.")
+                status_box.update(label="ℹ️ Nothing to sample", state="complete", expanded=False)
+            else:
+                st.write(f"Fetching a ~20-lot preview from **{len(to_sample)}** auction(s).")
+                sample_progress = st.progress(0, text=f"Sampling 0/{len(to_sample)}…")
+
+                def sample_prog(current, total, label=""):
+                    pct = current / total if total > 0 else 1.0
+                    sample_progress.progress(min(pct, 1.0), text=label or f"{current}/{total}")
+
+                scraper = Phase1Scraper(config_path="config.json")
+                new_samples = run_async(
+                    scraper.sample_categories_batch(
+                        to_sample, sample_size=20,
+                        progress_callback=sample_prog,
+                    )
+                )
+                sample_progress.empty()
+                merged = dict(cat_samples)
+                merged.update(new_samples)
+                st.session_state.category_samples = merged
+                status_box.update(
+                    label=f"✅ Sampled {len(new_samples)} auction(s)",
+                    state="complete", expanded=False,
+                )
+        except Exception as e:
+            import traceback
+            st.error(f"❌ {type(e).__name__}: {e}")
+            st.code(traceback.format_exc(), language="python")
+            status_box.update(label="❌ Sampling failed", state="error", expanded=True)
+        finally:
+            st.session_state.sampling_running = False
+    st.rerun()
+
+
+# ================================================================
+# WORK BLOCK: Fetch lots for selected auctions
+# ================================================================
+if st.session_state.get('fetch_lots_running'):
+    _keep_screen_awake()
+    fetch_error = None
+    fetch_result_msg = None
+    with st.status("📥 Fetching lots for selected auctions…", expanded=True) as status_box:
+        try:
+            candidates = st.session_state.get('auction_candidates', [])
+            sel_ids = set(st.session_state.get('_selected_auction_ids', []))
+            selected_candidates = [c for c in candidates if c['auction_id'] in sel_ids]
+
+            if not selected_candidates:
+                raise RuntimeError(
+                    f"No matching auctions found for selected IDs ({len(sel_ids)} ids, "
+                    f"{len(candidates)} candidates). This usually means the candidate "
+                    "list was reset between clicks."
+                )
+
+            st.write(
+                f"Deep-scanning **{len(selected_candidates)}** auction(s): "
+                + ", ".join(
+                    f"*{a.get('name', a.get('auction_id'))}*"
+                    for a in selected_candidates[:3]
+                )
+                + (f" + {len(selected_candidates) - 3} more"
+                   if len(selected_candidates) > 3 else "")
+                + "."
+            )
+
+            cfg = st.session_state.get('_sourcing_cfg', {})
+            scraper = Phase1Scraper(config_path="config.json")
+            scraper.category_filter = cfg.get("category_filter", [])
+
+            fetch_progress = st.progress(0, text="Fetching lots…")
+
+            def fetch_prog(current, total, label=""):
+                if total == 0:
+                    pct, text = 0.0, (label or "Done")
+                else:
+                    pct = current / total if total > 0 else 0
+                    text = (f"{label} — {current}/{total} auctions"
+                            if label else f"{current}/{total}")
+                fetch_progress.progress(min(pct, 1.0), text=text)
+
+            df = run_async(
+                scraper.fetch_lots_for_selected(
+                    selected_candidates, progress_callback=fetch_prog
+                )
+            )
+            fetch_progress.empty()
+
+            st.session_state.phase1_leads = df
+
+            # Grow the known-category list for the sidebar filter
+            if not df.empty and 'category' in df.columns:
+                seen = {c for c in df['category'].dropna().astype(str).tolist() if c}
+                st.session_state.known_categories = sorted(
+                    set(st.session_state.known_categories) | seen
+                )
+
+            local_count = int((df['source'] == "Local Pickup").sum()) if not df.empty and 'source' in df.columns else 0
+            ship_count = int((df['source'] == "Ship").sum()) if not df.empty and 'source' in df.columns else 0
+            auction_count = df['auction'].nunique() if not df.empty else 0
+
+            if df.empty:
+                fetch_result_msg = (
+                    "⚠️ Scan complete — but 0 items survived the HARD-logistics / "
+                    "CLOSED-status / category filters. Try relaxing your sidebar filters."
+                )
+                status_box.update(
+                    label="⚠️ No items matched filters",
+                    state="error", expanded=True,
+                )
+            else:
+                fetch_result_msg = (
+                    f"✅ Scanned {len(df)} items across {auction_count} auction(s)"
+                    f" ({local_count} local, {ship_count} shippable)."
+                )
+                status_box.update(
+                    label=f"✅ {len(df)} items from {auction_count} auction(s)",
+                    state="complete", expanded=False,
+                )
+        except Exception as e:
+            import traceback
+            fetch_error = f"{type(e).__name__}: {e}"
+            st.session_state._last_fetch_traceback = traceback.format_exc()
+            st.error(f"❌ {fetch_error}")
+            st.code(traceback.format_exc(), language="python")
+            status_box.update(label="❌ Fetch failed", state="error", expanded=True)
+        finally:
+            st.session_state.fetch_lots_running = False
+
+    st.session_state._fetch_status = {
+        "error": fetch_error,
+        "msg": fetch_result_msg,
+    }
+    st.rerun()
+
 
 # --- Shared column config for discovery tables ---
 DISCOVERY_COL_CONFIG = {
@@ -1067,17 +1224,31 @@ elif st.session_state.get('auction_candidates') and st.session_state.phase1_lead
     sampling_running = st.session_state.get('sampling_running', False)
     fetch_lots_running = st.session_state.get('fetch_lots_running', False)
 
+    # --- Selection state (single source of truth, keyed by auction_id) ---
+    # Avoids st.data_editor's "lose-all-edits" footgun when the underlying
+    # DataFrame changes (e.g. after sampling categories, filter changes, or
+    # re-sort). Picks survive any rerender because they live in session_state.
+    if '_picked_auction_ids' not in st.session_state:
+        st.session_state._picked_auction_ids = set()
+    picked: set = st.session_state._picked_auction_ids
+
+    all_ids = set(shown['auction_id'].tolist())
+    # Drop any ids no longer in candidates (e.g. after re-discovery)
+    picked &= set(picker_df['auction_id'].tolist())
+
     # --- Bulk actions row ---
     ac1, ac2, ac3 = st.columns([1, 1, 1])
     with ac1:
         if st.button("✅ Select all shown", use_container_width=True,
                      disabled=sampling_running or fetch_lots_running):
-            st.session_state._bulk_select_ids = set(shown['auction_id'].tolist())
+            picked |= all_ids
+            st.session_state._picked_auction_ids = picked
             st.rerun()
     with ac2:
-        if st.button("⬜ Deselect all", use_container_width=True,
+        if st.button("⬜ Deselect all shown", use_container_width=True,
                      disabled=sampling_running or fetch_lots_running):
-            st.session_state._bulk_select_ids = set()
+            picked -= all_ids
+            st.session_state._picked_auction_ids = picked
             st.rerun()
     with ac3:
         sample_label = "⏳ Sampling…" if sampling_running else "🏷️ Sample categories"
@@ -1087,18 +1258,29 @@ elif st.session_state.get('auction_candidates') and st.session_state.phase1_lead
             help=(
                 "Fetch a small (~20-lot) preview per auction to see what kinds "
                 "of items are in each. Cheap — makes it easy to skip auctions "
-                "full of irrelevant junk without a full scan."
+                "full of irrelevant junk without a full scan. Your picks "
+                "survive sampling — they won't clear."
             ),
         ):
+            # Stash the visible auction IDs so the top-of-main work block
+            # (which doesn't have access to `shown`) knows what to sample.
+            st.session_state._sampling_auction_ids = shown['auction_id'].tolist()
             st.session_state.sampling_running = True
             st.rerun()
 
-    # --- Pre-apply bulk selection to the DataFrame BEFORE the editor renders ---
-    bulk_ids = st.session_state.get('_bulk_select_ids', None)
-    if bulk_ids is not None:
-        shown['select'] = shown['auction_id'].isin(bulk_ids)
-        # Consumed — clear so future reruns don't override user clicks
-        st.session_state._bulk_select_ids = None
+    # --- Derive the select column from session_state so picks survive any rerun ---
+    shown['select'] = shown['auction_id'].isin(picked)
+
+    # Bump the editor's widget-key whenever the underlying DataFrame contents
+    # change (e.g. after sampling populates the category preview column, or
+    # the user filters/sorts). A fresh key forces Streamlit to re-seed the
+    # editor from `shown['select']` rather than re-applying stale edits.
+    editor_sig = (
+        len(shown),
+        tuple(shown['auction_id'].tolist()),
+        tuple(shown['categories_sampled'].tolist()),
+    )
+    editor_key = f"auction_picker_editor_{hash(editor_sig)}"
 
     # --- Main editor ---
     edited = st.data_editor(
@@ -1118,12 +1300,22 @@ elif st.session_state.get('auction_candidates') and st.session_state.phase1_lead
             "categories_sampled": st.column_config.TextColumn("Category preview"),
             "auction_link": st.column_config.LinkColumn("Link", display_text="Open"),
         },
-        key="auction_picker_editor",
+        key=editor_key,
     )
 
-    selected_rows = edited[edited['select']]
-    selected_ids = set(selected_rows['auction_id'].tolist())
-    selected_item_total = int(selected_rows['items'].sum()) if not selected_rows.empty else 0
+    # --- Sync editor output back to session_state ---
+    # Only update picks for rows VISIBLE in the editor (so filter changes
+    # don't accidentally deselect auctions the user hid from view).
+    visible_ids = set(edited['auction_id'].tolist())
+    now_checked = set(edited.loc[edited['select'], 'auction_id'].tolist())
+    # In-place: remove deselected visible rows, add newly-checked rows
+    picked = (picked - visible_ids) | now_checked
+    st.session_state._picked_auction_ids = picked
+
+    selected_ids = picked  # everything picked across all filters
+    selected_item_total = int(
+        picker_df.loc[picker_df['auction_id'].isin(selected_ids), 'items'].sum()
+    ) if selected_ids else 0
 
     st.markdown("---")
     sc1, sc2 = st.columns([1, 2])
@@ -1147,100 +1339,9 @@ elif st.session_state.get('auction_candidates') and st.session_state.phase1_lead
         st.session_state.fetch_lots_running = True
         st.rerun()
 
-    # --- Sampling work block (second rerun) ---
-    if sampling_running:
-        _keep_screen_awake()
-        st.info("🔋 Keeping screen awake while we sample categories…")
-        try:
-            # Only sample auctions visible in the current filter — user's
-            # narrowed their view so cheap to sample just those.
-            to_sample = [c for c in candidates
-                         if c['auction_id'] in set(shown['auction_id'].tolist())
-                         and c['auction_id'] not in cat_samples]
-
-            if not to_sample:
-                st.info("Already sampled the visible auctions. Adjust filters to sample more.")
-            else:
-                sample_progress = st.progress(0, text=f"Sampling 0/{len(to_sample)} auctions…")
-
-                def sample_prog(current, total, label=""):
-                    pct = current / total if total > 0 else 1.0
-                    sample_progress.progress(min(pct, 1.0), text=label or f"{current}/{total}")
-
-                scraper = Phase1Scraper(config_path="config.json")
-                new_samples = run_async(
-                    scraper.sample_categories_batch(
-                        to_sample, sample_size=20,
-                        progress_callback=sample_prog,
-                    )
-                )
-                sample_progress.empty()
-                merged = dict(cat_samples)
-                merged.update(new_samples)
-                st.session_state.category_samples = merged
-                st.success(f"Sampled categories for {len(new_samples)} auction(s).")
-        except Exception as e:
-            st.error(f"Sampling failed: {e}")
-        finally:
-            st.session_state.sampling_running = False
-        st.rerun()
-
-    # --- Fetch-lots work block (second rerun) ---
-    if fetch_lots_running:
-        _keep_screen_awake()
-        st.info(
-            "🔋 Keeping screen awake while we fetch items. "
-            "Big auctions can take a minute each — sit tight."
-        )
-        try:
-            sel_ids = set(st.session_state.get('_selected_auction_ids', []))
-            selected_candidates = [c for c in candidates if c['auction_id'] in sel_ids]
-
-            # Apply the sidebar category filter (substring, case-insensitive)
-            # to the lot-fetch so we don't drag in irrelevant lots.
-            cfg = st.session_state.get('_sourcing_cfg', {})
-            scraper = Phase1Scraper(config_path="config.json")
-            scraper.category_filter = cfg.get("category_filter", [])
-
-            fetch_progress = st.progress(0, text="Fetching lots…")
-
-            def fetch_prog(current, total, label=""):
-                if total == 0:
-                    pct = 0.0
-                    text = label or "Done"
-                else:
-                    pct = current / total if total > 0 else 0
-                    text = f"{label} — {current}/{total} auctions" if label else f"{current}/{total}"
-                fetch_progress.progress(min(pct, 1.0), text=text)
-
-            df = run_async(
-                scraper.fetch_lots_for_selected(
-                    selected_candidates, progress_callback=fetch_prog
-                )
-            )
-            fetch_progress.empty()
-
-            st.session_state.phase1_leads = df
-
-            # Grow the known-category list for the sidebar filter
-            if not df.empty and 'category' in df.columns:
-                seen = {c for c in df['category'].dropna().astype(str).tolist() if c}
-                st.session_state.known_categories = sorted(
-                    set(st.session_state.known_categories) | seen
-                )
-
-            local_count = int((df['source'] == "Local Pickup").sum()) if not df.empty and 'source' in df.columns else 0
-            ship_count = int((df['source'] == "Ship").sum()) if not df.empty and 'source' in df.columns else 0
-            auction_count = df['auction'].nunique() if not df.empty else 0
-            msg = f"Scanned {len(df)} items across {auction_count} auction(s)."
-            if local_count or ship_count:
-                msg += f" ({local_count} local, {ship_count} shippable)"
-            st.success(msg)
-        except Exception as e:
-            st.error(f"Lot fetch failed: {e}")
-        finally:
-            st.session_state.fetch_lots_running = False
-        st.rerun()
+    # Sampling + fetch-lots work blocks run at the TOP of the main viewport
+    # (see the "WORK BLOCKS" section below the title) so progress is always
+    # visible. This branch only renders the picker UI.
 
     # --- Reset / back control ---
     st.markdown("---")
