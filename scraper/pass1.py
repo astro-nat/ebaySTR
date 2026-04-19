@@ -37,10 +37,11 @@ query AuctionMap($zip: String, $miles: Int, $searchText: String, $categoryId: Ca
 """
 
 LOT_SEARCH_QUERY = """
-query LotSearch($auctionId: Int!, $pageIndex: Int!, $pageSize: Int!) {
-  lotSearch(input: {auctionId: $auctionId, searchText: "", pageIndex: $pageIndex, pageSize: $pageSize}) {
+query LotSearch($auctionId: Int!, $pageNumber: Int!) {
+  lotSearch(input: {auctionId: $auctionId, searchText: ""}, pageNumber: $pageNumber) {
     pagedResults {
       totalCount
+      pageNumber
       results {
         id
         lotNumber
@@ -54,12 +55,16 @@ query LotSearch($auctionId: Int!, $pageIndex: Int!, $pageSize: Int!) {
 }
 """
 
-# HiBid's UI has a "single page" toggle that requests every lot in one go.
-# We mirror that: one big pageSize request first, and only fall back to
-# paged fetching if the server clamps us (i.e. returns < totalCount).
-LOT_PAGE_SIZE_SINGLE = 10000  # effectively "all" for any real auction
-LOT_PAGE_SIZE_FALLBACK = 100   # safe per-page size if the server clamps
-MAX_LOT_PAGES = 50              # 50 * 100 = 5000 lots; safety cap
+# HiBid's current GraphQL schema (Apr 2026): `pageNumber` is a sibling
+# argument to `input` (not inside it), and page size is fixed at 100 lots.
+# The old `pageSize` / `pageIndex` input fields were removed, which is what
+# caused the HTTP 400 "Unknown field" errors.
+LOT_PAGE_SIZE = 100             # fixed by the server
+# HiBid caps pagination at page 100 (i.e. 10,000 lots max, confirmed via probe
+# against auction 734754 which has 10,817 lots). Going beyond page 100 returns
+# an empty batch. MAX_LOT_PAGES stays slightly above 100 in case the server
+# cap shifts.
+MAX_LOT_PAGES = 120
 
 
 class Phase1Scraper:
@@ -213,53 +218,38 @@ class Phase1Scraper:
         return filtered
 
     async def _fetch_all_lot_pages(self, client: httpx.AsyncClient, auction_id: int) -> List[Dict]:
-        """Fetch every lot in an auction, matching HiBid's "single page" UI toggle.
+        """Fetch every lot in an auction.
 
-        Fast path: one GraphQL call with a huge pageSize — identical to what
-        the website does when you flip the "single page" toggle. Nearly every
-        auction comes back in this single round-trip.
-
-        Slow path: if the server clamps results (len(lots) < totalCount), we
-        fall back to paginating with pageSize=100 so nothing gets dropped.
+        HiBid's current schema pages at a fixed size of 100 lots with
+        `pageNumber` (1-based) as a sibling arg to `input`. We call page 1
+        to get totalCount, then paginate through the remaining pages.
         """
-        # --- Fast path: request everything at once ---
-        variables = {
-            "auctionId": auction_id,
-            "pageIndex": 0,
-            "pageSize": LOT_PAGE_SIZE_SINGLE,
-        }
-        try:
+        lots: List[Dict] = []
+        total_count = 0
+
+        # First request: page 1 gives us both results and totalCount
+        variables = {"auctionId": auction_id, "pageNumber": 1}
+        data = await self._graphql(client, "LotSearch", LOT_SEARCH_QUERY, variables)
+        paged = (data.get("lotSearch") or {}).get("pagedResults") or {}
+        batch = paged.get("results") or []
+        total_count = paged.get("totalCount") or 0
+        lots.extend(batch)
+
+        if total_count == 0 or len(lots) >= total_count:
+            return lots
+
+        # Remaining pages. ceil(total/100) = total pages; we've fetched page 1.
+        import math
+        last_page = min(math.ceil(total_count / LOT_PAGE_SIZE), MAX_LOT_PAGES)
+        for page_number in range(2, last_page + 1):
+            variables = {"auctionId": auction_id, "pageNumber": page_number}
             data = await self._graphql(client, "LotSearch", LOT_SEARCH_QUERY, variables)
-            paged = data.get("lotSearch", {}).get("pagedResults", {}) or {}
-            lots = paged.get("results", []) or []
-            total_count = paged.get("totalCount") or 0
-
-            # If the server honored the big pageSize (or the auction is small), done.
-            if total_count == 0 or len(lots) >= total_count:
-                return lots
-        except RuntimeError as e:
-            # HiBid sometimes 400s on oversized pageSize. Fall through to the
-            # paginated path rather than dropping the entire auction.
-            if "HTTP 400" not in str(e):
-                raise
-            # else: continue to the slow path below
-
-        # --- Slow path: server clamped — page through at a safe size ---
-        lots = []
-        for page_index in range(MAX_LOT_PAGES):
-            variables = {
-                "auctionId": auction_id,
-                "pageIndex": page_index,
-                "pageSize": LOT_PAGE_SIZE_FALLBACK,
-            }
-            data = await self._graphql(client, "LotSearch", LOT_SEARCH_QUERY, variables)
-            paged = data.get("lotSearch", {}).get("pagedResults", {}) or {}
-            batch = paged.get("results", []) or []
-            lots.extend(batch)
-
+            paged = (data.get("lotSearch") or {}).get("pagedResults") or {}
+            batch = paged.get("results") or []
             if not batch:
-                break
-            if total_count and len(lots) >= total_count:
+                break  # empty page = we're past the end
+            lots.extend(batch)
+            if len(lots) >= total_count:
                 break
 
         return lots
