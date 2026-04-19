@@ -392,16 +392,7 @@ def _render_auction_card(auction_name, auction_df):
     avg_bid = auction_df['current_bid'].mean() if 'current_bid' in auction_df.columns else 0
     easy_count = (auction_df['logistics_ease'] == "EASY").sum() if 'logistics_ease' in auction_df.columns else 0
 
-    subtitle_parts = [f"{item_count} items"]
-    if closing:
-        subtitle_parts.append(f"closes {closing}")
-    if source:
-        subtitle_parts.append(source)
-    subtitle_parts.append(f"avg bid ${avg_bid:.2f}")
-    if easy_count:
-        subtitle_parts.append(f"{easy_count} easy-ship")
-
-    # Cache hit indicator on the expander label
+    # Cache hit indicator
     auction_id = _extract_auction_id(auction_df)
     cache_prefix = ""
     if auction_id is not None:
@@ -409,7 +400,25 @@ def _render_auction_card(auction_name, auction_df):
         if payload and _AUCTION_CACHE.is_fresh(payload, ttl_days=st.session_state.cache_ttl_days):
             cache_prefix = "💾 "
 
-    with st.expander(f"{cache_prefix}🏷️ **{auction_name}** — {' · '.join(subtitle_parts)}", expanded=False):
+    # Easy-ship count goes FIRST in the label and is bolded so it's the
+    # easiest thing to scan when picking which auction to dive into.
+    if easy_count:
+        easy_badge = f"📦 **{easy_count} easy-ship**"
+    else:
+        easy_badge = "📦 0 easy-ship"
+
+    subtitle_parts = [f"{item_count} items"]
+    if closing:
+        subtitle_parts.append(f"closes {closing}")
+    if source:
+        subtitle_parts.append(source)
+    subtitle_parts.append(f"avg bid ${avg_bid:.2f}")
+
+    label = (
+        f"{cache_prefix}{easy_badge}  ·  🏷️ {auction_name}  —  "
+        + "  ·  ".join(subtitle_parts)
+    )
+    with st.expander(label, expanded=False):
         if cache_prefix:
             st.caption("💾 Previously analyzed — cached audit + price comps will load instantly on Analyze.")
         if st.button(
@@ -951,7 +960,42 @@ elif not st.session_state.phase1_leads.empty:
         st.stop()
 
     auction_groups = df.groupby('auction', sort=False)
-    auction_order = df.groupby('auction')['closing_date'].first().sort_values()
+
+    # --- Per-auction metrics we can sort on ---
+    has_easy = 'logistics_ease' in df.columns
+    metrics = df.groupby('auction').agg(
+        items=('title', 'count'),
+        closing=('closing_date', 'first'),
+    )
+    if has_easy:
+        metrics['easy_ship'] = df.groupby('auction')['logistics_ease'].apply(
+            lambda s: int((s == 'EASY').sum())
+        )
+    else:
+        metrics['easy_ship'] = 0
+
+    sort_choice = st.radio(
+        "Sort auctions by:",
+        options=[
+            "📦 Easy-ship count (most first)",
+            "⏰ Closing soonest",
+            "🔢 Item count (most first)",
+        ],
+        horizontal=True,
+        index=0,
+    )
+    if sort_choice.startswith("📦"):
+        # Easy-ship desc, then closing soonest as tiebreaker so same-count
+        # auctions still show the ones ending first at the top.
+        auction_order = metrics.sort_values(
+            ['easy_ship', 'closing'], ascending=[False, True]
+        )
+    elif sort_choice.startswith("⏰"):
+        auction_order = metrics.sort_values('closing', ascending=True)
+    else:
+        auction_order = metrics.sort_values(
+            ['items', 'closing'], ascending=[False, True]
+        )
 
     filter_bits = []
     if search_query:

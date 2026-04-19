@@ -37,8 +37,8 @@ query AuctionMap($zip: String, $miles: Int, $searchText: String, $categoryId: Ca
 """
 
 LOT_SEARCH_QUERY = """
-query LotSearch($auctionId: Int!) {
-  lotSearch(input: {auctionId: $auctionId, searchText: ""}) {
+query LotSearch($auctionId: Int!, $pageIndex: Int!, $pageSize: Int!) {
+  lotSearch(input: {auctionId: $auctionId, searchText: "", pageIndex: $pageIndex, pageSize: $pageSize}) {
     pagedResults {
       totalCount
       results {
@@ -53,6 +53,13 @@ query LotSearch($auctionId: Int!) {
   }
 }
 """
+
+# HiBid's UI has a "single page" toggle that requests every lot in one go.
+# We mirror that: one big pageSize request first, and only fall back to
+# paged fetching if the server clamps us (i.e. returns < totalCount).
+LOT_PAGE_SIZE_SINGLE = 10000  # effectively "all" for any real auction
+LOT_PAGE_SIZE_FALLBACK = 100   # safe per-page size if the server clamps
+MAX_LOT_PAGES = 50              # 50 * 100 = 5000 lots; safety cap
 
 
 class Phase1Scraper:
@@ -193,15 +200,56 @@ class Phase1Scraper:
                 filtered.append(a)  # Keep if we can't parse the date
         return filtered
 
+    async def _fetch_all_lot_pages(self, client: httpx.AsyncClient, auction_id: int) -> List[Dict]:
+        """Fetch every lot in an auction, matching HiBid's "single page" UI toggle.
+
+        Fast path: one GraphQL call with a huge pageSize — identical to what
+        the website does when you flip the "single page" toggle. Nearly every
+        auction comes back in this single round-trip.
+
+        Slow path: if the server clamps results (len(lots) < totalCount), we
+        fall back to paginating with pageSize=100 so nothing gets dropped.
+        """
+        # --- Fast path: request everything at once ---
+        variables = {
+            "auctionId": auction_id,
+            "pageIndex": 0,
+            "pageSize": LOT_PAGE_SIZE_SINGLE,
+        }
+        data = await self._graphql(client, "LotSearch", LOT_SEARCH_QUERY, variables)
+        paged = data.get("lotSearch", {}).get("pagedResults", {}) or {}
+        lots = paged.get("results", []) or []
+        total_count = paged.get("totalCount") or 0
+
+        # If the server honored the big pageSize (or the auction is small), done.
+        if total_count == 0 or len(lots) >= total_count:
+            return lots
+
+        # --- Slow path: server clamped — page through at a safe size ---
+        lots = []
+        for page_index in range(MAX_LOT_PAGES):
+            variables = {
+                "auctionId": auction_id,
+                "pageIndex": page_index,
+                "pageSize": LOT_PAGE_SIZE_FALLBACK,
+            }
+            data = await self._graphql(client, "LotSearch", LOT_SEARCH_QUERY, variables)
+            paged = data.get("lotSearch", {}).get("pagedResults", {}) or {}
+            batch = paged.get("results", []) or []
+            lots.extend(batch)
+
+            if not batch:
+                break
+            if total_count and len(lots) >= total_count:
+                break
+
+        return lots
+
     async def fetch_lots_for_auction(self, client: httpx.AsyncClient, auction_id: int,
                                      auction_name: str = "", date_end: str = "",
                                      source: str = "Local Pickup") -> List[Dict]:
-        variables = {"auctionId": auction_id}
-
         try:
-            data = await self._graphql(client, "LotSearch", LOT_SEARCH_QUERY, variables)
-            paged = data.get("lotSearch", {}).get("pagedResults", {})
-            lots = paged.get("results", [])
+            lots = await self._fetch_all_lot_pages(client, auction_id)
 
             try:
                 closing_fmt = datetime.fromisoformat(date_end).strftime("%b %d") if date_end else ""
