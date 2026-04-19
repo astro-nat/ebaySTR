@@ -475,7 +475,10 @@ class Phase1Scraper:
 
         df = pd.DataFrame(all_lots)
         if not df.empty:
-            df = df[df['logistics_ease'] != "HARD"]
+            # Only drop lots that are FUNDAMENTALLY unusable (closed / ended).
+            # HARD-logistics items are kept here and filtered downstream with a
+            # UI toggle — for a local-pickup auction the user can still grab a
+            # dresser even if they don't want to ship one.
             df = df[df['status'] != "CLOSED"]
             df = df[df['time_left'] != "Bidding Closed"]
             df = df.sort_values('closing_date').reset_index(drop=True)

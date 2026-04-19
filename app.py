@@ -521,20 +521,26 @@ if st.session_state.get('fetch_lots_running'):
             local_count = int((df['source'] == "Local Pickup").sum()) if not df.empty and 'source' in df.columns else 0
             ship_count = int((df['source'] == "Ship").sum()) if not df.empty and 'source' in df.columns else 0
             auction_count = df['auction'].nunique() if not df.empty else 0
+            hard_count = int((df['logistics_ease'] == "HARD").sum()) if not df.empty and 'logistics_ease' in df.columns else 0
+            easy_count = int((df['logistics_ease'] == "EASY").sum()) if not df.empty and 'logistics_ease' in df.columns else 0
 
             if df.empty:
                 fetch_result_msg = (
-                    "⚠️ Scan complete — but 0 items survived the HARD-logistics / "
-                    "CLOSED-status / category filters. Try relaxing your sidebar filters."
+                    "⚠️ Scan complete — every lot was either closed or outside "
+                    "your category filter. Try relaxing your sidebar filters."
                 )
                 status_box.update(
-                    label="⚠️ No items matched filters",
+                    label="⚠️ No open lots matched",
                     state="error", expanded=True,
                 )
             else:
+                breakdown_bits = [f"📦 {easy_count} easy-ship"]
+                if hard_count:
+                    breakdown_bits.append(f"🏋️ {hard_count} HARD (hidden by default)")
                 fetch_result_msg = (
                     f"✅ Scanned {len(df)} items across {auction_count} auction(s)"
-                    f" ({local_count} local, {ship_count} shippable)."
+                    f" — {local_count} local, {ship_count} shippable"
+                    f" · {' · '.join(breakdown_bits)}."
                 )
                 status_box.update(
                     label=f"✅ {len(df)} items from {auction_count} auction(s)",
@@ -1386,6 +1392,26 @@ elif not st.session_state.phase1_leads.empty:
             if selected_source != "All":
                 df = df[df['source'] == selected_source]
 
+        # Logistics filter — HARD items are hidden by default since they're
+        # expensive to ship to eBay buyers, but for local-pickup auctions
+        # (where you grab the item in person) they're still fair game.
+        hard_total = int((df['logistics_ease'] == "HARD").sum()) if 'logistics_ease' in df.columns else 0
+        show_hard = st.checkbox(
+            f"🏋️ Include HARD-to-ship items ({hard_total} hidden)" if hard_total else "🏋️ Include HARD-to-ship items",
+            value=False,
+            key="discovery_show_hard",
+            help=(
+                "Items matching the 'ship_killers' regex (furniture, heavy, "
+                "large, mowers, pickup-only, etc.) are hidden by default "
+                "because they're costly to re-ship to an eBay buyer. Turn on "
+                "for local-pickup auctions where you plan to move the item "
+                "yourself, or to see ALL lots regardless of shipability."
+            ),
+            disabled=(hard_total == 0),
+        )
+        if not show_hard and 'logistics_ease' in df.columns:
+            df = df[df['logistics_ease'] != "HARD"]
+
     # --- Apply search + category filters ---
     if search_query:
         q = search_query.lower()
@@ -1406,9 +1432,12 @@ elif not st.session_state.phase1_leads.empty:
         df = df[df['category'].isin(selected_categories)]
 
     if df.empty:
+        hints = ["broaden the search", "clear the category filter"]
+        if hard_total and not show_hard:
+            hints.append(f"tick **🏋️ Include HARD-to-ship items** ({hard_total} available)")
         st.warning(
-            f"No matches for your filters. (Started with {total_auctions} auctions, {total_items} items.) "
-            "Try broadening the search or clearing the category filter."
+            f"No matches for your filters. (Started with {total_auctions} auctions, "
+            f"{total_items} items.) Try: {', '.join(hints)}."
         )
         st.stop()
 
