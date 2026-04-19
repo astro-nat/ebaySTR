@@ -49,6 +49,7 @@ query LotSearch($auctionId: Int!, $pageNumber: Int!) {
         description
         category { categoryName }
         lotState { highBid bidCount status timeLeft }
+        pictures { thumbnailLocation hdThumbnailLocation fullSizeLocation }
       }
     }
   }
