@@ -137,10 +137,22 @@ class Phase1Scraper:
             json=payload,
             timeout=self.timeout,
         )
-        response.raise_for_status()
+        # Capture the body on error — a bare raise_for_status() swallows the
+        # response text, and HiBid's 400s explain exactly what they dislike
+        # (e.g. "pageSize exceeds maximum") in the body.
+        if response.status_code >= 400:
+            body_snippet = ""
+            try:
+                body_snippet = response.text[:500]
+            except Exception:
+                pass
+            raise RuntimeError(
+                f"HiBid GraphQL {operation} returned HTTP {response.status_code}: "
+                f"{body_snippet or '(empty body)'} | variables={variables}"
+            )
         data = response.json()
         if "errors" in data:
-            raise RuntimeError(f"GraphQL errors: {data['errors']}")
+            raise RuntimeError(f"GraphQL errors ({operation}): {data['errors']}")
         return data["data"]
 
     async def fetch_auctions(self, client: httpx.AsyncClient, zip_code: str, radius: int) -> List[Dict]:
@@ -216,14 +228,21 @@ class Phase1Scraper:
             "pageIndex": 0,
             "pageSize": LOT_PAGE_SIZE_SINGLE,
         }
-        data = await self._graphql(client, "LotSearch", LOT_SEARCH_QUERY, variables)
-        paged = data.get("lotSearch", {}).get("pagedResults", {}) or {}
-        lots = paged.get("results", []) or []
-        total_count = paged.get("totalCount") or 0
+        try:
+            data = await self._graphql(client, "LotSearch", LOT_SEARCH_QUERY, variables)
+            paged = data.get("lotSearch", {}).get("pagedResults", {}) or {}
+            lots = paged.get("results", []) or []
+            total_count = paged.get("totalCount") or 0
 
-        # If the server honored the big pageSize (or the auction is small), done.
-        if total_count == 0 or len(lots) >= total_count:
-            return lots
+            # If the server honored the big pageSize (or the auction is small), done.
+            if total_count == 0 or len(lots) >= total_count:
+                return lots
+        except RuntimeError as e:
+            # HiBid sometimes 400s on oversized pageSize. Fall through to the
+            # paginated path rather than dropping the entire auction.
+            if "HTTP 400" not in str(e):
+                raise
+            # else: continue to the slow path below
 
         # --- Slow path: server clamped — page through at a safe size ---
         lots = []
