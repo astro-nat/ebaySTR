@@ -113,6 +113,14 @@ if 'audit_running' not in st.session_state:
 if 'comps_running' not in st.session_state:
     st.session_state.comps_running = False
 
+if 'img_enrich_running' not in st.session_state:
+    st.session_state.img_enrich_running = False
+
+if 'img_enrich_min_bid' not in st.session_state:
+    # Skip image enrichment on lots below this bid (junk filter). Tunable
+    # from the Step 1.5 UI panel.
+    st.session_state.img_enrich_min_bid = 5.0
+
 if 'cache_ttl_days' not in st.session_state:
     st.session_state.cache_ttl_days = 14
 
@@ -864,6 +872,125 @@ def _run_ai_audit(leads_df):
     return results_df
 
 
+def _run_image_enrichment(audit_df, min_bid: float = 5.0):
+    """Run eBay image_search-based title enrichment on promising lots.
+
+    Gated to skip:
+      - red-flagged lots (condition audit says broken/untested)
+      - HARD logistics (we're not buying furniture to ship)
+      - lots below min_bid (junk filter — don't burn API calls on $1 items)
+      - lots with no thumbnail_url
+
+    Returns the DataFrame with six new img_* columns plus (where confidence
+    is high enough) a promoted `enriched_title` that now carries brand +
+    model + year pulled straight from matching eBay listings.
+    """
+    from scraper.vision_enrich import EbayImageEnricher, promote_image_titles
+    from scraper.config_loader import load_config
+
+    cfg = load_config()
+    enricher = EbayImageEnricher(
+        cfg["ebay"]["app_id"], cfg["ebay"]["cert_id"],
+        hibid_user_agent=cfg.get("api", {}).get(
+            "user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"),
+    )
+
+    total = len(audit_df)
+
+    def gate(row):
+        if row.get('red_flag'):
+            return False
+        if row.get('logistics_ease') == 'HARD':
+            return False
+        if not (row.get('thumbnail_url') or ''):
+            return False
+        try:
+            if float(row.get('current_bid') or 0) < min_bid:
+                return False
+        except (ValueError, TypeError):
+            return False
+        return True
+
+    # Pre-count how many lots will actually be analyzed vs skipped, so the
+    # progress bar can reflect real work (not padded by skipped rows).
+    eligible_ids = {
+        row.get('lot_id')
+        for _, row in audit_df.iterrows() if gate(row)
+    }
+    eligible_count = len(eligible_ids)
+
+    with st.status(
+        f"🖼️ Enriching {eligible_count} titles via eBay image_search…",
+        expanded=True,
+    ) as status:
+        st.write(
+            f"**Gated to {eligible_count} of {total} items** — skipping "
+            "red-flagged, HARD-logistics, missing-image, and sub-${:.2f} lots."
+            .format(min_bid)
+        )
+        st.caption(
+            "For each eligible item: download the HiBid thumbnail, POST it "
+            "to eBay's Browse `search_by_image` endpoint, and if the top "
+            "hits agree on a product, rewrite the title to match what eBay "
+            "actually sells it as. Zero API cost — reuses your existing "
+            "Browse API credentials."
+        )
+
+        progress_bar = st.progress(0, text=f"Starting — 0/{eligible_count}")
+        current_item_placeholder = st.empty()
+        progress_state = {"done": 0, "hits": 0}
+
+        def img_progress(current, tot_with_skips, label):
+            # `current` counts every row including gated skips. We only
+            # want to advance the bar on rows we actually analyzed — so
+            # we track that ourselves and derive progress from it.
+            lot_row = audit_df.iloc[current - 1] if current - 1 < len(audit_df) else None
+            if lot_row is None:
+                return
+            if gate(lot_row):
+                progress_state["done"] += 1
+                pct = (progress_state["done"] / eligible_count
+                       if eligible_count else 1.0)
+                progress_bar.progress(
+                    min(pct, 1.0),
+                    text=f"Identifying {progress_state['done']}/{eligible_count}…",
+                )
+                if label and label != "gated":
+                    current_item_placeholder.caption(f"🔎 Matched: *{label[:70]}*")
+
+        result_df = enricher.batch_enrich(
+            audit_df, gate_fn=gate, progress_callback=img_progress,
+        )
+
+        # Promote high-confidence matches to `enriched_title`
+        promoted_df = promote_image_titles(
+            result_df, min_confidence=0.5, min_hits=3,
+        )
+        promoted = int((promoted_df['enriched_title']
+                        != promoted_df.get('enriched_title_pre_image',
+                                           promoted_df['enriched_title'])).sum())
+        skipped_gate = int(
+            (promoted_df['img_error'] == 'skipped_gate').sum()
+        ) if 'img_error' in promoted_df.columns else 0
+        errored = int(
+            promoted_df['img_error'].notna().sum()
+            - (promoted_df['img_error'] == 'skipped_gate').sum()
+        ) if 'img_error' in promoted_df.columns else 0
+
+        st.write(
+            f"**📊 Summary:** "
+            f"✅ {promoted} titles upgraded from image matches · "
+            f"⏭️ {skipped_gate} gated-out · "
+            f"⚠️ {errored} couldn't identify."
+        )
+        status.update(
+            label=f"✅ Image enrichment — {promoted} titles upgraded",
+            state="complete", expanded=False,
+        )
+
+    return promoted_df
+
+
 def _run_ebay_comps(results_df):
     """Run eBay + Mercari price comps on the good+ items in results_df.
 
@@ -1206,6 +1333,80 @@ if current_auction and not st.session_state.selected_leads.empty:
             st.session_state.audit_running = False
         st.rerun()
 
+    # Step 1.5: Image-based title enrichment (optional; improves Step 2 quality)
+    img_enrich_running = st.session_state.get('img_enrich_running', False)
+    st.markdown("---")
+    st.markdown("### Step 1.5: Upgrade Titles via eBay Image Match  ·  *optional*")
+
+    if not has_audit:
+        st.info(
+            "Run the AI audit first — image enrichment only runs on **good+** lots "
+            "that pass the condition filter."
+        )
+    else:
+        ar = st.session_state.audit_results
+        # Count what would actually be analyzed so the user knows the scope
+        if 'thumbnail_url' in ar.columns:
+            with_thumbs = int(ar['thumbnail_url'].fillna('').astype(bool).sum())
+        else:
+            with_thumbs = 0
+
+        img_upgraded = 0
+        if 'img_enriched_title' in ar.columns:
+            img_upgraded = int(ar['img_enriched_title'].notna().sum())
+
+        caption_bits = [f"🖼️ {with_thumbs} items have thumbnails"]
+        if img_upgraded:
+            caption_bits.append(f"✨ {img_upgraded} already upgraded")
+        st.caption(" · ".join(caption_bits))
+
+        st.caption(
+            "Downloads each lot's first thumbnail, runs it through eBay's "
+            "`search_by_image`, and rewrites the title with brand / model / "
+            "year pulled from matching listings. **Zero-cost** — reuses your "
+            "Browse API credentials. Skips red-flagged, HARD-to-ship, "
+            "and low-bid lots by default."
+        )
+
+        c1, c2 = st.columns([2, 1])
+        with c2:
+            min_bid = st.number_input(
+                "Skip lots below bid $",
+                min_value=0.0, max_value=500.0, step=1.0,
+                value=float(st.session_state.img_enrich_min_bid),
+                key="img_enrich_min_bid_input",
+                help="Junk filter. Don't burn cycles identifying $1 lots.",
+            )
+            st.session_state.img_enrich_min_bid = float(min_bid)
+
+        img_btn_label = ("⏳ Identifying items…" if img_enrich_running
+                         else "🖼️ Upgrade Titles from Images")
+        if c1.button(
+            img_btn_label,
+            type="secondary",
+            use_container_width=True,
+            disabled=audit_running or comps_running or img_enrich_running,
+            key="run_img_enrich_btn",
+        ):
+            st.session_state.img_enrich_running = True
+            st.rerun()
+
+        if img_enrich_running:
+            _keep_screen_awake()
+            try:
+                st.session_state.audit_results = _run_image_enrichment(
+                    st.session_state.audit_results,
+                    min_bid=st.session_state.img_enrich_min_bid,
+                )
+                _save_current_auction_to_cache()
+            except Exception as e:
+                import traceback
+                st.error(f"Image enrichment failed: {e}")
+                st.code(traceback.format_exc(), language="python")
+            finally:
+                st.session_state.img_enrich_running = False
+            st.rerun()
+
     # Step 2: eBay + Mercari comps (only after audit)
     st.markdown("---")
     st.markdown("### Step 2: eBay + Mercari Price Comps & STR")
@@ -1223,7 +1424,7 @@ if current_auction and not st.session_state.selected_leads.empty:
             comps_btn_label,
             type="primary",
             use_container_width=True,
-            disabled=audit_running or comps_running,
+            disabled=audit_running or comps_running or img_enrich_running,
             key="run_comps_btn",
         ):
             st.session_state.comps_running = True

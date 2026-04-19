@@ -23,11 +23,14 @@ import pandas as pd
 # Everything else (current_bid, bid_count, est_cost, time_left, status)
 # must come from a fresh Phase 1 fetch.
 CACHED_ANALYSIS_COLS = [
-    'enriched_title',
+    'enriched_title', 'enriched_title_pre_image',
     'verdict', 'confidence', 'red_flag',
     'est_resale', 'price_low', 'price_high', 'comp_count',
     'ebay_comps', 'mercari_comps',
     'price_source', 'ebay_str', 'str_source',
+    # Image-enrichment columns (from scraper/vision_enrich.py)
+    'img_enriched_title', 'img_confidence', 'img_comp_count',
+    'img_top_match', 'img_top_price', 'img_error',
 ]
 
 CACHE_DIR = Path(".cache") / "auctions"

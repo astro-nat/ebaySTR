@@ -321,6 +321,20 @@ class Phase1Scraper:
                 total_cost = self.estimate_total_cost(current_bid)
 
                 lot_id = lot.get('id')
+
+                # Pull the first thumbnail URL — that's what we feed to eBay
+                # image_search during vision enrichment. HiBid's CDN requires
+                # a Referer header; we only store the URL here.
+                pictures = lot.get('pictures') or []
+                thumbnail_url = ''
+                hd_thumbnail_url = ''
+                fullsize_url = ''
+                if pictures:
+                    first = pictures[0] or {}
+                    thumbnail_url = first.get('thumbnailLocation') or ''
+                    hd_thumbnail_url = first.get('hdThumbnailLocation') or ''
+                    fullsize_url = first.get('fullSizeLocation') or ''
+
                 processed_lots.append({
                     "lot_id": lot_id,
                     "auction": auction_name,
@@ -337,6 +351,10 @@ class Phase1Scraper:
                     "time_left": state.get('timeLeft', '') or '',
                     "description": description,
                     "logistics_ease": logistics,
+                    "thumbnail_url": thumbnail_url,
+                    "hd_thumbnail_url": hd_thumbnail_url,
+                    "fullsize_url": fullsize_url,
+                    "image_count": len(pictures),
                 })
             result["lots"] = processed_lots
         except Exception as e:
