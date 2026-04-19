@@ -37,10 +37,11 @@ query AuctionMap($zip: String, $miles: Int, $searchText: String, $categoryId: Ca
 """
 
 LOT_SEARCH_QUERY = """
-query LotSearch($auctionId: Int!, $pageIndex: Int!, $pageSize: Int!) {
-  lotSearch(input: {auctionId: $auctionId, searchText: "", pageIndex: $pageIndex, pageSize: $pageSize}) {
+query LotSearch($auctionId: Int!, $pageNumber: Int!) {
+  lotSearch(input: {auctionId: $auctionId, searchText: ""}, pageNumber: $pageNumber) {
     pagedResults {
       totalCount
+      pageNumber
       results {
         id
         lotNumber
@@ -48,18 +49,23 @@ query LotSearch($auctionId: Int!, $pageIndex: Int!, $pageSize: Int!) {
         description
         category { categoryName }
         lotState { highBid bidCount status timeLeft }
+        pictures { thumbnailLocation hdThumbnailLocation fullSizeLocation }
       }
     }
   }
 }
 """
 
-# HiBid's UI has a "single page" toggle that requests every lot in one go.
-# We mirror that: one big pageSize request first, and only fall back to
-# paged fetching if the server clamps us (i.e. returns < totalCount).
-LOT_PAGE_SIZE_SINGLE = 10000  # effectively "all" for any real auction
-LOT_PAGE_SIZE_FALLBACK = 100   # safe per-page size if the server clamps
-MAX_LOT_PAGES = 50              # 50 * 100 = 5000 lots; safety cap
+# HiBid's current GraphQL schema (Apr 2026): `pageNumber` is a sibling
+# argument to `input` (not inside it), and page size is fixed at 100 lots.
+# The old `pageSize` / `pageIndex` input fields were removed, which is what
+# caused the HTTP 400 "Unknown field" errors.
+LOT_PAGE_SIZE = 100             # fixed by the server
+# HiBid caps pagination at page 100 (i.e. 10,000 lots max, confirmed via probe
+# against auction 734754 which has 10,817 lots). Going beyond page 100 returns
+# an empty batch. MAX_LOT_PAGES stays slightly above 100 in case the server
+# cap shifts.
+MAX_LOT_PAGES = 120
 
 
 class Phase1Scraper:
@@ -137,10 +143,22 @@ class Phase1Scraper:
             json=payload,
             timeout=self.timeout,
         )
-        response.raise_for_status()
+        # Capture the body on error — a bare raise_for_status() swallows the
+        # response text, and HiBid's 400s explain exactly what they dislike
+        # (e.g. "pageSize exceeds maximum") in the body.
+        if response.status_code >= 400:
+            body_snippet = ""
+            try:
+                body_snippet = response.text[:500]
+            except Exception:
+                pass
+            raise RuntimeError(
+                f"HiBid GraphQL {operation} returned HTTP {response.status_code}: "
+                f"{body_snippet or '(empty body)'} | variables={variables}"
+            )
         data = response.json()
         if "errors" in data:
-            raise RuntimeError(f"GraphQL errors: {data['errors']}")
+            raise RuntimeError(f"GraphQL errors ({operation}): {data['errors']}")
         return data["data"]
 
     async def fetch_auctions(self, client: httpx.AsyncClient, zip_code: str, radius: int) -> List[Dict]:
@@ -201,83 +219,105 @@ class Phase1Scraper:
         return filtered
 
     async def _fetch_all_lot_pages(self, client: httpx.AsyncClient, auction_id: int) -> List[Dict]:
-        """Fetch every lot in an auction, matching HiBid's "single page" UI toggle.
+        """Fetch every lot in an auction.
 
-        Fast path: one GraphQL call with a huge pageSize — identical to what
-        the website does when you flip the "single page" toggle. Nearly every
-        auction comes back in this single round-trip.
-
-        Slow path: if the server clamps results (len(lots) < totalCount), we
-        fall back to paginating with pageSize=100 so nothing gets dropped.
+        HiBid's current schema pages at a fixed size of 100 lots with
+        `pageNumber` (1-based) as a sibling arg to `input`. We call page 1
+        to get totalCount, then paginate through the remaining pages.
         """
-        # --- Fast path: request everything at once ---
-        variables = {
-            "auctionId": auction_id,
-            "pageIndex": 0,
-            "pageSize": LOT_PAGE_SIZE_SINGLE,
-        }
-        data = await self._graphql(client, "LotSearch", LOT_SEARCH_QUERY, variables)
-        paged = data.get("lotSearch", {}).get("pagedResults", {}) or {}
-        lots = paged.get("results", []) or []
-        total_count = paged.get("totalCount") or 0
+        lots: List[Dict] = []
+        total_count = 0
 
-        # If the server honored the big pageSize (or the auction is small), done.
+        # First request: page 1 gives us both results and totalCount
+        variables = {"auctionId": auction_id, "pageNumber": 1}
+        data = await self._graphql(client, "LotSearch", LOT_SEARCH_QUERY, variables)
+        paged = (data.get("lotSearch") or {}).get("pagedResults") or {}
+        batch = paged.get("results") or []
+        total_count = paged.get("totalCount") or 0
+        lots.extend(batch)
+
         if total_count == 0 or len(lots) >= total_count:
             return lots
 
-        # --- Slow path: server clamped — page through at a safe size ---
-        lots = []
-        for page_index in range(MAX_LOT_PAGES):
-            variables = {
-                "auctionId": auction_id,
-                "pageIndex": page_index,
-                "pageSize": LOT_PAGE_SIZE_FALLBACK,
-            }
+        # Remaining pages. ceil(total/100) = total pages; we've fetched page 1.
+        import math
+        last_page = min(math.ceil(total_count / LOT_PAGE_SIZE), MAX_LOT_PAGES)
+        for page_number in range(2, last_page + 1):
+            variables = {"auctionId": auction_id, "pageNumber": page_number}
             data = await self._graphql(client, "LotSearch", LOT_SEARCH_QUERY, variables)
-            paged = data.get("lotSearch", {}).get("pagedResults", {}) or {}
-            batch = paged.get("results", []) or []
-            lots.extend(batch)
-
+            paged = (data.get("lotSearch") or {}).get("pagedResults") or {}
+            batch = paged.get("results") or []
             if not batch:
-                break
-            if total_count and len(lots) >= total_count:
+                break  # empty page = we're past the end
+            lots.extend(batch)
+            if len(lots) >= total_count:
                 break
 
         return lots
 
+    @staticmethod
+    def _extract_category_name(raw) -> str:
+        """HiBid returns `category` sometimes as a list of {categoryName}
+        dicts, sometimes as a single dict, sometimes as None. Handle all."""
+        if not raw:
+            return ''
+        if isinstance(raw, list):
+            if not raw:
+                return ''
+            first = raw[0]
+            return first.get('categoryName', '') if isinstance(first, dict) else ''
+        if isinstance(raw, dict):
+            return raw.get('categoryName', '')
+        return ''
+
     async def fetch_lots_for_auction(self, client: httpx.AsyncClient, auction_id: int,
                                      auction_name: str = "", date_end: str = "",
-                                     source: str = "Local Pickup") -> List[Dict]:
+                                     source: str = "Local Pickup"):
+        """Fetch + process one auction's lots.
+
+        Returns a dict: {
+            "lots": [processed_lot, ...],
+            "raw_count": int,                # lots returned by HiBid (pre-filter)
+            "filtered_by_category": int,     # lots dropped by sidebar category filter
+            "error": Optional[str],          # exception message if something blew up
+            "auction_id": int,
+            "auction_name": str,
+        }
+        """
+        result = {
+            "lots": [],
+            "raw_count": 0,
+            "filtered_by_category": 0,
+            "error": None,
+            "auction_id": auction_id,
+            "auction_name": auction_name,
+        }
         try:
             lots = await self._fetch_all_lot_pages(client, auction_id)
+            result["raw_count"] = len(lots)
 
             try:
                 closing_fmt = datetime.fromisoformat(date_end).strftime("%b %d") if date_end else ""
             except (ValueError, TypeError):
                 closing_fmt = date_end
 
-            # Normalize category filter once per batch
             cat_keywords = [c.strip().lower() for c in (self.category_filter or []) if c and c.strip()]
 
             processed_lots = []
             for lot in lots:
-                title = lot.get('lead', '')
-                categories = lot.get('category', [])
-                category = categories[0]['categoryName'] if categories else ''
-                description = lot.get('description', '')
+                title = lot.get('lead', '') or ''
+                category = self._extract_category_name(lot.get('category'))
+                description = lot.get('description', '') or ''
 
-                # Apply category filter (substring, case-insensitive, against
-                # category name OR title — auctioneer tagging is inconsistent
-                # so falling back to title catches e.g. a "fishing rod" lot
-                # mis-tagged as "Sporting Goods"-only)
                 if cat_keywords:
                     haystack = f"{category} {title}".lower()
                     if not any(kw in haystack for kw in cat_keywords):
+                        result["filtered_by_category"] += 1
                         continue
 
-                state = lot.get('lotState', {})
+                state = lot.get('lotState') or {}
                 logistics = self.classify_logistics(title, category, description)
-                current_bid = state.get('highBid', 0.0)
+                current_bid = state.get('highBid', 0.0) or 0.0
                 total_cost = self.estimate_total_cost(current_bid)
 
                 lot_id = lot.get('id')
@@ -291,30 +331,39 @@ class Phase1Scraper:
                     "lot_link": f"https://hibid.com/lot/{lot_id}",
                     "category": category,
                     "current_bid": current_bid,
-                    "bid_count": state.get('bidCount', 0),
+                    "bid_count": state.get('bidCount', 0) or 0,
                     "est_cost": round(total_cost, 2),
-                    "status": state.get('status', ''),
-                    "time_left": state.get('timeLeft', ''),
-                    "description": lot.get('description', ''),
+                    "status": state.get('status', '') or '',
+                    "time_left": state.get('timeLeft', '') or '',
+                    "description": description,
                     "logistics_ease": logistics,
                 })
-            return processed_lots
+            result["lots"] = processed_lots
         except Exception as e:
-            print(f"Warning: failed to fetch lots for auction {auction_id}: {e}")
-            return []
+            result["error"] = f"{type(e).__name__}: {e}"
+        return result
 
     async def _fetch_lots_batch(self, client: httpx.AsyncClient, auctions: List[Dict],
                                 source: str, batch_size: int = 20,
                                 progress_callback=None, progress_offset: int = 0,
-                                grand_total: int = None, phase_label: str = "") -> List[Dict]:
+                                grand_total: int = None, phase_label: str = ""):
         """Fetch lots for a list of auctions in concurrent batches.
 
-        `grand_total` is the total auction count across ALL phases; when
-        provided, progress is reported against it so the bar doesn't reset
-        when switching from local -> nationwide. `phase_label` is included
-        in the progress text so the user knows which phase is running.
+        Returns a dict: {
+            "lots": [...],
+            "raw_count": int,
+            "filtered_by_category": int,
+            "errors": [{"auction_id", "auction_name", "error"}, ...],
+            "per_auction": [{"auction_id", "auction_name", "raw_count", "kept": int}, ...]
+        }
         """
-        all_lots = []
+        agg = {
+            "lots": [],
+            "raw_count": 0,
+            "filtered_by_category": 0,
+            "errors": [],
+            "per_auction": [],
+        }
         total = len(auctions)
         effective_total = grand_total if grand_total is not None else total
 
@@ -327,14 +376,28 @@ class Phase1Scraper:
                 for a in batch
             ]
             results = await asyncio.gather(*tasks)
-            for sublist in results:
-                all_lots.extend(sublist)
+            for r in results:
+                agg["lots"].extend(r["lots"])
+                agg["raw_count"] += r["raw_count"]
+                agg["filtered_by_category"] += r["filtered_by_category"]
+                if r["error"]:
+                    agg["errors"].append({
+                        "auction_id": r["auction_id"],
+                        "auction_name": r["auction_name"],
+                        "error": r["error"],
+                    })
+                agg["per_auction"].append({
+                    "auction_id": r["auction_id"],
+                    "auction_name": r["auction_name"],
+                    "raw_count": r["raw_count"],
+                    "kept": len(r["lots"]),
+                })
 
             if progress_callback:
                 current = progress_offset + min(i + batch_size, total)
                 progress_callback(current, effective_total, phase_label)
 
-        return all_lots
+        return agg
 
     async def fetch_auction_candidates(self, progress_callback=None) -> List[Dict]:
         """Return the combined local + nationwide auction list WITHOUT fetching lots.
@@ -436,49 +499,89 @@ class Phase1Scraper:
     ) -> pd.DataFrame:
         """Fetch full lot detail for a caller-supplied list of auctions.
 
-        Each auction dict must have `auction_id`, `name`, and `source`
-        ('Local Pickup' or 'Ship'). Typically comes from
-        `fetch_auction_candidates()` filtered down by the user's picks.
-
-        Applies the same HARD-logistics / CLOSED-status / closing-date
-        filtering as `run()` for consistency.
+        Returns a DataFrame. Diagnostic counts (raw_count, filtered_by_*,
+        per_auction breakdown, errors) are attached to `df.attrs` so the UI
+        can show the user exactly where their items went.
         """
+        empty_attrs = {
+            "raw_count": 0,
+            "filtered_by_category": 0,
+            "filtered_by_status": 0,
+            "per_auction": [],
+            "errors": [],
+            "status_values_seen": {},
+        }
         if not selected_auctions:
-            return pd.DataFrame()
+            df = pd.DataFrame()
+            df.attrs.update(empty_attrs)
+            return df
 
         local_auctions = [a for a in selected_auctions if a.get('source') != 'Ship']
         remote_auctions = [a for a in selected_auctions if a.get('source') == 'Ship']
         grand_total = len(local_auctions) + len(remote_auctions)
 
+        agg_lots: List[Dict] = []
+        raw_count = 0
+        filtered_by_category = 0
+        per_auction: List[Dict] = []
+        errors: List[Dict] = []
+
         async with httpx.AsyncClient() as client:
-            all_lots: List[Dict] = []
             if local_auctions:
                 local_label = (
                     f"Local pickup ({len(local_auctions)})"
                     if not remote_auctions
                     else f"Local pickup ({len(local_auctions)} of {grand_total})"
                 )
-                all_lots = await self._fetch_lots_batch(
+                r = await self._fetch_lots_batch(
                     client, local_auctions, "Local Pickup",
                     progress_callback=progress_callback, progress_offset=0,
                     grand_total=grand_total, phase_label=local_label,
                 )
+                agg_lots.extend(r["lots"])
+                raw_count += r["raw_count"]
+                filtered_by_category += r["filtered_by_category"]
+                per_auction.extend(r["per_auction"])
+                errors.extend(r["errors"])
+
             if remote_auctions:
                 nationwide_label = f"Nationwide ({len(remote_auctions)} of {grand_total})"
-                nationwide_lots = await self._fetch_lots_batch(
+                r = await self._fetch_lots_batch(
                     client, remote_auctions, "Ship",
                     progress_callback=progress_callback,
                     progress_offset=len(local_auctions),
                     grand_total=grand_total, phase_label=nationwide_label,
                 )
-                all_lots.extend(nationwide_lots)
+                agg_lots.extend(r["lots"])
+                raw_count += r["raw_count"]
+                filtered_by_category += r["filtered_by_category"]
+                per_auction.extend(r["per_auction"])
+                errors.extend(r["errors"])
 
-        df = pd.DataFrame(all_lots)
+        df = pd.DataFrame(agg_lots)
+
+        # Track raw distribution of status values for diagnostics (so we can
+        # SEE whether everything's actually 'CLOSED' or something weird)
+        status_values_seen = {}
+        if not df.empty and 'status' in df.columns:
+            status_values_seen = df['status'].fillna('').astype(str).value_counts().to_dict()
+
+        filtered_by_status = 0
         if not df.empty:
-            df = df[df['logistics_ease'] != "HARD"]
+            pre_count = len(df)
             df = df[df['status'] != "CLOSED"]
             df = df[df['time_left'] != "Bidding Closed"]
+            filtered_by_status = pre_count - len(df)
             df = df.sort_values('closing_date').reset_index(drop=True)
+
+        df.attrs.update({
+            "raw_count": raw_count,
+            "filtered_by_category": filtered_by_category,
+            "filtered_by_status": filtered_by_status,
+            "per_auction": per_auction,
+            "errors": errors,
+            "status_values_seen": status_values_seen,
+        })
         return df
 
     async def run(self, progress_callback=None) -> pd.DataFrame:

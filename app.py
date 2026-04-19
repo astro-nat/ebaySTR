@@ -323,6 +323,36 @@ for _key, _tb_key, _label in (
         else:
             st.success(msg)
 
+    # Render full fetch diagnostics so the user can see exactly what HiBid
+    # returned even after the rerun wipes the in-status widgets.
+    _diag = _status.get('diag') if isinstance(_status, dict) else None
+    if _diag:
+        with st.expander(
+            f"🔬 {_label} diagnostics "
+            f"(raw: {_diag.get('raw_count', 0)} · "
+            f"kept: {_diag.get('kept', 0)} · "
+            f"closed: {_diag.get('filtered_status', 0)} · "
+            f"category: {_diag.get('filtered_cat', 0)})",
+            expanded=(_diag.get('kept', 0) == 0),
+        ):
+            st.write(
+                f"- **Raw lots from HiBid:** {_diag.get('raw_count', 0)}\n"
+                f"- **Kept after filtering:** {_diag.get('kept', 0)}\n"
+                f"- **Dropped as CLOSED / Bidding Closed:** {_diag.get('filtered_status', 0)}\n"
+                f"- **Dropped by sidebar category filter:** {_diag.get('filtered_cat', 0)}"
+            )
+            _sv = _diag.get('status_values') or {}
+            if _sv:
+                st.write(f"**lotState.status values seen:** `{_sv}`")
+            _pa = _diag.get('per_auction') or []
+            if _pa:
+                st.caption(f"Per-auction breakdown ({len(_pa)}):")
+                st.table(pd.DataFrame(_pa))
+            _errs = _diag.get('errors') or []
+            if _errs:
+                st.warning(f"{len(_errs)} auction(s) errored during fetch:")
+                st.table(pd.DataFrame(_errs))
+
 
 # ================================================================
 # WORK BLOCK: Discover Auctions (lives in main area so mobile users
@@ -518,23 +548,77 @@ if st.session_state.get('fetch_lots_running'):
                     set(st.session_state.known_categories) | seen
                 )
 
+            diag = dict(df.attrs)  # copy BEFORE we mutate / rerun
+            raw_count = diag.get('raw_count', 0)
+            filtered_cat = diag.get('filtered_by_category', 0)
+            filtered_status = diag.get('filtered_by_status', 0)
+            per_auction = diag.get('per_auction', []) or []
+            errors = diag.get('errors', []) or []
+            status_values = diag.get('status_values_seen', {}) or {}
+
+            # Show the diagnostic breakdown inside the status box — one place
+            # to understand exactly where the user's items went.
+            st.write(
+                f"**Raw lots from HiBid:** {raw_count} · "
+                f"**Kept:** {len(df)} · "
+                f"**Dropped by status (CLOSED / Bidding Closed):** {filtered_status} · "
+                f"**Dropped by category filter:** {filtered_cat}"
+            )
+
+            if status_values:
+                st.write(f"**lotState.status values seen:** `{status_values}`")
+
+            if per_auction:
+                with st.expander(f"Per-auction breakdown ({len(per_auction)})", expanded=(len(df) == 0)):
+                    st.table(pd.DataFrame(per_auction))
+
+            if errors:
+                st.warning(f"**{len(errors)} auction(s) errored during fetch** — see details:")
+                st.table(pd.DataFrame(errors))
+
             local_count = int((df['source'] == "Local Pickup").sum()) if not df.empty and 'source' in df.columns else 0
             ship_count = int((df['source'] == "Ship").sum()) if not df.empty and 'source' in df.columns else 0
             auction_count = df['auction'].nunique() if not df.empty else 0
+            hard_count = int((df['logistics_ease'] == "HARD").sum()) if not df.empty and 'logistics_ease' in df.columns else 0
+            easy_count = int((df['logistics_ease'] == "EASY").sum()) if not df.empty and 'logistics_ease' in df.columns else 0
 
             if df.empty:
-                fetch_result_msg = (
-                    "⚠️ Scan complete — but 0 items survived the HARD-logistics / "
-                    "CLOSED-status / category filters. Try relaxing your sidebar filters."
-                )
+                # Be honest about which of the three possible causes it was.
+                if raw_count == 0:
+                    if errors:
+                        reason = (
+                            f"HiBid returned **0 lots** for every selected auction. "
+                            f"{len(errors)} auction(s) threw errors above — that's the likely cause."
+                        )
+                    else:
+                        reason = (
+                            "HiBid returned **0 lots** for every selected auction. "
+                            "The GraphQL call succeeded but the response contained no lots. "
+                            "This can happen for auctions in a pre-opening preview state, "
+                            "or if HiBid's schema changed."
+                        )
+                elif filtered_status == raw_count:
+                    reason = (
+                        f"All {raw_count} lots were dropped as CLOSED / 'Bidding Closed'. "
+                        f"Status values seen: `{status_values}`."
+                    )
+                elif filtered_cat == raw_count:
+                    reason = f"All {raw_count} lots were excluded by the sidebar category filter."
+                else:
+                    reason = f"{raw_count} raw lots, all dropped by a mix of status + category filters."
+                fetch_result_msg = f"⚠️ Scan complete — 0 items survived. {reason}"
                 status_box.update(
-                    label="⚠️ No items matched filters",
+                    label="⚠️ No open lots matched",
                     state="error", expanded=True,
                 )
             else:
+                breakdown_bits = [f"📦 {easy_count} easy-ship"]
+                if hard_count:
+                    breakdown_bits.append(f"🏋️ {hard_count} HARD (hidden by default)")
                 fetch_result_msg = (
                     f"✅ Scanned {len(df)} items across {auction_count} auction(s)"
-                    f" ({local_count} local, {ship_count} shippable)."
+                    f" — {local_count} local, {ship_count} shippable"
+                    f" · {' · '.join(breakdown_bits)}."
                 )
                 status_box.update(
                     label=f"✅ {len(df)} items from {auction_count} auction(s)",
@@ -550,9 +634,26 @@ if st.session_state.get('fetch_lots_running'):
         finally:
             st.session_state.fetch_lots_running = False
 
+    # Persist full diagnostics so the next rerun can re-render them —
+    # otherwise everything written inside the status box above is wiped.
+    try:
+        _diag_payload = {
+            "raw_count": int(raw_count),
+            "kept": int(len(df)),
+            "filtered_status": int(filtered_status),
+            "filtered_cat": int(filtered_cat),
+            "per_auction": per_auction,
+            "errors": errors,
+            "status_values": status_values,
+        }
+    except NameError:
+        # We errored before computing diagnostics (exception path)
+        _diag_payload = None
+
     st.session_state._fetch_status = {
         "error": fetch_error,
         "msg": fetch_result_msg,
+        "diag": _diag_payload,
     }
     st.rerun()
 
@@ -1386,6 +1487,26 @@ elif not st.session_state.phase1_leads.empty:
             if selected_source != "All":
                 df = df[df['source'] == selected_source]
 
+        # Logistics filter — HARD items are hidden by default since they're
+        # expensive to ship to eBay buyers, but for local-pickup auctions
+        # (where you grab the item in person) they're still fair game.
+        hard_total = int((df['logistics_ease'] == "HARD").sum()) if 'logistics_ease' in df.columns else 0
+        show_hard = st.checkbox(
+            f"🏋️ Include HARD-to-ship items ({hard_total} hidden)" if hard_total else "🏋️ Include HARD-to-ship items",
+            value=False,
+            key="discovery_show_hard",
+            help=(
+                "Items matching the 'ship_killers' regex (furniture, heavy, "
+                "large, mowers, pickup-only, etc.) are hidden by default "
+                "because they're costly to re-ship to an eBay buyer. Turn on "
+                "for local-pickup auctions where you plan to move the item "
+                "yourself, or to see ALL lots regardless of shipability."
+            ),
+            disabled=(hard_total == 0),
+        )
+        if not show_hard and 'logistics_ease' in df.columns:
+            df = df[df['logistics_ease'] != "HARD"]
+
     # --- Apply search + category filters ---
     if search_query:
         q = search_query.lower()
@@ -1406,9 +1527,12 @@ elif not st.session_state.phase1_leads.empty:
         df = df[df['category'].isin(selected_categories)]
 
     if df.empty:
+        hints = ["broaden the search", "clear the category filter"]
+        if hard_total and not show_hard:
+            hints.append(f"tick **🏋️ Include HARD-to-ship items** ({hard_total} available)")
         st.warning(
-            f"No matches for your filters. (Started with {total_auctions} auctions, {total_items} items.) "
-            "Try broadening the search or clearing the category filter."
+            f"No matches for your filters. (Started with {total_auctions} auctions, "
+            f"{total_items} items.) Try: {', '.join(hints)}."
         )
         st.stop()
 
