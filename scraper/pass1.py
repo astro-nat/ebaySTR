@@ -101,17 +101,41 @@ class Phase1Scraper:
         from .config_loader import load_config
         return load_config(filepath)
 
-    # Patterns that indicate an item is pickup-only (checked against description too)
+    # Patterns that indicate an item is pickup-only (checked against description too).
+    # Expanded to cover common HiBid phrasings — easier to over-match here
+    # (HARD just skips AI + comps, which is recoverable) than to miss real
+    # pickup-only items.
     _PICKUP_ONLY_RE = re.compile(
+        # explicit pickup-only phrasings
         r'local\s+pick\s*-?\s*up\s+only'
         r'|pick\s*-?\s*up\s+only'
+        r'|local\s+pickup\s+only'
+        r'|pickup\s+only'
+        r'|in[- ]?(store|person)\s+pick\s*-?\s*up\s+only'
+        r'|in[- ]?(store|person)\s+only'
+        r'|on[- ]?site\s+pick\s*-?\s*up'
+        r'|must\s+pick\s*-?\s*up'
+        r'|must\s+be\s+picked\s+up'
+        r'|buyer\s+(must\s+)?(pick\s*-?\s*up|arrange\s+pickup|arrange\s+shipp?ing|arrange\s+transport)'
+        r'|pick\s*-?\s*up\s+(required|mandatory)'
+        # explicit no-ship phrasings
         r'|no\s+shipp?ing'
         r'|will\s+not\s+ship'
+        r'|do(es)?\s+not\s+ship'
         r'|cannot\s+be\s+shipped'
         r'|can\s*n?o?t\s+ship'
-        r'|must\s+pick\s*-?\s*up'
-        r'|in[- ]?store\s+pick\s*-?\s*up\s+only'
-        r'|not\s+available\s+for\s+shipp?ing',
+        r'|not\s+available\s+for\s+shipp?ing'
+        r'|shipping\s+(is\s+)?not\s+available'
+        r'|shipping\s*:\s*(not\s+available|none|no\b|unavailable)'
+        r'|unable\s+to\s+ship'
+        r'|no\s+ship\b'
+        # local-only / regional phrasings
+        r'|local\s+(delivery|sale|buyers?)\s+only'
+        r'|ships?\s+locally\s+only'
+        r'|ships?\s+only\s+(locally|to\s+local)'
+        # specific HiBid boilerplate
+        r'|this\s+lot\s+(is|will\s+be)\s+(a\s+)?pick\s*-?\s*up'
+        r'|available\s+for\s+pickup\s+only',
         re.IGNORECASE,
     )
 
@@ -458,42 +482,66 @@ class Phase1Scraper:
 
     async def sample_lot_categories(
         self, client: httpx.AsyncClient, auction_id: int, sample_size: int = 20
-    ) -> List[str]:
-        """Fetch a small lot sample and return the unique category names.
+    ) -> Dict[str, list]:
+        """Fetch a small lot sample and return a preview payload.
 
         Used by the two-step picker so the user can see what KINDS of stuff
         are in an auction without paying to fetch every lot. Cheap — one
-        GraphQL call per auction at pageSize=20.
+        GraphQL call per auction (the server returns a 100-lot page; we
+        slice `sample_size` off the front).
+
+        Returns a dict:
+            {
+                "categories": [category_name, ...] — unique, sorted
+                "cat_counts": {category_name: int} — counts within sample
+                "titles":     [lot lead, ...] up to sample_size
+            }
+
+        Kept backward-compat: callers that previously received a plain
+        list of categories can treat the dict as an iterable of "categories".
         """
-        variables = {
-            "auctionId": auction_id,
-            "pageIndex": 0,
-            "pageSize": sample_size,
-        }
+        # Note: the GraphQL LotSearch query takes `pageNumber` as a sibling
+        # of `input` (per the schema note at the top of this file). The old
+        # `pageIndex`/`pageSize` form was removed by HiBid; using it here
+        # silently failed and made the preview column blank.
+        variables = {"auctionId": auction_id, "pageNumber": 1}
+        empty = {"categories": [], "cat_counts": {}, "titles": []}
         try:
             data = await self._graphql(client, "LotSearch", LOT_SEARCH_QUERY, variables)
         except Exception:
-            return []
+            return empty
         paged = data.get("lotSearch", {}).get("pagedResults", {}) or {}
         lots = paged.get("results", []) or []
-        cats = set()
+        # Only inspect the first sample_size lots to keep the cost bounded.
+        lots = lots[:sample_size]
+
+        cat_counts: Dict[str, int] = {}
+        titles: List[str] = []
         for lot in lots:
-            categories = lot.get('category', [])
-            if categories:
-                name = categories[0].get('categoryName', '').strip()
-                if name:
-                    cats.add(name)
-        return sorted(cats)
+            name = self._extract_category_name(lot.get('category'))
+            if name:
+                cat_counts[name] = cat_counts.get(name, 0) + 1
+            lead = (lot.get('lead') or '').strip()
+            if lead:
+                titles.append(lead)
+
+        return {
+            "categories": sorted(cat_counts.keys()),
+            "cat_counts": cat_counts,
+            "titles": titles,
+        }
 
     async def sample_categories_batch(
         self, auctions: List[Dict], sample_size: int = 20,
         batch_size: int = 15, progress_callback=None,
-    ) -> Dict[int, List[str]]:
-        """Sample categories for a batch of auctions concurrently.
+    ) -> Dict[int, Dict[str, list]]:
+        """Sample categories + titles for a batch of auctions concurrently.
 
-        Returns {auction_id: [category_name, ...]}. Useful for the picker UI.
+        Returns {auction_id: {"categories": [...], "cat_counts": {...},
+        "titles": [...]}}. Useful for the picker UI to show "what's in
+        this auction" without fetching every lot.
         """
-        out: Dict[int, List[str]] = {}
+        out: Dict[int, Dict[str, list]] = {}
         total = len(auctions)
         async with httpx.AsyncClient() as client:
             for i in range(0, total, batch_size):
@@ -504,13 +552,90 @@ class Phase1Scraper:
                 ]
                 results = await asyncio.gather(*tasks, return_exceptions=True)
                 for a, r in zip(chunk, results):
-                    out[a['auction_id']] = r if isinstance(r, list) else []
+                    if isinstance(r, dict):
+                        out[a['auction_id']] = r
+                    elif isinstance(r, list):
+                        # Backward compat if an override returns the old shape
+                        out[a['auction_id']] = {
+                            "categories": r, "cat_counts": {}, "titles": [],
+                        }
+                    else:
+                        out[a['auction_id']] = {
+                            "categories": [], "cat_counts": {}, "titles": [],
+                        }
                 if progress_callback:
                     progress_callback(
                         min(i + batch_size, total), total,
                         f"Sampling categories ({min(i + batch_size, total)}/{total})",
                     )
         return out
+
+    @staticmethod
+    def generate_auction_summary(
+        auction: Dict, sample_payload: Dict = None
+    ) -> str:
+        """Build a short human-readable "what's in this auction" blurb.
+
+        Combines auction metadata (name, auctioneer, location, total lots)
+        with the sampled category distribution and a couple of representative
+        lot titles. Purely rule-based — no LLM — so it runs instantly on
+        every render.
+
+        Example output:
+            "450 lots · Mostly Furniture (40%), Tools (25%), Kitchen (15%) ·
+             Examples: Craftsman drill press, KitchenAid mixer, Oak dining table"
+        """
+        sample_payload = sample_payload or {}
+        cat_counts: Dict[str, int] = sample_payload.get("cat_counts") or {}
+        titles: List[str] = sample_payload.get("titles") or []
+        total_sample = sum(cat_counts.values()) or len(titles) or 0
+        lot_count = auction.get('lot_count') or 0
+
+        parts: List[str] = []
+        if lot_count:
+            parts.append(f"{lot_count:,} lots")
+
+        # Top categories by share in the sample
+        if cat_counts and total_sample:
+            top = sorted(cat_counts.items(), key=lambda kv: -kv[1])[:3]
+            pieces = [
+                f"{name} ({int(round(100 * n / total_sample))}%)"
+                for name, n in top
+            ]
+            lead_word = "Mostly" if top[0][1] / total_sample >= 0.5 else "Mix of"
+            parts.append(f"{lead_word} {', '.join(pieces)}")
+        elif sample_payload.get("categories"):
+            parts.append("Categories: " + ", ".join(sample_payload["categories"][:5]))
+
+        # A few representative lot titles (trimmed, deduped on lowercased prefix)
+        if titles:
+            picks: List[str] = []
+            seen = set()
+            for t in titles:
+                # Trim HiBid retail/condition boilerplate to keep it readable
+                trimmed = re.sub(r'\$\d+(?:\.\d{1,2})?\s*', '', t)
+                trimmed = re.sub(
+                    r'\b(retail(\s+value)?|msrp|condition|very good|good|damaged|'
+                    r'no in packaging|package|new|used)\b',
+                    '', trimmed, flags=re.IGNORECASE,
+                )
+                trimmed = re.sub(r'\s+', ' ', trimmed).strip(' .,-')
+                if not trimmed or len(trimmed) < 3:
+                    continue
+                key = trimmed.lower()[:40]
+                if key in seen:
+                    continue
+                seen.add(key)
+                # Cap each example at 40 chars so the summary stays scannable
+                picks.append(trimmed[:40] + ("…" if len(trimmed) > 40 else ""))
+                if len(picks) >= 3:
+                    break
+            if picks:
+                parts.append("Examples: " + "; ".join(picks))
+
+        if not parts:
+            return ""
+        return " · ".join(parts)
 
     async def fetch_lots_for_selected(
         self, selected_auctions: List[Dict], progress_callback=None,
