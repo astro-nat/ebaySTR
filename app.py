@@ -24,6 +24,10 @@ _AUCTION_CACHE = AuctionCache()
 # times move fast enough that day-stale data is the outer edge of useful).
 _DISCOVERY_CACHE_PATH = Path(".cache") / "last_discovery.pkl"
 _DISCOVERY_CACHE_TTL = timedelta(hours=24)
+# Bump this when the cached payload shape changes — old caches are silently
+# discarded so users don't have to delete the file by hand. Current schema
+# adds `thumbnail_url` to each category_samples entry.
+_DISCOVERY_CACHE_VERSION = 2
 
 
 def _save_cached_discovery(candidates, sourcing_cfg, category_samples=None):
@@ -31,11 +35,12 @@ def _save_cached_discovery(candidates, sourcing_cfg, category_samples=None):
     try:
         _DISCOVERY_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
         payload = {
+            "schema_version": _DISCOVERY_CACHE_VERSION,
             "saved_at": datetime.now().isoformat(),
             "sourcing_cfg": dict(sourcing_cfg or {}),
             "candidates": list(candidates or []),
-            # Sampled lot previews (categories + sample titles) so the
-            # "What's in this auction" column rehydrates on reload.
+            # Sampled lot previews (categories + titles + thumbnail_url) so
+            # the picker rehydrates on reload.
             "category_samples": dict(category_samples or {}),
         }
         with open(_DISCOVERY_CACHE_PATH, "wb") as fh:
@@ -46,12 +51,19 @@ def _save_cached_discovery(candidates, sourcing_cfg, category_samples=None):
 
 
 def _load_cached_discovery():
-    """Return a dict with candidates/sourcing_cfg/age if fresh, else None."""
+    """Return a dict with candidates/sourcing_cfg/age if fresh, else None.
+
+    Caches written by an older schema (no schema_version, or a smaller
+    number than the current one) are silently discarded — re-running
+    Discover repopulates the file with the new shape.
+    """
     try:
         if not _DISCOVERY_CACHE_PATH.exists():
             return None
         with open(_DISCOVERY_CACHE_PATH, "rb") as fh:
             payload = pickle.load(fh)
+        if payload.get("schema_version", 1) < _DISCOVERY_CACHE_VERSION:
+            return None
         saved_at = datetime.fromisoformat(payload.get("saved_at", ""))
         age = datetime.now() - saved_at
         if age > _DISCOVERY_CACHE_TTL:
