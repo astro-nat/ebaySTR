@@ -2216,41 +2216,45 @@ elif st.session_state.get('auction_candidates') and st.session_state.phase1_lead
         for _, row in shown.iterrows():
             aid = row['auction_id']
             is_picked = aid in picked
-            # Layout: [pick checkbox | thumbnail image | info text]
-            # Ratios chosen so the image is roughly square at typical
-            # widths and the info still has plenty of room to wrap.
-            ck_col, img_col, info_col = st.columns([0.10, 0.22, 0.68])
-            with ck_col:
-                new_state = st.checkbox(
-                    "pick",
-                    value=is_picked,
-                    key=f"pick_compact_{aid}",
-                    label_visibility="collapsed",
-                    disabled=fetch_lots_running,
-                )
+            # Layout: two columns — small image on the left (fixed ~110px),
+            # everything else (checkbox + name + meta + summary) on the
+            # right. We don't use st.image's container-width because at
+            # narrow viewports the existing mobile CSS wraps columns and
+            # blows up any container-bound element. Fixed pixel dimensions
+            # keep the image bounded no matter how the columns reflow.
+            img_col, info_col = st.columns([0.18, 0.82])
             with img_col:
                 thumb = row.get('thumbnail_url') or ''
                 if thumb:
-                    st.image(thumb, use_container_width=True)
+                    st.image(thumb, width=110)
                 else:
-                    # Render a subtle placeholder so the column doesn't
-                    # collapse and the layout stays consistent.
                     st.markdown(
-                        "<div style='aspect-ratio:1/1;background:#1e1e1e;"
-                        "border-radius:6px;display:flex;align-items:center;"
-                        "justify-content:center;color:#666;font-size:11px;'>"
+                        "<div style='width:110px;height:110px;"
+                        "background:#1e1e1e;border-radius:6px;"
+                        "display:flex;align-items:center;justify-content:"
+                        "center;color:#666;font-size:11px;'>"
                         "no image</div>",
                         unsafe_allow_html=True,
                     )
             with info_col:
-                items_str = f"**{int(row['items']):,}** items"
-                closes_str = row['closes'] or '(close time TBD)'
-                summary_text = row['summary'] or '—'
-                st.markdown(
-                    f"**{row['name']}**  \n"
-                    f"{items_str} · {closes_str}  \n"
-                    f"{summary_text}"
-                )
+                ck_col, txt_col = st.columns([0.08, 0.92])
+                with ck_col:
+                    new_state = st.checkbox(
+                        "pick",
+                        value=is_picked,
+                        key=f"pick_compact_{aid}",
+                        label_visibility="collapsed",
+                        disabled=fetch_lots_running,
+                    )
+                with txt_col:
+                    items_str = f"**{int(row['items']):,}** items"
+                    closes_str = row['closes'] or '(close time TBD)'
+                    summary_text = row['summary'] or '—'
+                    st.markdown(
+                        f"**{row['name']}**  \n"
+                        f"{items_str} · {closes_str}  \n"
+                        f"{summary_text}"
+                    )
             if new_state and not is_picked:
                 picked.add(aid)
             elif not new_state and is_picked:
