@@ -495,6 +495,7 @@ class Phase1Scraper:
                 "categories": [category_name, ...] — unique, sorted
                 "cat_counts": {category_name: int} — counts within sample
                 "titles":     [lot lead, ...] up to sample_size
+                "thumbnail_url": str — first lot's thumbnail (auction "cover")
             }
 
         Kept backward-compat: callers that previously received a plain
@@ -505,7 +506,7 @@ class Phase1Scraper:
         # `pageIndex`/`pageSize` form was removed by HiBid; using it here
         # silently failed and made the preview column blank.
         variables = {"auctionId": auction_id, "pageNumber": 1}
-        empty = {"categories": [], "cat_counts": {}, "titles": []}
+        empty = {"categories": [], "cat_counts": {}, "titles": [], "thumbnail_url": ""}
         try:
             data = await self._graphql(client, "LotSearch", LOT_SEARCH_QUERY, variables)
         except Exception:
@@ -517,6 +518,7 @@ class Phase1Scraper:
 
         cat_counts: Dict[str, int] = {}
         titles: List[str] = []
+        thumbnail_url = ""
         for lot in lots:
             name = self._extract_category_name(lot.get('category'))
             if name:
@@ -524,11 +526,24 @@ class Phase1Scraper:
             lead = (lot.get('lead') or '').strip()
             if lead:
                 titles.append(lead)
+            # Use the first lot with a picture as the auction's "cover"
+            # image. HiBid's lot 1 is usually a representative or featured
+            # piece, so this doubles as a decent visual identifier.
+            if not thumbnail_url:
+                pictures = lot.get('pictures') or []
+                if pictures:
+                    first = pictures[0] or {}
+                    thumbnail_url = (
+                        first.get('hdThumbnailLocation')
+                        or first.get('thumbnailLocation')
+                        or ''
+                    )
 
         return {
             "categories": sorted(cat_counts.keys()),
             "cat_counts": cat_counts,
             "titles": titles,
+            "thumbnail_url": thumbnail_url,
         }
 
     async def sample_categories_batch(
@@ -558,10 +573,12 @@ class Phase1Scraper:
                         # Backward compat if an override returns the old shape
                         out[a['auction_id']] = {
                             "categories": r, "cat_counts": {}, "titles": [],
+                            "thumbnail_url": "",
                         }
                     else:
                         out[a['auction_id']] = {
                             "categories": [], "cat_counts": {}, "titles": [],
+                            "thumbnail_url": "",
                         }
                 if progress_callback:
                     progress_callback(

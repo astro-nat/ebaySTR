@@ -2045,6 +2045,7 @@ elif st.session_state.get('auction_candidates') and st.session_state.phase1_lead
         if isinstance(raw_sample, list):
             sample_payload = {
                 "categories": raw_sample, "cat_counts": {}, "titles": [],
+                "thumbnail_url": "",
             }
         elif isinstance(raw_sample, dict):
             sample_payload = raw_sample
@@ -2053,6 +2054,7 @@ elif st.session_state.get('auction_candidates') and st.session_state.phase1_lead
 
         cats = (sample_payload or {}).get("categories") or []
         cat_preview = ", ".join(cats[:6]) + (f" (+{len(cats) - 6})" if len(cats) > 6 else "")
+        thumbnail_url = (sample_payload or {}).get("thumbnail_url") or ""
 
         # Auto-generated blurb: "450 lots · Mostly Tools (40%), Kitchen (25%) ·
         # Examples: Craftsman drill press, KitchenAid mixer, Oak dining table"
@@ -2107,6 +2109,7 @@ elif st.session_state.get('auction_candidates') and st.session_state.phase1_lead
             "closes_dt": closes_dt,
             "categories_sampled": cat_preview or ("—" if aid in cat_samples else "(not sampled)"),
             "summary": summary,
+            "thumbnail_url": thumbnail_url,
             "auction_link": f"https://hibid.com/auction/{aid}",
         })
     picker_df = pd.DataFrame(rows)
@@ -2201,7 +2204,10 @@ elif st.session_state.get('auction_candidates') and st.session_state.phase1_lead
         for _, row in shown.iterrows():
             aid = row['auction_id']
             is_picked = aid in picked
-            ck_col, info_col = st.columns([0.12, 0.88])
+            # Layout: [pick checkbox | thumbnail image | info text]
+            # Ratios chosen so the image is roughly square at typical
+            # widths and the info still has plenty of room to wrap.
+            ck_col, img_col, info_col = st.columns([0.10, 0.22, 0.68])
             with ck_col:
                 new_state = st.checkbox(
                     "pick",
@@ -2210,6 +2216,20 @@ elif st.session_state.get('auction_candidates') and st.session_state.phase1_lead
                     label_visibility="collapsed",
                     disabled=fetch_lots_running,
                 )
+            with img_col:
+                thumb = row.get('thumbnail_url') or ''
+                if thumb:
+                    st.image(thumb, use_container_width=True)
+                else:
+                    # Render a subtle placeholder so the column doesn't
+                    # collapse and the layout stays consistent.
+                    st.markdown(
+                        "<div style='aspect-ratio:1/1;background:#1e1e1e;"
+                        "border-radius:6px;display:flex;align-items:center;"
+                        "justify-content:center;color:#666;font-size:11px;'>"
+                        "no image</div>",
+                        unsafe_allow_html=True,
+                    )
             with info_col:
                 items_str = f"**{int(row['items']):,}** items"
                 closes_str = row['closes'] or '(close time TBD)'
