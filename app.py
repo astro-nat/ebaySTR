@@ -1382,7 +1382,7 @@ def _run_ebay_comps(results_df):
     """
     # Clear previous comp data so re-runs start fresh
     for col in ['est_resale', 'price_low', 'price_high', 'comp_count',
-                'ebay_comps', 'mercari_comps',
+                'ebay_comps', 'mercari_comps', 'pricecharting_comps',
                 'price_source', 'ebay_str', 'str_source',
                 'est_roi', 'max_bid']:
         if col in results_df.columns:
@@ -1395,9 +1395,15 @@ def _run_ebay_comps(results_df):
     eligible_df, skipped_df, filter_summary = _apply_comps_filters(good_df)
 
     from scraper.ebay_prices import EbayPriceLookup
+    from scraper.pricecharting import PriceChartingLookup
     from scraper.config_loader import load_config
     cfg = load_config()
-    ebay = EbayPriceLookup(cfg["ebay"]["app_id"], cfg["ebay"]["cert_id"])
+    pc_token = (cfg.get("pricecharting") or {}).get("token") or None
+    pc_client = PriceChartingLookup(pc_token)
+    ebay = EbayPriceLookup(
+        cfg["ebay"]["app_id"], cfg["ebay"]["cert_id"],
+        pricecharting=pc_client,
+    )
 
     total = len(eligible_df)
 
@@ -1641,27 +1647,38 @@ def _render_results_table(results_df):
             # Low-confidence flag: with fewer than 4 sold comps, the IQR
             # outlier filter in ebay_prices._filter_outliers can't run, so a
             # single pricey listing can drag the median resale way up.
-            # Surface this as an at-a-glance checkbox so the user can spot
-            # rows where the est_resale number is on thin ice.
+            # PriceCharting hits are pre-aggregated \u2014 never low-confidence.
             filtered_df = filtered_df.copy()
+            pc_hits = (
+                filtered_df['pricecharting_comps'].fillna(0).astype(int).gt(0)
+                if 'pricecharting_comps' in filtered_df.columns
+                else False
+            )
             filtered_df['low_comp_confidence'] = (
                 filtered_df['ebay_comps'].fillna(0).astype(int).lt(4)
                 & filtered_df['est_resale'].notna()
+                & ~pc_hits
             )
             display_cols += ['low_comp_confidence']
             col_config["low_comp_confidence"] = st.column_config.CheckboxColumn(
                 "Low Conf.",
                 help=(
-                    "Checked when fewer than 4 eBay sold comps were found. "
-                    "The outlier filter needs \u22654 data points, so with "
-                    "1\u20133 comps the est_resale can be skewed by a single "
-                    "high-priced listing. Treat these resale values as "
-                    "rough estimates."
+                    "Checked when fewer than 4 eBay sold comps were found "
+                    "(and the lot didn't get a PriceCharting hit). The "
+                    "outlier filter needs \u22654 data points, so with 1\u20133 "
+                    "comps the est_resale can be skewed by a single "
+                    "high-priced listing."
                 ),
             )
         if 'mercari_comps' in filtered_df.columns:
             display_cols += ['mercari_comps']
             col_config["mercari_comps"] = st.column_config.NumberColumn("Mercari Comps", format="%d")
+        if 'pricecharting_comps' in filtered_df.columns:
+            display_cols += ['pricecharting_comps']
+            col_config["pricecharting_comps"] = st.column_config.NumberColumn(
+                "PC Hit", format="%d",
+                help="1 = PriceCharting matched this lot to a canonical product.",
+            )
         if 'price_source' in filtered_df.columns:
             display_cols += ['price_source']
             col_config["price_source"] = st.column_config.TextColumn("Price Src")

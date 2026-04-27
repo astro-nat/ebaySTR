@@ -12,9 +12,20 @@ from typing import Optional
 
 
 class EbayPriceLookup:
-    def __init__(self, app_id: str, cert_id: str):
+    def __init__(self, app_id: str, cert_id: str, pricecharting=None):
+        """eBay/Mercari price lookup, optionally augmented with PriceCharting.
+
+        Args:
+            app_id, cert_id: eBay developer credentials.
+            pricecharting: Optional PriceChartingLookup instance. When set,
+                lots whose titles classify as games / cards / comics get a
+                PriceCharting lookup BEFORE the eBay/Mercari scrape. PC's
+                aggregated sold data is materially better for these niches.
+                Pass None (or omit) to disable.
+        """
         self.app_id = app_id
         self.cert_id = cert_id
+        self.pricecharting = pricecharting
         self._token: Optional[str] = None
         # Guard token fetch under parallel workers — avoids redundant OAuth calls
         self._token_lock = threading.Lock()
@@ -327,6 +338,19 @@ class EbayPriceLookup:
             }
             or None if no data available.
         """
+        # Category-specific: try PriceCharting first for games / TCG / comics.
+        # When their classifier matches and they have the product, the data
+        # is materially better than scraping eBay sold (already aggregated,
+        # condition-normalized, canonical product ID). Falls through to the
+        # eBay/Mercari path on miss.
+        if self.pricecharting is not None and self.pricecharting.enabled:
+            try:
+                pc_result = self.pricecharting.lookup(title)
+                if pc_result is not None:
+                    return pc_result
+            except Exception:
+                pass  # Don't let PC outages break the scan
+
         variants = self._query_variants(title)
         if not variants:
             return None
@@ -842,7 +866,7 @@ class EbayPriceLookup:
 
         # Unpack price_results into column lists
         medians, lows, highs, counts = [], [], [], []
-        ebay_counts, mercari_counts, price_sources = [], [], []
+        ebay_counts, mercari_counts, pc_counts, price_sources = [], [], [], []
         for info in price_results:
             if info:
                 medians.append(info["median"])
@@ -851,6 +875,7 @@ class EbayPriceLookup:
                 counts.append(info["count"])
                 ebay_counts.append(info.get("ebay_count", 0))
                 mercari_counts.append(info.get("mercari_count", 0))
+                pc_counts.append(info.get("pricecharting_count", 0))
                 price_sources.append(info["source"])
             else:
                 medians.append(None)
@@ -859,6 +884,7 @@ class EbayPriceLookup:
                 counts.append(0)
                 ebay_counts.append(0)
                 mercari_counts.append(0)
+                pc_counts.append(0)
                 price_sources.append(None)
 
         str_values = [s[0] for s in str_results]
@@ -870,6 +896,7 @@ class EbayPriceLookup:
         df['comp_count'] = counts
         df['ebay_comps'] = ebay_counts
         df['mercari_comps'] = mercari_counts
+        df['pricecharting_comps'] = pc_counts
         df['price_source'] = price_sources
         df['ebay_str'] = str_values
         df['str_source'] = str_sources
