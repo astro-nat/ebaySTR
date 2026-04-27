@@ -2065,25 +2065,21 @@ elif st.session_state.get('auction_candidates') and st.session_state.phase1_lead
     picker_df = pd.DataFrame(rows)
 
     # --- Filters: search + source ---
-    pc1, pc2 = st.columns([2, 1])
-    with pc1:
-        picker_search = st.text_input(
-            "🔎 Search auction name / categories",
-            key="picker_search",
-            placeholder="e.g. 'fishing', 'estate', 'tools'",
-        ).strip().lower()
-    with pc2:
-        sources_avail = picker_df['source'].unique().tolist()
-        source_filter = st.radio(
-            "Source:", ["All"] + sources_avail,
-            horizontal=True, key="picker_source",
-        ) if len(sources_avail) > 1 else "All"
+    picker_search = st.text_input(
+        "🔎 Search auction name / contents",
+        key="picker_search",
+        placeholder="e.g. 'fishing', 'estate', 'tools'",
+    ).strip().lower()
+    sources_avail = picker_df['source'].unique().tolist()
+    source_filter = st.radio(
+        "Source:", ["All"] + sources_avail,
+        horizontal=True, key="picker_source",
+    ) if len(sources_avail) > 1 else "All"
 
     shown = picker_df.copy()
     if picker_search:
         mask = (
             shown['name'].fillna("").str.lower().str.contains(picker_search, regex=False)
-            | shown['categories_sampled'].fillna("").str.lower().str.contains(picker_search, regex=False)
             | shown['summary'].fillna("").str.lower().str.contains(picker_search, regex=False)
         )
         shown = shown[mask]
@@ -2138,6 +2134,9 @@ elif st.session_state.get('auction_candidates') and st.session_state.phase1_lead
     editor_key = f"auction_picker_editor_{hash(editor_sig)}"
 
     # --- Main editor ---
+    # Only the columns the user wants to see live in column_config; everything
+    # else (auction_id, source, categories_sampled, auction_link) stays in the
+    # DataFrame for filtering/search but is hidden via `None` config.
     edited = st.data_editor(
         shown,
         use_container_width=True,
@@ -2147,28 +2146,20 @@ elif st.session_state.get('auction_candidates') and st.session_state.phase1_lead
         column_config={
             "select": st.column_config.CheckboxColumn("Pick", width="small"),
             "auction_id": None,
+            "source": None,
+            "categories_sampled": None,
+            "auction_link": None,
             "name": st.column_config.TextColumn("Auction", width="medium"),
             "items": st.column_config.NumberColumn("Items", format="%d"),
-            "source": st.column_config.TextColumn("Source", width="small"),
             "location": st.column_config.TextColumn("Location"),
             "closes": st.column_config.TextColumn("Closes"),
-            # Short category chip list — fine-grained browse
-            "categories_sampled": st.column_config.TextColumn(
-                "Category preview", width="small",
-            ),
-            # Auto-generated blurb: "X lots · Mostly Tools (40%), Kitchen (25%)
-            # · Examples: ..." — appears once you've sampled categories.
             "summary": st.column_config.TextColumn(
                 "What's in this auction",
                 width="large",
-                help=(
-                    "Auto-generated from the sampled lot categories and a "
-                    "few representative lot titles. Click '🏷️ Sample "
-                    "categories' to populate this for visible auctions."
-                ),
+                help="Auto-generated from sampled lot categories and titles.",
             ),
-            "auction_link": st.column_config.LinkColumn("Link", display_text="Open"),
         },
+        column_order=["select", "name", "items", "location", "closes", "summary"],
         key=editor_key,
     )
 
