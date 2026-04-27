@@ -2062,9 +2062,28 @@ elif st.session_state.get('auction_candidates') and st.session_state.phase1_lead
         if not summary:
             summary = "—"
 
+        # HiBid's eventDateEnd is date-only (always 00:00:00 — useless for the
+        # actual closing time). The closing time, when known, lives as free
+        # text in eventDateInfo (e.g. "Bidding closing Monday, April 27 at
+        # 7:00 PM CST" or "@ 7pm"). Extract the LAST AM/PM time mentioned —
+        # when info strings name multiple dates/times, the close time is
+        # almost always the trailing one.
         closing_raw = c.get('date_end', '')
+        date_info = c.get('date_info', '') or ''
+        closing_fmt = closing_raw
         try:
-            closing_fmt = datetime.fromisoformat(closing_raw).strftime("%b %d %I:%M%p") if closing_raw else ""
+            if closing_raw:
+                date_part = datetime.fromisoformat(closing_raw).strftime("%b %d")
+                time_match = re.findall(
+                    r'(\d{1,2})(?::(\d{2}))?\s*([ap])\.?m\.?',
+                    date_info, flags=re.IGNORECASE,
+                )
+                if time_match:
+                    h, m, mer = time_match[-1]
+                    time_str = f"{int(h)}:{m or '00'}{mer.upper()}M"
+                    closing_fmt = f"{date_part} @ {time_str}"
+                else:
+                    closing_fmt = date_part
         except (ValueError, TypeError):
             closing_fmt = closing_raw
         rows.append({
