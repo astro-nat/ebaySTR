@@ -2113,6 +2113,20 @@ elif st.session_state.get('auction_candidates') and st.session_state.phase1_lead
         horizontal=True, key="picker_source",
     ) if len(sources_avail) > 1 else "All"
 
+    # Compact-view toggle — drops the picker to just Pick / Auction / Items /
+    # Closes when on, so the table fits comfortably on a phone screen. The
+    # summary (which is the column blowing out the table width on mobile) is
+    # still available below in an expander you can scroll through to decide
+    # what to pick.
+    compact_mode = st.checkbox(
+        "📱 Compact view (mobile-friendly)",
+        key="picker_compact_mode",
+        help=(
+            "Hide Location and the summary column to fit a narrow screen. "
+            "Summaries are still browsable in the expander below the table."
+        ),
+    )
+
     shown = picker_df.copy()
     if picker_search:
         mask = (
@@ -2174,6 +2188,10 @@ elif st.session_state.get('auction_candidates') and st.session_state.phase1_lead
     # Only the columns the user wants to see live in column_config; everything
     # else (auction_id, source, categories_sampled, auction_link) stays in the
     # DataFrame for filtering/search but is hidden via `None` config.
+    column_order = (
+        ["select", "name", "items", "closes"] if compact_mode
+        else ["select", "name", "items", "location", "closes", "summary"]
+    )
     edited = st.data_editor(
         shown,
         use_container_width=True,
@@ -2196,9 +2214,27 @@ elif st.session_state.get('auction_candidates') and st.session_state.phase1_lead
                 help="Auto-generated from sampled lot categories and titles.",
             ),
         },
-        column_order=["select", "name", "items", "location", "closes", "summary"],
+        column_order=column_order,
         key=editor_key,
     )
+
+    # In compact mode, the summary is hidden — surface it via an expander
+    # below so the user can still review what's in each visible auction
+    # before picking. Per-auction one-liners with a "Pick this" check inside
+    # would be redundant with the table above; we just show the text.
+    if compact_mode and not shown.empty:
+        with st.expander(
+            f"📖 What's in each of the {len(shown)} visible auctions",
+            expanded=False,
+        ):
+            for _, row in shown.iterrows():
+                picked_marker = "✅ " if row['auction_id'] in picked else ""
+                st.markdown(
+                    f"**{picked_marker}{row['name']}** "
+                    f"· {int(row['items']):,} items · {row['closes']}  \n"
+                    f"{row['summary']}"
+                )
+                st.divider()
 
     # --- Sync editor output back to session_state ---
     # Only update picks for rows VISIBLE in the editor (so filter changes
