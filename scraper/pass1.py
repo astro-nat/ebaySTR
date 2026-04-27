@@ -591,28 +591,20 @@ class Phase1Scraper:
     def generate_auction_summary(
         auction: Dict, sample_payload: Dict = None
     ) -> str:
-        """Build a short human-readable "what's in this auction" blurb.
-
-        Combines auction metadata (name, auctioneer, location, total lots)
-        with the sampled category distribution and a couple of representative
-        lot titles. Purely rule-based — no LLM — so it runs instantly on
-        every render.
+        """Build a short "what's in this auction" blurb from the sampled
+        category distribution.
 
         Example output:
-            "450 lots · Mostly Furniture (40%), Tools (25%), Kitchen (15%) ·
-             Examples: Craftsman drill press, KitchenAid mixer, Oak dining table"
+            "Mostly Furniture (40%), Tools (25%), Kitchen (15%)"
+            "Mix of Jewelry (35%), Watches (20%), Coins (15%)"
+
+        The lead word switches to "Mostly" when the top category alone
+        accounts for >=50% of the sample, otherwise "Mix of".
         """
         sample_payload = sample_payload or {}
         cat_counts: Dict[str, int] = sample_payload.get("cat_counts") or {}
-        titles: List[str] = sample_payload.get("titles") or []
-        total_sample = sum(cat_counts.values()) or len(titles) or 0
-        lot_count = auction.get('lot_count') or 0
+        total_sample = sum(cat_counts.values())
 
-        parts: List[str] = []
-        if lot_count:
-            parts.append(f"{lot_count:,} lots")
-
-        # Top categories by share in the sample
         if cat_counts and total_sample:
             top = sorted(cat_counts.items(), key=lambda kv: -kv[1])[:3]
             pieces = [
@@ -620,39 +612,10 @@ class Phase1Scraper:
                 for name, n in top
             ]
             lead_word = "Mostly" if top[0][1] / total_sample >= 0.5 else "Mix of"
-            parts.append(f"{lead_word} {', '.join(pieces)}")
-        elif sample_payload.get("categories"):
-            parts.append("Categories: " + ", ".join(sample_payload["categories"][:5]))
-
-        # A few representative lot titles (trimmed, deduped on lowercased prefix)
-        if titles:
-            picks: List[str] = []
-            seen = set()
-            for t in titles:
-                # Trim HiBid retail/condition boilerplate to keep it readable
-                trimmed = re.sub(r'\$\d+(?:\.\d{1,2})?\s*', '', t)
-                trimmed = re.sub(
-                    r'\b(retail(\s+value)?|msrp|condition|very good|good|damaged|'
-                    r'no in packaging|package|new|used)\b',
-                    '', trimmed, flags=re.IGNORECASE,
-                )
-                trimmed = re.sub(r'\s+', ' ', trimmed).strip(' .,-')
-                if not trimmed or len(trimmed) < 3:
-                    continue
-                key = trimmed.lower()[:40]
-                if key in seen:
-                    continue
-                seen.add(key)
-                # Cap each example at 40 chars so the summary stays scannable
-                picks.append(trimmed[:40] + ("…" if len(trimmed) > 40 else ""))
-                if len(picks) >= 3:
-                    break
-            if picks:
-                parts.append("Examples: " + "; ".join(picks))
-
-        if not parts:
-            return ""
-        return " · ".join(parts)
+            return f"{lead_word} {', '.join(pieces)}"
+        if sample_payload.get("categories"):
+            return "Categories: " + ", ".join(sample_payload["categories"][:5])
+        return ""
 
     async def fetch_lots_for_selected(
         self, selected_auctions: List[Dict], progress_callback=None,
