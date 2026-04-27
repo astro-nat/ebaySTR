@@ -2072,18 +2072,27 @@ elif st.session_state.get('auction_candidates') and st.session_state.phase1_lead
         closing_raw = c.get('date_end', '')
         date_info = c.get('date_info', '') or ''
         closing_fmt = closing_raw
+        # Build a real datetime for sorting too. When no time was parseable,
+        # use 23:59 so unknown-time auctions sort AFTER known ones on the
+        # same day (you'd rather see a known 6pm close before an unknown).
+        closes_dt = None
         try:
             if closing_raw:
-                date_part = datetime.fromisoformat(closing_raw).strftime("%b %d")
+                day_dt = datetime.fromisoformat(closing_raw)
+                date_part = day_dt.strftime("%b %d")
                 time_match = re.findall(
                     r'(\d{1,2})(?::(\d{2}))?\s*([ap])\.?m\.?',
                     date_info, flags=re.IGNORECASE,
                 )
                 if time_match:
                     h, m, mer = time_match[-1]
-                    time_str = f"{int(h)}:{m or '00'}{mer.upper()}M"
+                    hour24 = int(h) % 12 + (12 if mer.lower() == 'p' else 0)
+                    minute = int(m) if m else 0
+                    closes_dt = day_dt.replace(hour=hour24, minute=minute)
+                    time_str = f"{int(h)}:{minute:02d}{mer.upper()}M"
                     closing_fmt = f"{date_part} @ {time_str}"
                 else:
+                    closes_dt = day_dt.replace(hour=23, minute=59)
                     closing_fmt = date_part
         except (ValueError, TypeError):
             closing_fmt = closing_raw
@@ -2095,6 +2104,7 @@ elif st.session_state.get('auction_candidates') and st.session_state.phase1_lead
             "source": c.get('source', ''),
             "location": f"{c.get('city', '')}, {c.get('state', '')}".strip(", "),
             "closes": closing_fmt,
+            "closes_dt": closes_dt,
             "categories_sampled": cat_preview or ("—" if aid in cat_samples else "(not sampled)"),
             "summary": summary,
             "auction_link": f"https://hibid.com/auction/{aid}",
@@ -2113,19 +2123,19 @@ elif st.session_state.get('auction_candidates') and st.session_state.phase1_lead
         horizontal=True, key="picker_source",
     ) if len(sources_avail) > 1 else "All"
 
-    # Compact-view toggle — drops the picker to just Pick / Auction / Items /
-    # Closes when on, so the table fits comfortably on a phone screen. The
-    # summary (which is the column blowing out the table width on mobile) is
-    # still available below in an expander you can scroll through to decide
-    # what to pick.
-    compact_mode = st.checkbox(
-        "📱 Compact view (mobile-friendly)",
-        key="picker_compact_mode",
-        help=(
-            "Render the picker as wrapping cards instead of a table — "
-            "long auction names + summaries lay out naturally on a phone "
-            "screen instead of being truncated by the table grid."
-        ),
+    # Sort selector. Default is "most items first" — big auctions are the
+    # ones most worth deep-scanning, so surfacing them first matches the
+    # typical workflow.
+    sort_choice = st.radio(
+        "Sort by:",
+        options=[
+            "🔢 Most items first",
+            "🔢 Fewest items first",
+            "⏰ Closing soonest",
+            "⏰ Closing latest",
+        ],
+        horizontal=True,
+        key="picker_sort",
     )
 
     shown = picker_df.copy()
@@ -2138,9 +2148,19 @@ elif st.session_state.get('auction_candidates') and st.session_state.phase1_lead
     if source_filter != "All":
         shown = shown[shown['source'] == source_filter]
 
-    # Sort by item count desc by default — biggest auctions surface first
-    # (user said "some of these have 4000 items" — they'll want to SEE those)
-    shown = shown.sort_values(['items', 'closes'], ascending=[False, True]).reset_index(drop=True)
+    # Apply sort. Closing-time sorts use the parsed `closes_dt` datetime;
+    # rows where time was unknown end up with 23:59 of the closing day so
+    # they tail the time-based sorts (you'd rather see known 6pm closes
+    # first). For item-count sorts, ties break by closing date.
+    if sort_choice.startswith("🔢 Most"):
+        shown = shown.sort_values(['items', 'closes_dt'], ascending=[False, True])
+    elif sort_choice.startswith("🔢 Fewest"):
+        shown = shown.sort_values(['items', 'closes_dt'], ascending=[True, True])
+    elif sort_choice.startswith("⏰ Closing soonest"):
+        shown = shown.sort_values('closes_dt', ascending=True, na_position='last')
+    else:  # Closing latest
+        shown = shown.sort_values('closes_dt', ascending=False, na_position='last')
+    shown = shown.reset_index(drop=True)
 
     fetch_lots_running = st.session_state.get('fetch_lots_running', False)
 
@@ -2171,97 +2191,40 @@ elif st.session_state.get('auction_candidates') and st.session_state.phase1_lead
             st.session_state._picked_auction_ids = picked
             st.rerun()
 
-    # --- Derive the select column from session_state so picks survive any rerun ---
-    shown['select'] = shown['auction_id'].isin(picked)
-
-    # Bump the editor's widget-key whenever the underlying DataFrame contents
-    # change (e.g. after sampling populates the category preview column, or
-    # the user filters/sorts). A fresh key forces Streamlit to re-seed the
-    # editor from `shown['select']` rather than re-applying stale edits.
-    editor_sig = (
-        len(shown),
-        tuple(shown['auction_id'].tolist()),
-        tuple(shown['categories_sampled'].tolist()),
-    )
-    editor_key = f"auction_picker_editor_{hash(editor_sig)}"
-
-    # --- Picker UI: card list (compact mode) or table (default) ---
-    #
-    # Streamlit's data_editor is a canvas grid — long auction names truncate
-    # with no native cell-wrap. On mobile that's painful. In compact mode we
-    # ditch the table entirely and render each auction as a vertical card
-    # with an inline checkbox, so titles + summaries wrap naturally.
-    if compact_mode:
-        edited = shown.copy()  # mirror data_editor's return shape
-        if shown.empty:
-            st.info("No auctions match the current filters.")
-        else:
-            for _, row in shown.iterrows():
-                aid = row['auction_id']
-                is_picked = aid in picked
-                ck_col, info_col = st.columns([0.12, 0.88])
-                with ck_col:
-                    new_state = st.checkbox(
-                        "pick",
-                        value=is_picked,
-                        key=f"pick_compact_{aid}",
-                        label_visibility="collapsed",
-                        disabled=fetch_lots_running,
-                    )
-                with info_col:
-                    items_str = f"**{int(row['items']):,}** items"
-                    closes_str = row['closes'] or '(close time TBD)'
-                    summary_text = row['summary'] or '—'
-                    st.markdown(
-                        f"**{row['name']}**  \n"
-                        f"{items_str} · {closes_str}  \n"
-                        f"{summary_text}"
-                    )
-                # Sync this checkbox's state back to the picked set immediately
-                if new_state and not is_picked:
-                    picked.add(aid)
-                elif not new_state and is_picked:
-                    picked.discard(aid)
-                st.divider()
-            st.session_state._picked_auction_ids = picked
-            edited['select'] = edited['auction_id'].isin(picked)
+    # --- Picker UI: card list ---
+    # Streamlit's data_editor is a canvas grid that truncates long names with
+    # no cell-wrap. We render each auction as a card (checkbox + wrapped
+    # markdown block) so titles and summaries flow naturally on any screen.
+    if shown.empty:
+        st.info("No auctions match the current filters.")
     else:
-        # Only the columns the user wants to see live in column_config;
-        # everything else stays in the df for filter/search but is hidden.
-        edited = st.data_editor(
-            shown,
-            use_container_width=True,
-            hide_index=True,
-            disabled=['auction_id', 'name', 'items', 'source', 'location',
-                      'closes', 'categories_sampled', 'summary', 'auction_link'],
-            column_config={
-                "select": st.column_config.CheckboxColumn("Pick", width="small"),
-                "auction_id": None,
-                "source": None,
-                "categories_sampled": None,
-                "auction_link": None,
-                "name": st.column_config.TextColumn("Auction", width="medium"),
-                "items": st.column_config.NumberColumn("Items", format="%d"),
-                "location": st.column_config.TextColumn("Location"),
-                "closes": st.column_config.TextColumn("Closes"),
-                "summary": st.column_config.TextColumn(
-                    "What's in this auction",
-                    width="large",
-                    help="Auto-generated from sampled lot categories and titles.",
-                ),
-            },
-            column_order=["select", "name", "items", "location", "closes", "summary"],
-            key=editor_key,
-        )
-
-    # --- Sync editor output back to session_state ---
-    # Only update picks for rows VISIBLE in the editor (so filter changes
-    # don't accidentally deselect auctions the user hid from view).
-    visible_ids = set(edited['auction_id'].tolist())
-    now_checked = set(edited.loc[edited['select'], 'auction_id'].tolist())
-    # In-place: remove deselected visible rows, add newly-checked rows
-    picked = (picked - visible_ids) | now_checked
-    st.session_state._picked_auction_ids = picked
+        for _, row in shown.iterrows():
+            aid = row['auction_id']
+            is_picked = aid in picked
+            ck_col, info_col = st.columns([0.12, 0.88])
+            with ck_col:
+                new_state = st.checkbox(
+                    "pick",
+                    value=is_picked,
+                    key=f"pick_compact_{aid}",
+                    label_visibility="collapsed",
+                    disabled=fetch_lots_running,
+                )
+            with info_col:
+                items_str = f"**{int(row['items']):,}** items"
+                closes_str = row['closes'] or '(close time TBD)'
+                summary_text = row['summary'] or '—'
+                st.markdown(
+                    f"**{row['name']}**  \n"
+                    f"{items_str} · {closes_str}  \n"
+                    f"{summary_text}"
+                )
+            if new_state and not is_picked:
+                picked.add(aid)
+            elif not new_state and is_picked:
+                picked.discard(aid)
+            st.divider()
+        st.session_state._picked_auction_ids = picked
 
     selected_ids = picked  # everything picked across all filters
     selected_item_total = int(
