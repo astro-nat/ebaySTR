@@ -5,7 +5,9 @@ import json
 import re
 import time
 import statistics
+import threading
 import pandas as pd
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
 
 
@@ -14,10 +16,18 @@ class EbayPriceLookup:
         self.app_id = app_id
         self.cert_id = cert_id
         self._token: Optional[str] = None
+        # Guard token fetch under parallel workers — avoids redundant OAuth calls
+        self._token_lock = threading.Lock()
 
     def _get_token(self) -> str:
         if self._token:
             return self._token
+        with self._token_lock:
+            if self._token:  # double-check after acquiring lock
+                return self._token
+            return self._fetch_token()
+
+    def _fetch_token(self) -> str:
         credentials = base64.b64encode(f"{self.app_id}:{self.cert_id}".encode()).decode()
         resp = httpx.post(
             "https://api.ebay.com/identity/v1/oauth2/token",
@@ -35,19 +45,80 @@ class EbayPriceLookup:
         self._token = resp.json()["access_token"]
         return self._token
 
-    def _clean_title(self, title: str) -> str:
-        """Clean auction titles for better eBay search results."""
-        # Remove leading price like "$20 "
-        clean = re.sub(r'^\$\d+\.?\d*\s*', '', title)
-        # Remove trailing ellipsis
-        clean = clean.rstrip('.').strip()
+    # Condition / packaging tokens HiBid often appends to lot titles ("Very
+    # Good", "Damaged", "No In Packaging", "New Open Box", etc.). Stripping
+    # these tightens the eBay query — a full-title search including
+    # "Damaged No In Packaging" matches almost nothing.
+    _CONDITION_NOISE_RE = re.compile(
+        r'\b(very\s+good|like\s+new|brand\s+new|open\s+box|no\s+in\s+packaging|'
+        r'in\s+original\s+packaging|no\s+packaging|condition|damaged|untested|'
+        r'for\s+parts|as[- ]is|sealed|unopened|unused|new\b|used\b|good\b|fair\b|'
+        r'poor\b|mint\b|excellent\b)\b',
+        re.IGNORECASE,
+    )
+
+    def _clean_title(self, title: str, max_words: int = 6) -> str:
+        """Clean auction titles for better eBay search results.
+
+        max_words caps the query length. eBay's search is extremely
+        sensitive to extra terms — 7+ word queries commonly return ZERO
+        matches even for well-known products. 4-6 words is the sweet
+        spot for most lots; progressive shortening downstream handles
+        cases where even that is too specific.
+        """
+        # Remove ALL $NN / $NN.NN tokens anywhere in the title — HiBid often
+        # sprinkles retail-value hints like "Gucci Bag $250 Retail" that
+        # poison the eBay search (we'd get $250-priced listings regardless
+        # of the actual product).
+        clean = re.sub(r'\$\d+(?:\.\d{1,2})?\b', '', title)
+        # Remove "Retail Value" / "MSRP" / "Est. Value" boilerplate so those
+        # words don't leak into the query
+        clean = re.sub(
+            r'\b(retail(\s+value)?|msrp|est(\.|imated)?\s*(value|worth))\b',
+            '', clean, flags=re.IGNORECASE,
+        )
         # Remove quantity prefixes like "Qty-2 " or "Qty:5 "
-        clean = re.sub(r'^Qty[:\-]\d+\s*', '', clean, flags=re.IGNORECASE)
-        # Truncate very long titles to first ~8 words for better search
-        words = clean.split()
-        if len(words) > 8:
-            clean = ' '.join(words[:8])
-        return clean
+        clean = re.sub(r'\bQty[:\-]?\s*\d+\s*', '', clean, flags=re.IGNORECASE)
+        # Remove HiBid condition/packaging boilerplate that makes queries
+        # over-specific (see _CONDITION_NOISE_RE above)
+        clean = self._CONDITION_NOISE_RE.sub('', clean)
+        # Strip parenthetical asides like "(Renewed)", "(Open Box)" — these
+        # are usually marketplace qualifiers, not product features
+        clean = re.sub(r'\([^)]{1,25}\)', '', clean)
+        # Collapse punctuation into whitespace so eBay's tokenizer works
+        clean = re.sub(r'[,;:/\\|]+', ' ', clean)
+        # Normalize whitespace
+        clean = re.sub(r'\s+', ' ', clean).strip(' .,-')
+        # Truncate to max_words for better search. Drop trailing stopwords
+        # and single-letter fragments so the tail of the query isn't junk.
+        words = [w for w in clean.split() if w]
+        if len(words) > max_words:
+            words = words[:max_words]
+        while words and (
+            len(words[-1]) <= 1
+            or words[-1].lower() in {'and', 'or', 'the', 'with', 'for', '&'}
+        ):
+            words.pop()
+        return ' '.join(words)
+
+    def _query_variants(self, title: str) -> list:
+        """Produce a list of progressively shorter eBay queries from a title.
+
+        eBay search often returns zero hits for long, specific queries but
+        plenty for shorter keyword-only ones. Rather than guess the right
+        length up front, we try full → 4 → 3 words in order and stop as
+        soon as we get enough comps. The caller is responsible for early-
+        exit; this just hands back the candidate list.
+
+        Dedupes adjacent identical queries (e.g. when max_words == actual
+        word count).
+        """
+        variants: list = []
+        for cap in (6, 4, 3):
+            q = self._clean_title(title, max_words=cap)
+            if q and len(q) >= 5 and q not in variants:
+                variants.append(q)
+        return variants
 
     def _filter_outliers(self, prices: list) -> list:
         """Remove statistical outliers using IQR method."""
@@ -237,9 +308,11 @@ class EbayPriceLookup:
     def lookup_price_range(self, title: str, limit: int = 8) -> Optional[dict]:
         """Look up combined resale price statistics from eBay + Mercari sold data.
 
-        Combines actual sold prices from both platforms for a more reliable
-        cross-marketplace median. Falls back to eBay active listings if neither
-        marketplace returns sold comps.
+        Uses progressive query shortening: we try the full cleaned title first
+        (6 words), then fall back to 4 words and finally 3 words if no matches
+        turn up. eBay's search is extremely intolerant of extra terms — a
+        7-word query commonly returns zero, while the same first 3 words
+        return hundreds. We stop as soon as we clear the ≥3 sold-comp bar.
 
         Returns:
             {
@@ -250,52 +323,87 @@ class EbayPriceLookup:
                 "source": str,          # Combined source label
                 "ebay_count": int,      # eBay sold comps contributed
                 "mercari_count": int,   # Mercari sold comps contributed
+                "query": str,           # The query variant that produced hits
             }
             or None if no data available.
         """
-        query = self._clean_title(title)
-        if len(query) < 5:
+        variants = self._query_variants(title)
+        if not variants:
             return None
 
-        # Scrape both marketplaces (throttled)
-        ebay_prices = []
-        mercari_prices = []
-        try:
-            time.sleep(0.3)
-            ebay_prices = self._scrape_ebay_sold_prices(query)
-            ebay_prices = self._filter_outliers(ebay_prices)
-        except Exception:
+        # Try each query variant in descending specificity. First one to
+        # clear the ≥3-comp bar wins. Also remember the best "partial"
+        # (1-2 comp) result in case nothing clears the bar — still better
+        # than falling all the way through to active listings.
+        best_partial = None  # (combined, ebay, mercari, query)
+
+        for idx, query in enumerate(variants):
             ebay_prices = []
-
-        try:
-            time.sleep(0.3)
-            mercari_prices = self._scrape_mercari_sold_prices(query)
-            mercari_prices = self._filter_outliers(mercari_prices)
-        except Exception:
             mercari_prices = []
+            try:
+                time.sleep(0.3)
+                ebay_prices = self._scrape_ebay_sold_prices(query)
+                ebay_prices = self._filter_outliers(ebay_prices)
+            except Exception:
+                ebay_prices = []
 
-        combined = ebay_prices + mercari_prices
+            try:
+                time.sleep(0.3)
+                mercari_prices = self._scrape_mercari_sold_prices(query)
+                mercari_prices = self._filter_outliers(mercari_prices)
+            except Exception:
+                mercari_prices = []
 
-        # If we have enough real sold comps (≥3 combined), use them
-        if len(combined) >= 3:
-            combined = self._filter_outliers(combined)
+            combined = ebay_prices + mercari_prices
+
+            if len(combined) >= 3:
+                combined = self._filter_outliers(combined)
+                stats = self._price_stats(combined)
+                if stats:
+                    if ebay_prices and mercari_prices:
+                        source = "sold (eBay+Mercari)"
+                    elif ebay_prices:
+                        source = "sold (eBay)"
+                    else:
+                        source = "sold (Mercari)"
+                    # Annotate source with the fallback level if we had to
+                    # drop down — helps the user eyeball whether the comps
+                    # were for the specific product vs a generic keyword.
+                    if idx > 0:
+                        source = f"{source} [short query]"
+                    return {
+                        **stats,
+                        "count": len(combined),
+                        "source": source,
+                        "ebay_count": len(ebay_prices),
+                        "mercari_count": len(mercari_prices),
+                        "query": query,
+                    }
+
+            # Remember the first variant that produced ANY comps so we can
+            # surface at least a rough number if none hit the ≥3 bar.
+            if combined and best_partial is None:
+                best_partial = (list(combined), list(ebay_prices),
+                                list(mercari_prices), query)
+
+        # All sold-comp variants failed to clear ≥3. Use the best partial
+        # if we have one (1-2 comps) before falling back to active listings.
+        if best_partial is not None:
+            combined, ebay_prices, mercari_prices, matched_q = best_partial
             stats = self._price_stats(combined)
             if stats:
-                if ebay_prices and mercari_prices:
-                    source = "sold (eBay+Mercari)"
-                elif ebay_prices:
-                    source = "sold (eBay)"
-                else:
-                    source = "sold (Mercari)"
                 return {
                     **stats,
                     "count": len(combined),
-                    "source": source,
+                    "source": "sold (thin comps)",
                     "ebay_count": len(ebay_prices),
                     "mercari_count": len(mercari_prices),
+                    "query": matched_q,
                 }
 
-        # Fallback: eBay active listings via Browse API
+        # Nothing sold. Fall back to eBay active listings via Browse API —
+        # use the SHORTEST variant since the longer ones already struck out.
+        fallback_query = variants[-1]
         try:
             token = self._get_token()
             resp = httpx.get(
@@ -305,7 +413,7 @@ class EbayPriceLookup:
                     "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
                 },
                 params={
-                    "q": query,
+                    "q": fallback_query,
                     "filter": "buyingOptions:{FIXED_PRICE}",
                     "sort": "price",
                     "limit": str(limit),
@@ -336,6 +444,7 @@ class EbayPriceLookup:
                 "source": "active (eBay)",
                 "ebay_count": len(prices),
                 "mercari_count": 0,
+                "query": fallback_query,
             }
         except Exception:
             return None
@@ -495,85 +604,254 @@ class EbayPriceLookup:
             score = self._demand_score(title)
             return (score, "demand") if score is not None else (None, None)
 
-    def sample_auction_str(self, df: pd.DataFrame, sample_size: int = 3,
-                           progress_callback=None) -> dict:
-        """Estimate STR per auction by sampling a few items from each.
+    def sample_auction_str(self, df: pd.DataFrame, sample_size: int = 2,
+                           progress_callback=None,
+                           granularity: str = "category") -> dict:
+        """Sample STR per (auction, category) bucket — category-level sampling.
+
+        Rationale: STR is a category signal, not per-lot. A "jewelry" STR and
+        a "tools" STR are very different, but every "Nintendo Switch" lot in
+        the same auction has essentially the same STR. Sampling per-category
+        gives realistic per-row variance (jewelry rows show jewelry STR,
+        tools rows show tools STR) at a fraction of the per-lot cost.
+
+        For a 1000-lot auction with, say, 12 distinct categories: we do
+        ~12 × 2 = 24 STR scrapes instead of 1000. The per-row values then
+        differ by category so the user actually sees variance.
 
         Args:
-            df: Full Phase 1 DataFrame with 'auction' and 'title' columns
-            sample_size: Number of items to sample per auction
-            progress_callback: Optional callable(current, total) for progress updates
+            df: DataFrame with 'auction' + 'category' + 'title' columns
+            sample_size: Items to sample per bucket (2 is usually enough —
+                STR is noisy per-query, averaging 2 stabilizes it)
+            progress_callback: Optional callable(current, total)
+            granularity: "category" (default) = group by (auction, category);
+                "auction" = back-compat, one STR per auction.
 
         Returns:
-            Dict mapping auction name -> estimated STR % (or None)
+            Dict with a unified lookup key. For category granularity the key
+            is (auction_name, category_name); for auction granularity it's
+            just auction_name. Callers should use the helper `get_str()` or
+            check granularity to know how to look things up.
+
+            Each value is (str_value, source). Source is e.g.
+            "sold (sampled, 3 lots)" so the UI can show what we did.
         """
-        auction_strs = {}
-        auctions = df.groupby('auction')
-        auction_names = list(auctions.groups.keys())
-        total = len(auction_names)
+        result: dict = {"__granularity__": granularity}
 
-        for i, auction_name in enumerate(auction_names):
-            group = auctions.get_group(auction_name)
+        if granularity == "category" and 'category' in df.columns:
+            # Build (auction, category) buckets. Drop empty category -> treat as
+            # its own bucket per auction so we don't lump categorized with
+            # un-categorized.
+            working = df.copy()
+            working['_cat_key'] = working['category'].fillna('').astype(str).str.strip()
+            working.loc[working['_cat_key'] == '', '_cat_key'] = '(uncategorized)'
+            buckets = working.groupby(['auction', '_cat_key'])
+            bucket_keys = list(buckets.groups.keys())
+        else:
+            # Fallback / back-compat: group by auction only
+            granularity = "auction"
+            result["__granularity__"] = "auction"
+            buckets = df.groupby('auction')
+            bucket_keys = [(a,) for a in buckets.groups.keys()]
 
-            # Sample items: prefer items with longer titles (more searchable)
+        total = len(bucket_keys)
+        title_col = 'enriched_title' if 'enriched_title' in df.columns else 'title'
+
+        for i, key in enumerate(bucket_keys):
+            if granularity == "category":
+                group = buckets.get_group(key)
+            else:
+                group = buckets.get_group(key[0])
+
+            # Pick longest-title samples — usually the most searchable
             ranked = group.copy()
-            ranked['_title_len'] = ranked['title'].str.len()
+            ranked['_title_len'] = ranked[title_col].fillna('').astype(str).str.len()
             ranked = ranked.sort_values('_title_len', ascending=False)
             sample = ranked.head(sample_size)
 
             str_results = []
+            source_counts: dict = {}
             for _, row in sample.iterrows():
-                result, _ = self.lookup_str(row.get('title', ''))
-                if result is not None:
-                    str_results.append(result)
+                title = row.get(title_col) or row.get('title', '')
+                res, src = self.lookup_str(title)
+                if res is not None:
+                    str_results.append(res)
+                    if src:
+                        source_counts[src] = source_counts.get(src, 0) + 1
 
-            auction_strs[auction_name] = round(statistics.mean(str_results), 1) if str_results else None
+            if str_results:
+                avg = round(statistics.mean(str_results), 1)
+                best_src = (
+                    max(source_counts.items(), key=lambda kv: kv[1])[0]
+                    if source_counts else "sold"
+                )
+                src_label = f"{best_src} (sampled, {len(str_results)} lots)"
+                result[key] = (avg, src_label)
+            else:
+                result[key] = (None, None)
 
             if progress_callback:
                 progress_callback(i + 1, total)
 
         return auction_strs
 
-    def batch_lookup(self, df: pd.DataFrame, progress_callback=None) -> pd.DataFrame:
+    def batch_lookup(self, df: pd.DataFrame, progress_callback=None,
+                     auction_str_map: Optional[dict] = None,
+                     max_workers: int = 8) -> pd.DataFrame:
         """Add price range, STR, and source columns to a DataFrame.
 
-        For each row, performs an eBay sold-prices lookup (falling back to active
-        listings) and an STR lookup. Median price populates 'est_resale' for
-        back-compat with ROI calculations.
+        Runs `lookup_price_range()` in parallel across a thread pool. STR is
+        either scraped per-lot (slow) or looked up from a precomputed
+        per-auction map (fast — recommended for 500+ lots).
+
+        Threading notes:
+          - requests.Session and httpx.get are thread-safe.
+          - Token fetch is guarded by a lock so 8 workers starting at once
+            don't mint 8 tokens.
+          - Results are collected via `as_completed` so Streamlit progress
+            callbacks fire only from the main thread.
+          - The per-call `time.sleep(0.3)` inside lookup_price_range is kept
+            as a per-worker throttle; with 8 workers that's ~8 req/sec,
+            which eBay/Mercari scraping tolerates well.
 
         Args:
             df: DataFrame with a 'title' column (or 'enriched_title')
-            progress_callback: Optional callable(current, total)
+            progress_callback: Optional callable(current, total) OR
+                callable(current, total, title_preview). Extra arg is optional.
+            auction_str_map: Optional {auction_name: (str_value, source)} dict,
+                typically from sample_auction_str(). When provided, per-lot
+                STR scraping is SKIPPED and the auction-level value is applied
+                to every row.
+            max_workers: Thread pool size. Set to 1 for serial (useful for
+                debugging or if you're getting rate-limited).
 
         Returns:
             DataFrame with these columns added:
-                est_resale, price_low, price_high, comp_count, price_source,
-                ebay_str, str_source
+                est_resale, price_low, price_high, comp_count, ebay_comps,
+                mercari_comps, price_source, ebay_str, str_source
         """
-        df = df.copy()
-        medians = []
-        lows = []
-        highs = []
-        counts = []
-        ebay_counts = []
-        mercari_counts = []
-        price_sources = []
-        str_values = []
-        str_sources = []
+        df = df.copy().reset_index(drop=True)  # 0..n-1 positional keys
         total = len(df)
+        use_auction_str = auction_str_map is not None
 
-        for i, (_, row) in enumerate(df.iterrows()):
-            # Prefer enriched title (from AI audit) for better eBay search results
-            title = row.get('enriched_title') or row.get('title', '')
-            price_info = self.lookup_price_range(title)
-            if price_info:
-                medians.append(price_info["median"])
-                lows.append(price_info["low"])
-                highs.append(price_info["high"])
-                counts.append(price_info["count"])
-                ebay_counts.append(price_info.get("ebay_count", 0))
-                mercari_counts.append(price_info.get("mercari_count", 0))
-                price_sources.append(price_info["source"])
+        # Pre-extract titles + auction names so worker threads don't touch
+        # pandas (which isn't thread-safe for concurrent .at assignments).
+        titles = [
+            (row.get('enriched_title') or row.get('title', '') or '')
+            for _, row in df.iterrows()
+        ]
+        auctions = (
+            df['auction'].tolist() if 'auction' in df.columns else [None] * total
+        )
+        categories = (
+            df['category'].fillna('').astype(str).tolist()
+            if 'category' in df.columns else [''] * total
+        )
+
+        # Result slots, indexed positionally
+        price_results: list = [None] * total
+        str_results: list = [(None, None)] * total
+
+        def _work_price(i: int):
+            try:
+                return i, self.lookup_price_range(titles[i])
+            except Exception:
+                return i, None
+
+        def _work_str(i: int):
+            try:
+                pct, src = self.lookup_str(titles[i])
+                return i, (pct, src)
+            except Exception:
+                return i, (None, None)
+
+        # Fill STR from the sampled map (no HTTP — cheap pass).
+        # The map can be keyed per-auction (back-compat) or per-(auction,category)
+        # (new). __granularity__ tells us which.
+        if use_auction_str:
+            granularity = auction_str_map.get("__granularity__", "auction")
+            for i in range(total):
+                entry = None
+                if granularity == "category":
+                    cat = categories[i].strip() or '(uncategorized)'
+                    entry = auction_str_map.get((auctions[i], cat))
+                    # Fallback: try just auction-level (if this row's category
+                    # had no usable sample, borrow auction-avg from another
+                    # bucket in the same auction — better than None)
+                    if not entry or entry[0] is None:
+                        # Average across all buckets for this auction
+                        auction_vals = [
+                            v[0] for k, v in auction_str_map.items()
+                            if isinstance(k, tuple) and k[0] == auctions[i]
+                            and v and v[0] is not None
+                        ]
+                        if auction_vals:
+                            avg = round(sum(auction_vals) / len(auction_vals), 1)
+                            entry = (avg, "sampled (auction avg)")
+                else:
+                    entry = auction_str_map.get(auctions[i])
+                str_results[i] = entry if entry else (None, None)
+
+        completed = 0
+
+        def _emit(current: int, title: str = ""):
+            if not progress_callback:
+                return
+            # Try (current, total, title) then fall back to (current, total)
+            try:
+                progress_callback(current, total, title)
+            except TypeError:
+                try:
+                    progress_callback(current, total)
+                except Exception:
+                    pass
+
+        workers = max(1, int(max_workers))
+
+        # Serial path — avoid thread overhead when max_workers == 1
+        if workers == 1:
+            for i in range(total):
+                _, price_info = _work_price(i)
+                price_results[i] = price_info
+                if not use_auction_str:
+                    _, sr = _work_str(i)
+                    str_results[i] = sr
+                completed += 1
+                _emit(completed, titles[i][:70])
+        else:
+            # Parallel path — submit all price jobs; interleave STR jobs only
+            # when we don't have a precomputed auction map.
+            with ThreadPoolExecutor(max_workers=workers) as ex:
+                futures = {ex.submit(_work_price, i): ('price', i) for i in range(total)}
+                if not use_auction_str:
+                    for i in range(total):
+                        futures[ex.submit(_work_str, i)] = ('str', i)
+
+                for fut in as_completed(futures):
+                    kind, i = futures[fut]
+                    try:
+                        idx, payload = fut.result()
+                    except Exception:
+                        continue
+                    if kind == 'price':
+                        price_results[idx] = payload
+                        completed += 1
+                        _emit(completed, titles[idx][:70])
+                    else:
+                        str_results[idx] = payload
+
+        # Unpack price_results into column lists
+        medians, lows, highs, counts = [], [], [], []
+        ebay_counts, mercari_counts, price_sources = [], [], []
+        for info in price_results:
+            if info:
+                medians.append(info["median"])
+                lows.append(info["low"])
+                highs.append(info["high"])
+                counts.append(info["count"])
+                ebay_counts.append(info.get("ebay_count", 0))
+                mercari_counts.append(info.get("mercari_count", 0))
+                price_sources.append(info["source"])
             else:
                 medians.append(None)
                 lows.append(None)
@@ -583,12 +861,8 @@ class EbayPriceLookup:
                 mercari_counts.append(0)
                 price_sources.append(None)
 
-            str_pct, str_src = self.lookup_str(title)
-            str_values.append(str_pct)
-            str_sources.append(str_src)
-
-            if progress_callback:
-                progress_callback(i + 1, total)
+        str_values = [s[0] for s in str_results]
+        str_sources = [s[1] for s in str_results]
 
         df['est_resale'] = medians
         df['price_low'] = lows
