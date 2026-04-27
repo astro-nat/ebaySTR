@@ -2122,8 +2122,9 @@ elif st.session_state.get('auction_candidates') and st.session_state.phase1_lead
         "📱 Compact view (mobile-friendly)",
         key="picker_compact_mode",
         help=(
-            "Hide Location and the summary column to fit a narrow screen. "
-            "Summaries are still browsable in the expander below the table."
+            "Render the picker as wrapping cards instead of a table — "
+            "long auction names + summaries lay out naturally on a phone "
+            "screen instead of being truncated by the table grid."
         ),
     )
 
@@ -2184,57 +2185,74 @@ elif st.session_state.get('auction_candidates') and st.session_state.phase1_lead
     )
     editor_key = f"auction_picker_editor_{hash(editor_sig)}"
 
-    # --- Main editor ---
-    # Only the columns the user wants to see live in column_config; everything
-    # else (auction_id, source, categories_sampled, auction_link) stays in the
-    # DataFrame for filtering/search but is hidden via `None` config.
-    column_order = (
-        ["select", "name", "items", "closes"] if compact_mode
-        else ["select", "name", "items", "location", "closes", "summary"]
-    )
-    edited = st.data_editor(
-        shown,
-        use_container_width=True,
-        hide_index=True,
-        disabled=['auction_id', 'name', 'items', 'source', 'location',
-                  'closes', 'categories_sampled', 'summary', 'auction_link'],
-        column_config={
-            "select": st.column_config.CheckboxColumn("Pick", width="small"),
-            "auction_id": None,
-            "source": None,
-            "categories_sampled": None,
-            "auction_link": None,
-            "name": st.column_config.TextColumn("Auction", width="medium"),
-            "items": st.column_config.NumberColumn("Items", format="%d"),
-            "location": st.column_config.TextColumn("Location"),
-            "closes": st.column_config.TextColumn("Closes"),
-            "summary": st.column_config.TextColumn(
-                "What's in this auction",
-                width="large",
-                help="Auto-generated from sampled lot categories and titles.",
-            ),
-        },
-        column_order=column_order,
-        key=editor_key,
-    )
-
-    # In compact mode, the summary is hidden — surface it via an expander
-    # below so the user can still review what's in each visible auction
-    # before picking. Per-auction one-liners with a "Pick this" check inside
-    # would be redundant with the table above; we just show the text.
-    if compact_mode and not shown.empty:
-        with st.expander(
-            f"📖 What's in each of the {len(shown)} visible auctions",
-            expanded=False,
-        ):
+    # --- Picker UI: card list (compact mode) or table (default) ---
+    #
+    # Streamlit's data_editor is a canvas grid — long auction names truncate
+    # with no native cell-wrap. On mobile that's painful. In compact mode we
+    # ditch the table entirely and render each auction as a vertical card
+    # with an inline checkbox, so titles + summaries wrap naturally.
+    if compact_mode:
+        edited = shown.copy()  # mirror data_editor's return shape
+        if shown.empty:
+            st.info("No auctions match the current filters.")
+        else:
             for _, row in shown.iterrows():
-                picked_marker = "✅ " if row['auction_id'] in picked else ""
-                st.markdown(
-                    f"**{picked_marker}{row['name']}** "
-                    f"· {int(row['items']):,} items · {row['closes']}  \n"
-                    f"{row['summary']}"
-                )
+                aid = row['auction_id']
+                is_picked = aid in picked
+                ck_col, info_col = st.columns([0.12, 0.88])
+                with ck_col:
+                    new_state = st.checkbox(
+                        "pick",
+                        value=is_picked,
+                        key=f"pick_compact_{aid}",
+                        label_visibility="collapsed",
+                        disabled=fetch_lots_running,
+                    )
+                with info_col:
+                    items_str = f"**{int(row['items']):,}** items"
+                    closes_str = row['closes'] or '(close time TBD)'
+                    summary_text = row['summary'] or '—'
+                    st.markdown(
+                        f"**{row['name']}**  \n"
+                        f"{items_str} · {closes_str}  \n"
+                        f"{summary_text}"
+                    )
+                # Sync this checkbox's state back to the picked set immediately
+                if new_state and not is_picked:
+                    picked.add(aid)
+                elif not new_state and is_picked:
+                    picked.discard(aid)
                 st.divider()
+            st.session_state._picked_auction_ids = picked
+            edited['select'] = edited['auction_id'].isin(picked)
+    else:
+        # Only the columns the user wants to see live in column_config;
+        # everything else stays in the df for filter/search but is hidden.
+        edited = st.data_editor(
+            shown,
+            use_container_width=True,
+            hide_index=True,
+            disabled=['auction_id', 'name', 'items', 'source', 'location',
+                      'closes', 'categories_sampled', 'summary', 'auction_link'],
+            column_config={
+                "select": st.column_config.CheckboxColumn("Pick", width="small"),
+                "auction_id": None,
+                "source": None,
+                "categories_sampled": None,
+                "auction_link": None,
+                "name": st.column_config.TextColumn("Auction", width="medium"),
+                "items": st.column_config.NumberColumn("Items", format="%d"),
+                "location": st.column_config.TextColumn("Location"),
+                "closes": st.column_config.TextColumn("Closes"),
+                "summary": st.column_config.TextColumn(
+                    "What's in this auction",
+                    width="large",
+                    help="Auto-generated from sampled lot categories and titles.",
+                ),
+            },
+            column_order=["select", "name", "items", "location", "closes", "summary"],
+            key=editor_key,
+        )
 
     # --- Sync editor output back to session_state ---
     # Only update picks for rows VISIBLE in the editor (so filter changes
