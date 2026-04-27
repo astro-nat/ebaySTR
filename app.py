@@ -1382,7 +1382,7 @@ def _run_ebay_comps(results_df):
     """
     # Clear previous comp data so re-runs start fresh
     for col in ['est_resale', 'price_low', 'price_high', 'comp_count',
-                'ebay_comps', 'mercari_comps',
+                'ebay_comps', 'mercari_comps', 'pricecharting_comps',
                 'price_source', 'ebay_str', 'str_source',
                 'est_roi', 'max_bid']:
         if col in results_df.columns:
@@ -1395,9 +1395,15 @@ def _run_ebay_comps(results_df):
     eligible_df, skipped_df, filter_summary = _apply_comps_filters(good_df)
 
     from scraper.ebay_prices import EbayPriceLookup
+    from scraper.pricecharting import PriceChartingLookup
     from scraper.config_loader import load_config
     cfg = load_config()
-    ebay = EbayPriceLookup(cfg["ebay"]["app_id"], cfg["ebay"]["cert_id"])
+    pc_token = (cfg.get("pricecharting") or {}).get("token") or None
+    pc_client = PriceChartingLookup(pc_token)
+    ebay = EbayPriceLookup(
+        cfg["ebay"]["app_id"], cfg["ebay"]["cert_id"],
+        pricecharting=pc_client,
+    )
 
     total = len(eligible_df)
 
@@ -1641,27 +1647,38 @@ def _render_results_table(results_df):
             # Low-confidence flag: with fewer than 4 sold comps, the IQR
             # outlier filter in ebay_prices._filter_outliers can't run, so a
             # single pricey listing can drag the median resale way up.
-            # Surface this as an at-a-glance checkbox so the user can spot
-            # rows where the est_resale number is on thin ice.
+            # PriceCharting hits are pre-aggregated \u2014 never low-confidence.
             filtered_df = filtered_df.copy()
+            pc_hits = (
+                filtered_df['pricecharting_comps'].fillna(0).astype(int).gt(0)
+                if 'pricecharting_comps' in filtered_df.columns
+                else False
+            )
             filtered_df['low_comp_confidence'] = (
                 filtered_df['ebay_comps'].fillna(0).astype(int).lt(4)
                 & filtered_df['est_resale'].notna()
+                & ~pc_hits
             )
             display_cols += ['low_comp_confidence']
             col_config["low_comp_confidence"] = st.column_config.CheckboxColumn(
                 "Low Conf.",
                 help=(
-                    "Checked when fewer than 4 eBay sold comps were found. "
-                    "The outlier filter needs \u22654 data points, so with "
-                    "1\u20133 comps the est_resale can be skewed by a single "
-                    "high-priced listing. Treat these resale values as "
-                    "rough estimates."
+                    "Checked when fewer than 4 eBay sold comps were found "
+                    "(and the lot didn't get a PriceCharting hit). The "
+                    "outlier filter needs \u22654 data points, so with 1\u20133 "
+                    "comps the est_resale can be skewed by a single "
+                    "high-priced listing."
                 ),
             )
         if 'mercari_comps' in filtered_df.columns:
             display_cols += ['mercari_comps']
             col_config["mercari_comps"] = st.column_config.NumberColumn("Mercari Comps", format="%d")
+        if 'pricecharting_comps' in filtered_df.columns:
+            display_cols += ['pricecharting_comps']
+            col_config["pricecharting_comps"] = st.column_config.NumberColumn(
+                "PC Hit", format="%d",
+                help="1 = PriceCharting matched this lot to a canonical product.",
+            )
         if 'price_source' in filtered_df.columns:
             display_cols += ['price_source']
             col_config["price_source"] = st.column_config.TextColumn("Price Src")
@@ -2065,25 +2082,21 @@ elif st.session_state.get('auction_candidates') and st.session_state.phase1_lead
     picker_df = pd.DataFrame(rows)
 
     # --- Filters: search + source ---
-    pc1, pc2 = st.columns([2, 1])
-    with pc1:
-        picker_search = st.text_input(
-            "🔎 Search auction name / categories",
-            key="picker_search",
-            placeholder="e.g. 'fishing', 'estate', 'tools'",
-        ).strip().lower()
-    with pc2:
-        sources_avail = picker_df['source'].unique().tolist()
-        source_filter = st.radio(
-            "Source:", ["All"] + sources_avail,
-            horizontal=True, key="picker_source",
-        ) if len(sources_avail) > 1 else "All"
+    picker_search = st.text_input(
+        "🔎 Search auction name / contents",
+        key="picker_search",
+        placeholder="e.g. 'fishing', 'estate', 'tools'",
+    ).strip().lower()
+    sources_avail = picker_df['source'].unique().tolist()
+    source_filter = st.radio(
+        "Source:", ["All"] + sources_avail,
+        horizontal=True, key="picker_source",
+    ) if len(sources_avail) > 1 else "All"
 
     shown = picker_df.copy()
     if picker_search:
         mask = (
             shown['name'].fillna("").str.lower().str.contains(picker_search, regex=False)
-            | shown['categories_sampled'].fillna("").str.lower().str.contains(picker_search, regex=False)
             | shown['summary'].fillna("").str.lower().str.contains(picker_search, regex=False)
         )
         shown = shown[mask]
@@ -2138,6 +2151,9 @@ elif st.session_state.get('auction_candidates') and st.session_state.phase1_lead
     editor_key = f"auction_picker_editor_{hash(editor_sig)}"
 
     # --- Main editor ---
+    # Only the columns the user wants to see live in column_config; everything
+    # else (auction_id, source, categories_sampled, auction_link) stays in the
+    # DataFrame for filtering/search but is hidden via `None` config.
     edited = st.data_editor(
         shown,
         use_container_width=True,
@@ -2147,28 +2163,20 @@ elif st.session_state.get('auction_candidates') and st.session_state.phase1_lead
         column_config={
             "select": st.column_config.CheckboxColumn("Pick", width="small"),
             "auction_id": None,
+            "source": None,
+            "categories_sampled": None,
+            "auction_link": None,
             "name": st.column_config.TextColumn("Auction", width="medium"),
             "items": st.column_config.NumberColumn("Items", format="%d"),
-            "source": st.column_config.TextColumn("Source", width="small"),
             "location": st.column_config.TextColumn("Location"),
             "closes": st.column_config.TextColumn("Closes"),
-            # Short category chip list — fine-grained browse
-            "categories_sampled": st.column_config.TextColumn(
-                "Category preview", width="small",
-            ),
-            # Auto-generated blurb: "X lots · Mostly Tools (40%), Kitchen (25%)
-            # · Examples: ..." — appears once you've sampled categories.
             "summary": st.column_config.TextColumn(
                 "What's in this auction",
                 width="large",
-                help=(
-                    "Auto-generated from the sampled lot categories and a "
-                    "few representative lot titles. Click '🏷️ Sample "
-                    "categories' to populate this for visible auctions."
-                ),
+                help="Auto-generated from sampled lot categories and titles.",
             ),
-            "auction_link": st.column_config.LinkColumn("Link", display_text="Open"),
         },
+        column_order=["select", "name", "items", "location", "closes", "summary"],
         key=editor_key,
     )
 
