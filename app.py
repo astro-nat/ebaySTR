@@ -2236,6 +2236,7 @@ elif st.session_state.get('auction_candidates') and st.session_state.phase1_lead
             .picker-row p { margin-bottom: 0.1rem !important; line-height: 1.35; }
             .picker-row strong { font-weight: 600; }
             .picker-row.header { border-bottom: 2px solid rgba(255,255,255,0.18); }
+            .picker-row.header strong { white-space: nowrap; }
             </style>
             """,
             unsafe_allow_html=True,
@@ -2243,8 +2244,9 @@ elif st.session_state.get('auction_candidates') and st.session_state.phase1_lead
 
         # Same column proportions for every row so they line up like a
         # table. Auction name gets the lion's share so long titles wrap
-        # in place rather than overflowing.
-        col_widths = [0.05, 0.40, 0.10, 0.16, 0.29]
+        # in place rather than overflowing. The Pick column is wide enough
+        # to fit the header text "Pick" plus the checkbox without wrapping.
+        col_widths = [0.07, 0.38, 0.10, 0.16, 0.29]
 
         # Header row
         st.markdown('<div class="picker-row header">', unsafe_allow_html=True)
