@@ -243,7 +243,7 @@ st.set_page_config(
     page_title="H-Town TX Finds: ROI Engine",
     page_icon="🛰️",
     layout="wide",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="expanded",
 )
 
 # --- MOBILE-RESPONSIVE CSS ---
@@ -484,39 +484,32 @@ def run_async(coro):
 st.title("🛰️ Auction Intelligence Dashboard")
 st.markdown("Automated sourcing and risk-assessment for H-Town TX Finds.")
 
-# --- Top-of-page controls (formerly the left sidebar) ---
-# The sidebar pushed the main content around when resizing the window, so
-# both panels now live as expanders directly under the title. Sourcing
-# starts open because users typically tweak it before each run; Memory
-# stays collapsed since it's a less-frequent peek.
-with st.expander("📍 Sourcing", expanded=True):
-    sc_a, sc_b = st.columns(2)
-    with sc_a:
-        user_zip = st.text_input("Home Zip Code", value="77058")
-        radius = st.slider("Local Pickup Radius (mi)", 5, 100, 20)
-        include_nationwide = st.checkbox(
-            "Include Nationwide (Ship-to-Me)", value=True,
-        )
-    with sc_b:
-        closing_days = st.slider("Closing Within (days)", 1, 30, 1)
-        category_filter = st.multiselect(
-            "🏷️ Categories (optional)",
-            options=sorted(set(st.session_state.known_categories)),
-            placeholder="All categories",
-            help=(
-                "Only keep lots whose category matches any selected term "
-                "(substring, case-insensitive). Saves time in Phase 2 by "
-                "dropping irrelevant items. Leave blank to fetch everything."
-            ),
-        )
+# --- SIDEBAR CONTROLS ---
+with st.sidebar:
+    st.header("📍 Sourcing")
+    user_zip = st.text_input("Home Zip Code", value="77058")
+    radius = st.slider("Local Pickup Radius (mi)", 5, 100, 20)
+    include_nationwide = st.checkbox("Include Nationwide (Ship-to-Me)", value=True)
+    closing_days = st.slider("Closing Within (days)", 1, 30, 1)
+
+    category_filter = st.multiselect(
+        "🏷️ Categories (optional)",
+        options=sorted(set(st.session_state.known_categories)),
+        placeholder="All categories",
+        help=(
+            "Only keep lots whose category matches any selected term (substring, "
+            "case-insensitive). Saves time in Phase 2 by dropping irrelevant items. "
+            "Leave blank to fetch everything."
+        ),
+    )
+
+    st.markdown("---")
 
     # --- Step 1: discover auction candidates (cheap — no per-lot fetch) ---
     discover_running = st.session_state.get('discover_running', False)
     fetch_lots_running = st.session_state.get('fetch_lots_running', False)
     any_running = discover_running or fetch_lots_running
 
-    # Label the button differently when we're sitting on restored-from-disk
-    # results, so the click reads as "refresh" rather than "start from zero".
     _restored_at = st.session_state.get('_discovery_restored_from')
     if discover_running:
         discover_label = "⏳ Discovering…"
@@ -556,7 +549,9 @@ with st.expander("📍 Sourcing", expanded=True):
             f"Click to refresh."
         )
 
-with st.expander("💾 Memory", expanded=False):
+    # --- Memory / Cache controls ---
+    st.markdown("---")
+    st.header("💾 Memory")
     cached_list = _AUCTION_CACHE.list_all(ttl_days=st.session_state.cache_ttl_days)
     fresh_count = sum(1 for c in cached_list if c['fresh'])
     st.caption(
