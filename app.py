@@ -364,6 +364,11 @@ if 'comps_exclude_hard' not in st.session_state:
     st.session_state.comps_exclude_hard = True
 if 'comps_only_img_promoted' not in st.session_state:
     st.session_state.comps_only_img_promoted = False
+if 'comps_chunk_size' not in st.session_state:
+    # Process eligible lots N at a time so the user can review the first
+    # N's results while the next batch runs. 200 is a sensible default —
+    # at 8 parallel workers a chunk takes ~1-2 minutes.
+    st.session_state.comps_chunk_size = 200
 if 'comps_use_auction_str' not in st.session_state:
     # When True, sample STR per-auction (3 lots each) instead of scraping
     # STR for every lot. Huge speedup for big auctions.
@@ -953,6 +958,10 @@ def _load_auction_for_analysis(auction_name, auction_df):
     st.session_state.selected_leads = auction_df.copy()
     st.session_state.current_auction = auction_name
     st.session_state.audit_results = {}
+    # Fresh auction → reset chunked-comps state so the first comps click
+    # starts a new run instead of trying to continue from the previous one.
+    st.session_state.pop('_comps_has_more', None)
+    st.session_state.pop('_comps_auction_str_map', None)
 
     # Consult disk cache, keyed by auction_id (pulled from auction_link or a
     # dedicated column if present)
@@ -1509,6 +1518,150 @@ def _run_ebay_comps(results_df):
     return combined, found, total
 
 
+# Comp columns that batch_lookup adds — used by the chunked variant to
+# initialize empty placeholders and merge per-chunk results back into the
+# accumulating audit_results DataFrame.
+_COMP_COLUMNS = (
+    'est_resale', 'price_low', 'price_high', 'comp_count',
+    'ebay_comps', 'mercari_comps', 'pricecharting_comps',
+    'price_source', 'ebay_str', 'str_source',
+)
+
+
+def _run_ebay_comps_chunk(audit_df, chunk_size: int = 200):
+    """Run price comps on the NEXT batch of eligible-but-uncomped lots.
+
+    Lets the user review earlier results while later chunks process.
+    Each call:
+      1. Identifies rows that are good (not red-flagged), pass the
+         pre-comps filters, AND don't yet have an est_resale value.
+      2. Runs comps on the first chunk_size of those.
+      3. Merges the chunk's comp columns back into the input df at
+         the original row indices.
+
+    Returns:
+        (updated_df, found_in_chunk, processed_in_chunk, has_more)
+
+    `has_more` is True when more eligible-uncomped rows remain after
+    this chunk — the caller surfaces a "Continue" button when so.
+    """
+    df = audit_df.copy().reset_index(drop=True)
+
+    # Initialize comp columns on first run so the .isna() check below
+    # can find rows that haven't been processed yet.
+    for col in _COMP_COLUMNS:
+        if col not in df.columns:
+            df[col] = None
+    if 'est_roi' not in df.columns:
+        df['est_roi'] = None
+
+    # "Pending" = good (not red-flagged) AND no est_resale yet.
+    not_red = (
+        ~df['red_flag'].fillna(False).astype(bool)
+        if 'red_flag' in df.columns
+        else pd.Series(True, index=df.index)
+    )
+    not_processed = df['est_resale'].isna()
+    pending_df = df[not_red & not_processed]
+
+    eligible_df, _skipped_df, filter_summary = _apply_comps_filters(pending_df)
+    total_pending = len(eligible_df)
+    if total_pending == 0:
+        return df, 0, 0, False
+
+    chunk = eligible_df.head(chunk_size).copy()
+    chunk_indices = chunk.index.tolist()  # original positions in df
+
+    from scraper.ebay_prices import EbayPriceLookup
+    from scraper.pricecharting import PriceChartingLookup
+    from scraper.config_loader import load_config
+    cfg = load_config()
+    pc_token = (cfg.get("pricecharting") or {}).get("token") or None
+    ebay = EbayPriceLookup(
+        cfg["ebay"]["app_id"], cfg["ebay"]["cert_id"],
+        pricecharting=PriceChartingLookup(pc_token),
+    )
+
+    label = f"💰 Comping next {len(chunk)} of {total_pending} pending lot(s)…"
+    with st.status(label, expanded=True) as status:
+        st.caption(f"Filters applied — {filter_summary}")
+
+        # STR sampling — cache the auction-level map across chunks so
+        # we don't re-scrape it every batch. Only sample once per fetch.
+        auction_str_map = st.session_state.get('_comps_auction_str_map')
+        if (
+            auction_str_map is None
+            and st.session_state.get('comps_use_auction_str', True)
+            and 'auction' in chunk.columns
+        ):
+            # Sample over the FULL eligible pending pool (not just chunk)
+            # so the per-category buckets reflect the whole auction.
+            all_eligible = pd.concat([eligible_df], ignore_index=False)
+            buckets = (
+                all_eligible.groupby([
+                    'auction',
+                    all_eligible['category'].fillna('').replace('', '(uncategorized)')
+                ]).ngroups
+                if 'category' in all_eligible.columns
+                else all_eligible['auction'].nunique()
+            )
+            st.write(f"📈 Sampling STR across {buckets} category bucket(s) (one-time per fetch).")
+            str_progress = st.progress(0)
+            def str_cb(current, total_buckets):
+                pct = current / total_buckets if total_buckets > 0 else 1.0
+                str_progress.progress(min(pct, 1.0),
+                                      text=f"Sampled STR for {current}/{total_buckets}…")
+            auction_str_map = ebay.sample_auction_str(
+                all_eligible, sample_size=2,
+                progress_callback=str_cb, granularity="category",
+            )
+            st.session_state._comps_auction_str_map = auction_str_map
+
+        st.write(f"🔗 Looking up sold prices for {len(chunk)} lots in this batch.")
+        progress_bar = st.progress(0)
+        current_item = st.empty()
+
+        def price_cb(current, total_items, title_preview=""):
+            pct = current / total_items if total_items > 0 else 1.0
+            progress_bar.progress(min(pct, 1.0),
+                                  text=f"Priced {current}/{total_items}…")
+            if title_preview:
+                current_item.caption(f"🔎 Just priced: *{title_preview}*")
+
+        chunk_with_comps = ebay.batch_lookup(
+            chunk,
+            progress_callback=price_cb,
+            auction_str_map=auction_str_map,
+            max_workers=int(st.session_state.get('comps_workers', 8)),
+        )
+
+        # Merge comp columns from chunk back into df at the original
+        # row indices. .values bypasses index alignment (chunk_with_comps
+        # was reset to 0..n-1 inside batch_lookup).
+        for col in _COMP_COLUMNS:
+            if col in chunk_with_comps.columns:
+                df.loc[chunk_indices, col] = chunk_with_comps[col].values
+
+        # Recompute ROI on every row that now has resale + cost.
+        cost_col = pd.to_numeric(df.get('est_cost'), errors='coerce')
+        resale_col = pd.to_numeric(df.get('est_resale'), errors='coerce')
+        has_data = resale_col.notna() & cost_col.gt(0)
+        df.loc[has_data, 'est_roi'] = (
+            (resale_col[has_data] - cost_col[has_data]) / cost_col[has_data] * 100
+        ).round(0)
+
+        found = int(chunk_with_comps['est_resale'].notna().sum())
+        has_more = total_pending > len(chunk)
+        status.update(
+            label=f"✅ Batch complete — {found}/{len(chunk)} priced "
+                  f"({total_pending - len(chunk)} still pending)" if has_more
+                  else f"✅ All chunks complete — {found}/{len(chunk)} priced in final batch",
+            state="complete", expanded=False,
+        )
+
+    return df, found, len(chunk), has_more
+
+
 def _compute_max_bid(df, target_roi_val):
     """Back out the max bid that still hits target_roi_val × cost.
 
@@ -1981,6 +2134,15 @@ if current_auction and not st.session_state.selected_leads.empty:
                          "suspect rate-limiting; push to 12-16 on a fast "
                          "connection.",
                 )
+                st.slider(
+                    "Comp batch size",
+                    min_value=50, max_value=1000, step=50,
+                    key="comps_chunk_size",
+                    help="Process eligible lots N at a time so you can "
+                         "review the first N's results while the next "
+                         "batch runs. After each batch, a 'Continue' "
+                         "button appears if more pending lots remain.",
+                )
 
             # Live preview of how many lots will actually be comped
             try:
@@ -1992,7 +2154,22 @@ if current_auction and not st.session_state.selected_leads.empty:
             except Exception:
                 pass
 
-        comps_btn_label = "⏳ Running price comps…" if comps_running else "💰 Run Price Comps on Filtered Items"
+        # Decide which button label to show. The first chunk uses
+        # "Run Price Comps"; subsequent chunks use "Continue with next
+        # batch". `_comps_has_more` is set after each chunk completes.
+        chunk_size = int(st.session_state.get('comps_chunk_size', 200))
+        has_more = st.session_state.get('_comps_has_more', False)
+        any_comped = (
+            'est_resale' in ar.columns
+            and ar['est_resale'].notna().any()
+        )
+        if comps_running:
+            comps_btn_label = "⏳ Running price comps…"
+        elif any_comped and has_more:
+            comps_btn_label = f"➡️ Continue with next {chunk_size} lot(s)"
+        else:
+            comps_btn_label = f"💰 Run Price Comps (first {chunk_size} lot(s))"
+
         if st.button(
             comps_btn_label,
             type="primary",
@@ -2011,10 +2188,28 @@ if current_auction and not st.session_state.selected_leads.empty:
                 "display settings before kicking off long runs."
             )
             try:
-                combined, found, total = _run_ebay_comps(ar)
-                st.session_state.audit_results = combined
+                # First chunk on a fresh auction? Reset the cached STR
+                # map so we re-sample for the new auction.
+                if not any_comped:
+                    st.session_state.pop('_comps_auction_str_map', None)
+                updated, found, processed, has_more = _run_ebay_comps_chunk(
+                    ar, chunk_size=chunk_size,
+                )
+                st.session_state.audit_results = updated
+                st.session_state._comps_has_more = has_more
                 _save_current_auction_to_cache()
-                st.success(f"Found price comps for {found}/{total} good+ leads.")
+                if processed:
+                    st.success(
+                        f"Batch complete — priced {found}/{processed} lot(s)."
+                        + ("  More lots remain — click again to continue."
+                           if has_more else
+                           "  ✅ All eligible lots have been comped.")
+                    )
+                else:
+                    st.warning(
+                        "No eligible lots remain to comp. Loosen filters or "
+                        "fetch a different auction."
+                    )
             except Exception as e:
                 st.error(f"Price comps failed: {e}")
             finally:
