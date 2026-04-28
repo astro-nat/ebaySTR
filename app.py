@@ -2176,33 +2176,6 @@ elif st.session_state.get('auction_candidates') and st.session_state.phase1_lead
 
     fetch_lots_running = st.session_state.get('fetch_lots_running', False)
 
-    # --- Selection state (single source of truth, keyed by auction_id) ---
-    # Avoids st.data_editor's "lose-all-edits" footgun when the underlying
-    # DataFrame changes (e.g. after filter changes or re-sort). Picks
-    # survive any rerender because they live in session_state.
-    if '_picked_auction_ids' not in st.session_state:
-        st.session_state._picked_auction_ids = set()
-    picked: set = st.session_state._picked_auction_ids
-
-    all_ids = set(shown['auction_id'].tolist())
-    # Drop any ids no longer in candidates (e.g. after re-discovery)
-    picked &= set(picker_df['auction_id'].tolist())
-
-    # --- Bulk actions row ---
-    ac1, ac2 = st.columns([1, 1])
-    with ac1:
-        if st.button("✅ Select all shown", use_container_width=True,
-                     disabled=fetch_lots_running):
-            picked |= all_ids
-            st.session_state._picked_auction_ids = picked
-            st.rerun()
-    with ac2:
-        if st.button("⬜ Deselect all shown", use_container_width=True,
-                     disabled=fetch_lots_running):
-            picked -= all_ids
-            st.session_state._picked_auction_ids = picked
-            st.rerun()
-
     # --- Picker UI: card list ---
     # Streamlit's data_editor is a canvas grid that truncates long names
     # with no cell-wrap. We mimic a table with st.columns: every row uses
@@ -2321,14 +2294,13 @@ elif st.session_state.get('auction_candidates') and st.session_state.phase1_lead
 
         # Same column proportions for every row so they line up like a
         # table. Auction name gets the lion's share so long titles wrap
-        # in place rather than overflowing. The Pick column is wide enough
-        # to fit the header text "Pick" plus the checkbox without wrapping.
-        col_widths = [0.07, 0.38, 0.10, 0.16, 0.29]
+        # in place rather than overflowing.
+        col_widths = [0.10, 0.35, 0.10, 0.16, 0.29]
 
         # Header row
         st.markdown('<div class="picker-row header">', unsafe_allow_html=True)
         h = st.columns(col_widths)
-        h[0].markdown("**Pick**")
+        h[0].markdown("**Action**")
         h[1].markdown("**Auction**")
         h[2].markdown("**Items**")
         h[3].markdown("**Closes**")
@@ -2337,17 +2309,20 @@ elif st.session_state.get('auction_candidates') and st.session_state.phase1_lead
 
         for _, row in shown.iterrows():
             aid = row['auction_id']
-            is_picked = aid in picked
             st.markdown('<div class="picker-row">', unsafe_allow_html=True)
-            ck, name_c, items_c, closes_c, summary_c = st.columns(col_widths)
-            with ck:
-                new_state = st.checkbox(
-                    "pick",
-                    value=is_picked,
-                    key=f"pick_compact_{aid}",
-                    label_visibility="collapsed",
+            btn_c, name_c, items_c, closes_c, summary_c = st.columns(col_widths)
+            with btn_c:
+                if st.button(
+                    "🎯 Analyze",
+                    key=f"analyze_btn_{aid}",
+                    use_container_width=True,
                     disabled=fetch_lots_running,
-                )
+                    help="Deep-scan this auction: pull every lot, "
+                         "filter, run resale comps and STR.",
+                ):
+                    st.session_state._selected_auction_ids = [aid]
+                    st.session_state.fetch_lots_running = True
+                    st.rerun()
             name_c.markdown(f"**{row['name']}**")
             items_c.markdown(
                 f'<span class="cell-label">Items: </span>{int(row["items"]):,}',
@@ -2359,37 +2334,6 @@ elif st.session_state.get('auction_candidates') and st.session_state.phase1_lead
             )
             summary_c.markdown(row['summary'] or "—")
             st.markdown('</div>', unsafe_allow_html=True)
-            if new_state and not is_picked:
-                picked.add(aid)
-            elif not new_state and is_picked:
-                picked.discard(aid)
-
-        st.session_state._picked_auction_ids = picked
-
-    selected_ids = picked  # everything picked across all filters
-    selected_item_total = int(
-        picker_df.loc[picker_df['auction_id'].isin(selected_ids), 'items'].sum()
-    ) if selected_ids else 0
-
-    st.markdown("---")
-    sc1, sc2 = st.columns([1, 2])
-    with sc1:
-        st.metric("Selected", f"{len(selected_ids)} auctions")
-    with sc2:
-        st.metric("Items to scan", f"≈{selected_item_total:,}")
-
-    fetch_disabled = len(selected_ids) == 0 or fetch_lots_running
-    fetch_label = "⏳ Fetching lots…" if fetch_lots_running else (
-        f"📥 Fetch items from {len(selected_ids)} selected auction(s)"
-        if selected_ids else "📥 Select at least one auction"
-    )
-    if st.button(
-        fetch_label, type="primary", use_container_width=True,
-        disabled=fetch_disabled, key="fetch_lots_btn",
-    ):
-        st.session_state._selected_auction_ids = list(selected_ids)
-        st.session_state.fetch_lots_running = True
-        st.rerun()
 
     # Sampling + fetch-lots work blocks run at the TOP of the main viewport
     # (see the "WORK BLOCKS" section below the title) so progress is always
