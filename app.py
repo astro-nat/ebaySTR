@@ -2237,6 +2237,17 @@ elif st.session_state.get('auction_candidates') and st.session_state.phase1_lead
             .picker-row strong { font-weight: 600; }
             .picker-row.header { border-bottom: 2px solid rgba(255,255,255,0.18); }
             .picker-row.header strong { white-space: nowrap; }
+            /* Override the global mobile CSS that wraps columns at <960px.
+               Picker rows must stay horizontal — the table-style alignment
+               is the whole point. min-width:0 lets cells shrink to fit
+               (the page-wide 48% rule was stacking everything vertically). */
+            .picker-row [data-testid="stHorizontalBlock"] {
+                flex-wrap: nowrap !important;
+            }
+            .picker-row [data-testid="stColumn"] {
+                flex: 1 1 0% !important;
+                min-width: 0 !important;
+            }
             </style>
             """,
             unsafe_allow_html=True,
