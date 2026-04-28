@@ -2237,16 +2237,51 @@ elif st.session_state.get('auction_candidates') and st.session_state.phase1_lead
             .picker-row strong { font-weight: 600; }
             .picker-row.header { border-bottom: 2px solid rgba(255,255,255,0.18); }
             .picker-row.header strong { white-space: nowrap; }
-            /* Override the global mobile CSS that wraps columns at <960px.
-               Picker rows must stay horizontal — the table-style alignment
-               is the whole point. min-width:0 lets cells shrink to fit
-               (the page-wide 48% rule was stacking everything vertically). */
+
+            /* Inline labels appear only on mobile so stacked cells make
+               sense without a header row. Hidden on desktop where the
+               column header already labels each cell. */
+            .cell-label { display: none; opacity: 0.55; font-size: 0.85em; }
+
+            /* DESKTOP / TABLET: 5 columns side-by-side. Override the
+               global mobile-CSS wrap rule that would otherwise stack. */
             .picker-row [data-testid="stHorizontalBlock"] {
                 flex-wrap: nowrap !important;
             }
             .picker-row [data-testid="stColumn"] {
                 flex: 1 1 0% !important;
                 min-width: 0 !important;
+            }
+
+            /* MOBILE: stack into card form. Checkbox + name on first
+               line, items/closes/summary below indented under the name.
+               Header row is hidden — inline labels show instead. */
+            @media (max-width: 640px) {
+                .picker-row.header { display: none !important; }
+                .cell-label { display: inline; }
+
+                .picker-row [data-testid="stHorizontalBlock"] {
+                    flex-wrap: wrap !important;
+                }
+                /* Pick column: narrow, stays at the left */
+                .picker-row [data-testid="stColumn"]:nth-child(1) {
+                    flex: 0 0 36px !important;
+                    min-width: 36px !important;
+                    max-width: 36px !important;
+                }
+                /* Name column: takes the rest of the first line */
+                .picker-row [data-testid="stColumn"]:nth-child(2) {
+                    flex: 1 1 calc(100% - 40px) !important;
+                    min-width: calc(100% - 40px) !important;
+                }
+                /* Items / Closes / Summary: each on its own line, indented */
+                .picker-row [data-testid="stColumn"]:nth-child(n+3) {
+                    flex: 1 1 100% !important;
+                    min-width: 100% !important;
+                    padding-left: 40px !important;
+                    font-size: 0.92em;
+                    opacity: 0.9;
+                }
             }
             </style>
             """,
@@ -2283,8 +2318,14 @@ elif st.session_state.get('auction_candidates') and st.session_state.phase1_lead
                     disabled=fetch_lots_running,
                 )
             name_c.markdown(f"**{row['name']}**")
-            items_c.markdown(f"{int(row['items']):,}")
-            closes_c.markdown(row['closes'] or "—")
+            items_c.markdown(
+                f'<span class="cell-label">Items: </span>{int(row["items"]):,}',
+                unsafe_allow_html=True,
+            )
+            closes_c.markdown(
+                f'<span class="cell-label">Closes: </span>{row["closes"] or "—"}',
+                unsafe_allow_html=True,
+            )
             summary_c.markdown(row['summary'] or "—")
             st.markdown('</div>', unsafe_allow_html=True)
             if new_state and not is_picked:
