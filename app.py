@@ -2252,6 +2252,22 @@ elif st.session_state.get('auction_candidates') and st.session_state.phase1_lead
                 margin-bottom: 0 !important;
                 margin-top: 0 !important;
             }
+            /* The real reason rows still look tall: long auction names
+               and verbose summaries wrap to 3-4 lines and each row
+               stretches to match the tallest cell. Clamp any cell text
+               to 2 lines max via -webkit-line-clamp. Applied globally
+               to stColumn markdown text since .picker-row can't be a
+               CSS parent (markdown-emitted divs are siblings of the
+               column blocks, not ancestors). Most other column-based
+               layouts in this app render short text or non-text widgets,
+               so the global clamp is fine. */
+            [data-testid="stColumn"] [data-testid="stMarkdown"] p {
+                display: -webkit-box !important;
+                -webkit-line-clamp: 2;
+                -webkit-box-orient: vertical;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
 
             /* Inline labels appear only on mobile so stacked cells make
                sense without a header row. Hidden on desktop where the
