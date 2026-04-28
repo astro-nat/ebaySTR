@@ -1,6 +1,7 @@
 import asyncio
 import httpx
 import pandas as pd
+import random
 import re
 import json
 import os
@@ -495,7 +496,11 @@ class Phase1Scraper:
                 "categories": [category_name, ...] — unique, sorted
                 "cat_counts": {category_name: int} — counts within sample
                 "titles":     [lot lead, ...] up to sample_size
-                "thumbnail_url": str — first lot's thumbnail (auction "cover")
+                "thumbnail_urls": [str, ...] — up to 4 random lot images,
+                                  used to build a 2x2 grid preview in the
+                                  picker. Random sampling gives a more
+                                  representative feel of "what's inside"
+                                  than always showing lot 1.
             }
 
         Kept backward-compat: callers that previously received a plain
@@ -506,7 +511,10 @@ class Phase1Scraper:
         # `pageIndex`/`pageSize` form was removed by HiBid; using it here
         # silently failed and made the preview column blank.
         variables = {"auctionId": auction_id, "pageNumber": 1}
-        empty = {"categories": [], "cat_counts": {}, "titles": [], "thumbnail_url": ""}
+        empty = {
+            "categories": [], "cat_counts": {}, "titles": [],
+            "thumbnail_urls": [],
+        }
         try:
             data = await self._graphql(client, "LotSearch", LOT_SEARCH_QUERY, variables)
         except Exception:
@@ -518,7 +526,11 @@ class Phase1Scraper:
 
         cat_counts: Dict[str, int] = {}
         titles: List[str] = []
-        thumbnail_url = ""
+        # Collect every available picture URL across the sampled lots, then
+        # pick 4 at random to surface in the grid. This gives the user a
+        # better feel for the variety in an auction than always showing
+        # the first lot's image.
+        candidate_thumbs: List[str] = []
         for lot in lots:
             name = self._extract_category_name(lot.get('category'))
             if name:
@@ -526,24 +538,29 @@ class Phase1Scraper:
             lead = (lot.get('lead') or '').strip()
             if lead:
                 titles.append(lead)
-            # Use the first lot with a picture as the auction's "cover"
-            # image. HiBid's lot 1 is usually a representative or featured
-            # piece, so this doubles as a decent visual identifier.
-            if not thumbnail_url:
-                pictures = lot.get('pictures') or []
-                if pictures:
-                    first = pictures[0] or {}
-                    thumbnail_url = (
-                        first.get('hdThumbnailLocation')
-                        or first.get('thumbnailLocation')
-                        or ''
-                    )
+            for pic in (lot.get('pictures') or []):
+                if not pic:
+                    continue
+                url = (
+                    pic.get('hdThumbnailLocation')
+                    or pic.get('thumbnailLocation')
+                    or ''
+                )
+                if url:
+                    candidate_thumbs.append(url)
+                    break  # one image per lot — keep the grid varied
+
+        # Random sample of up to 4 — random.sample handles "fewer than 4"
+        # by capping at the available count, so this never raises.
+        thumbnail_urls = random.sample(
+            candidate_thumbs, k=min(4, len(candidate_thumbs))
+        ) if candidate_thumbs else []
 
         return {
             "categories": sorted(cat_counts.keys()),
             "cat_counts": cat_counts,
             "titles": titles,
-            "thumbnail_url": thumbnail_url,
+            "thumbnail_urls": thumbnail_urls,
         }
 
     async def sample_categories_batch(
@@ -573,12 +590,12 @@ class Phase1Scraper:
                         # Backward compat if an override returns the old shape
                         out[a['auction_id']] = {
                             "categories": r, "cat_counts": {}, "titles": [],
-                            "thumbnail_url": "",
+                            "thumbnail_urls": [],
                         }
                     else:
                         out[a['auction_id']] = {
                             "categories": [], "cat_counts": {}, "titles": [],
-                            "thumbnail_url": "",
+                            "thumbnail_urls": [],
                         }
                 if progress_callback:
                     progress_callback(
