@@ -2237,7 +2237,20 @@ elif st.session_state.get('auction_candidates') and st.session_state.phase1_lead
             }
             [data-testid="stColumn"] [data-testid="stMarkdown"] p {
                 margin: 0 !important;
-                line-height: 1.35 !important;
+                line-height: 1.3 !important;
+            }
+            /* Streamlit also pads each stColumn and the surrounding
+               stHorizontalBlock by default, which adds another chunk
+               of vertical space per row. Crush both. The flex gap=0
+               between rows means consecutive picker rows sit flush
+               against each other separated only by the 1px border. */
+            [data-testid="stColumn"] {
+                padding-top: 0 !important;
+                padding-bottom: 0 !important;
+            }
+            [data-testid="stHorizontalBlock"] {
+                margin-bottom: 0 !important;
+                margin-top: 0 !important;
             }
 
             /* Inline labels appear only on mobile so stacked cells make
