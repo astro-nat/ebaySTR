@@ -25,9 +25,10 @@ _AUCTION_CACHE = AuctionCache()
 _DISCOVERY_CACHE_PATH = Path(".cache") / "last_discovery.pkl"
 _DISCOVERY_CACHE_TTL = timedelta(hours=24)
 # Bump this when the cached payload shape changes — old caches are silently
-# discarded so users don't have to delete the file by hand. Current schema
-# adds `thumbnail_url` to each category_samples entry.
-_DISCOVERY_CACHE_VERSION = 2
+# discarded so users don't have to delete the file by hand. v3 swaps the
+# single `thumbnail_url` for a `thumbnail_urls` list (up to 4 random lot
+# images for a 2x2 preview grid).
+_DISCOVERY_CACHE_VERSION = 3
 
 
 def _save_cached_discovery(candidates, sourcing_cfg, category_samples=None):
@@ -2057,7 +2058,7 @@ elif st.session_state.get('auction_candidates') and st.session_state.phase1_lead
         if isinstance(raw_sample, list):
             sample_payload = {
                 "categories": raw_sample, "cat_counts": {}, "titles": [],
-                "thumbnail_url": "",
+                "thumbnail_urls": [],
             }
         elif isinstance(raw_sample, dict):
             sample_payload = raw_sample
@@ -2066,7 +2067,11 @@ elif st.session_state.get('auction_candidates') and st.session_state.phase1_lead
 
         cats = (sample_payload or {}).get("categories") or []
         cat_preview = ", ".join(cats[:6]) + (f" (+{len(cats) - 6})" if len(cats) > 6 else "")
-        thumbnail_url = (sample_payload or {}).get("thumbnail_url") or ""
+        # Back-compat: v2 cache had a single `thumbnail_url`; v3 has a list.
+        thumbnail_urls = (sample_payload or {}).get("thumbnail_urls")
+        if not thumbnail_urls:
+            single = (sample_payload or {}).get("thumbnail_url") or ""
+            thumbnail_urls = [single] if single else []
 
         # Auto-generated blurb: "450 lots · Mostly Tools (40%), Kitchen (25%) ·
         # Examples: Craftsman drill press, KitchenAid mixer, Oak dining table"
@@ -2121,7 +2126,7 @@ elif st.session_state.get('auction_candidates') and st.session_state.phase1_lead
             "closes_dt": closes_dt,
             "categories_sampled": cat_preview or ("—" if aid in cat_samples else "(not sampled)"),
             "summary": summary,
-            "thumbnail_url": thumbnail_url,
+            "thumbnail_urls": thumbnail_urls,
             "auction_link": f"https://hibid.com/auction/{aid}",
         })
     picker_df = pd.DataFrame(rows)
@@ -2222,18 +2227,41 @@ elif st.session_state.get('auction_candidates') and st.session_state.phase1_lead
             # narrow viewports the existing mobile CSS wraps columns and
             # blows up any container-bound element. Fixed pixel dimensions
             # keep the image bounded no matter how the columns reflow.
-            img_col, info_col = st.columns([0.18, 0.82])
+            img_col, info_col = st.columns([0.22, 0.78])
             with img_col:
-                thumb = row.get('thumbnail_url') or ''
-                if thumb:
-                    st.image(thumb, width=110)
+                thumbs = row.get('thumbnail_urls') or []
+                if thumbs:
+                    # Render up to 4 thumbnails as a 2x2 grid via inline
+                    # CSS — st.columns nested here doesn't work well at
+                    # narrow viewports. Each tile is 65x65 with
+                    # object-fit:cover so images of any aspect ratio
+                    # square-crop cleanly. Total grid: ~140x140 px.
+                    tiles = "".join(
+                        f"<img src='{u}' style='width:100%;height:65px;"
+                        f"object-fit:cover;border-radius:4px;"
+                        f"background:#1e1e1e;' loading='lazy'>"
+                        for u in thumbs[:4]
+                    )
+                    # Pad with empty placeholders if fewer than 4 so the
+                    # grid stays a clean square shape.
+                    while tiles.count("<img") < 4:
+                        tiles += (
+                            "<div style='width:100%;height:65px;"
+                            "background:#1e1e1e;border-radius:4px;'></div>"
+                        )
+                    st.markdown(
+                        f"<div style='display:grid;"
+                        f"grid-template-columns:1fr 1fr;gap:3px;"
+                        f"width:140px;'>{tiles}</div>",
+                        unsafe_allow_html=True,
+                    )
                 else:
                     st.markdown(
-                        "<div style='width:110px;height:110px;"
+                        "<div style='width:140px;height:140px;"
                         "background:#1e1e1e;border-radius:6px;"
                         "display:flex;align-items:center;justify-content:"
                         "center;color:#666;font-size:11px;'>"
-                        "no image</div>",
+                        "no images</div>",
                         unsafe_allow_html=True,
                     )
             with info_col:
