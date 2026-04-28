@@ -25,10 +25,10 @@ _AUCTION_CACHE = AuctionCache()
 _DISCOVERY_CACHE_PATH = Path(".cache") / "last_discovery.pkl"
 _DISCOVERY_CACHE_TTL = timedelta(hours=24)
 # Bump this when the cached payload shape changes — old caches are silently
-# discarded so users don't have to delete the file by hand. v3 swaps the
-# single `thumbnail_url` for a `thumbnail_urls` list (up to 4 random lot
-# images for a 2x2 preview grid).
-_DISCOVERY_CACHE_VERSION = 3
+# discarded so users don't have to delete the file by hand. v4 drops the
+# thumbnail_urls field (rendering 4 images per card across 200+ auctions
+# was too slow to load); images are now reserved for the lot-results table.
+_DISCOVERY_CACHE_VERSION = 4
 
 
 def _save_cached_discovery(candidates, sourcing_cfg, category_samples=None):
@@ -1635,8 +1635,18 @@ def _render_results_table(results_df):
 
     # Columns
     title_col = 'enriched_title' if 'enriched_title' in filtered_df.columns else 'title'
-    display_cols = [title_col, 'lot_link', 'auction_link', 'category', 'current_bid', 'est_cost']
+    # Lead with the lot thumbnail when we have one — Streamlit's ImageColumn
+    # renders the URL inline so the user can scan visually before reading.
+    display_cols = []
+    if 'thumbnail_url' in filtered_df.columns:
+        display_cols.append('thumbnail_url')
+    display_cols += [title_col, 'lot_link', 'auction_link', 'category', 'current_bid', 'est_cost']
     col_config = {
+        "thumbnail_url": st.column_config.ImageColumn(
+            "📷",
+            help="Lot photo from HiBid (click to enlarge).",
+            width="small",
+        ),
         "enriched_title": st.column_config.TextColumn("Title (Enriched)"),
         "lot_link": st.column_config.LinkColumn("Item", display_text="Open"),
         "auction_link": st.column_config.LinkColumn("Auction", display_text="Open"),
@@ -2058,7 +2068,6 @@ elif st.session_state.get('auction_candidates') and st.session_state.phase1_lead
         if isinstance(raw_sample, list):
             sample_payload = {
                 "categories": raw_sample, "cat_counts": {}, "titles": [],
-                "thumbnail_urls": [],
             }
         elif isinstance(raw_sample, dict):
             sample_payload = raw_sample
@@ -2067,11 +2076,6 @@ elif st.session_state.get('auction_candidates') and st.session_state.phase1_lead
 
         cats = (sample_payload or {}).get("categories") or []
         cat_preview = ", ".join(cats[:6]) + (f" (+{len(cats) - 6})" if len(cats) > 6 else "")
-        # Back-compat: v2 cache had a single `thumbnail_url`; v3 has a list.
-        thumbnail_urls = (sample_payload or {}).get("thumbnail_urls")
-        if not thumbnail_urls:
-            single = (sample_payload or {}).get("thumbnail_url") or ""
-            thumbnail_urls = [single] if single else []
 
         # Auto-generated blurb: "450 lots · Mostly Tools (40%), Kitchen (25%) ·
         # Examples: Craftsman drill press, KitchenAid mixer, Oak dining table"
@@ -2126,7 +2130,6 @@ elif st.session_state.get('auction_candidates') and st.session_state.phase1_lead
             "closes_dt": closes_dt,
             "categories_sampled": cat_preview or ("—" if aid in cat_samples else "(not sampled)"),
             "summary": summary,
-            "thumbnail_urls": thumbnail_urls,
             "auction_link": f"https://hibid.com/auction/{aid}",
         })
     picker_df = pd.DataFrame(rows)
@@ -2227,62 +2230,24 @@ elif st.session_state.get('auction_candidates') and st.session_state.phase1_lead
             # narrow viewports the existing mobile CSS wraps columns and
             # blows up any container-bound element. Fixed pixel dimensions
             # keep the image bounded no matter how the columns reflow.
-            img_col, info_col = st.columns([0.22, 0.78])
-            with img_col:
-                thumbs = row.get('thumbnail_urls') or []
-                if thumbs:
-                    # Render up to 4 thumbnails as a 2x2 grid via inline
-                    # CSS — st.columns nested here doesn't work well at
-                    # narrow viewports. Each tile is 65x65 with
-                    # object-fit:cover so images of any aspect ratio
-                    # square-crop cleanly. Total grid: ~140x140 px.
-                    tiles = "".join(
-                        f"<img src='{u}' style='width:100%;height:65px;"
-                        f"object-fit:cover;border-radius:4px;"
-                        f"background:#1e1e1e;' loading='lazy'>"
-                        for u in thumbs[:4]
-                    )
-                    # Pad with empty placeholders if fewer than 4 so the
-                    # grid stays a clean square shape.
-                    while tiles.count("<img") < 4:
-                        tiles += (
-                            "<div style='width:100%;height:65px;"
-                            "background:#1e1e1e;border-radius:4px;'></div>"
-                        )
-                    st.markdown(
-                        f"<div style='display:grid;"
-                        f"grid-template-columns:1fr 1fr;gap:3px;"
-                        f"width:140px;'>{tiles}</div>",
-                        unsafe_allow_html=True,
-                    )
-                else:
-                    st.markdown(
-                        "<div style='width:140px;height:140px;"
-                        "background:#1e1e1e;border-radius:6px;"
-                        "display:flex;align-items:center;justify-content:"
-                        "center;color:#666;font-size:11px;'>"
-                        "no images</div>",
-                        unsafe_allow_html=True,
-                    )
+            ck_col, info_col = st.columns([0.08, 0.92])
+            with ck_col:
+                new_state = st.checkbox(
+                    "pick",
+                    value=is_picked,
+                    key=f"pick_compact_{aid}",
+                    label_visibility="collapsed",
+                    disabled=fetch_lots_running,
+                )
             with info_col:
-                ck_col, txt_col = st.columns([0.08, 0.92])
-                with ck_col:
-                    new_state = st.checkbox(
-                        "pick",
-                        value=is_picked,
-                        key=f"pick_compact_{aid}",
-                        label_visibility="collapsed",
-                        disabled=fetch_lots_running,
-                    )
-                with txt_col:
-                    items_str = f"**{int(row['items']):,}** items"
-                    closes_str = row['closes'] or '(close time TBD)'
-                    summary_text = row['summary'] or '—'
-                    st.markdown(
-                        f"**{row['name']}**  \n"
-                        f"{items_str} · {closes_str}  \n"
-                        f"{summary_text}"
-                    )
+                items_str = f"**{int(row['items']):,}** items"
+                closes_str = row['closes'] or '(close time TBD)'
+                summary_text = row['summary'] or '—'
+                st.markdown(
+                    f"**{row['name']}**  \n"
+                    f"{items_str} · {closes_str}  \n"
+                    f"{summary_text}"
+                )
             if new_state and not is_picked:
                 picked.add(aid)
             elif not new_state and is_picked:
