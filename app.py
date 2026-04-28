@@ -308,16 +308,10 @@ button[data-baseweb="tab"] {
     }
 }
 
-/* ---- Mid-size tablets ---- */
-@media (max-width: 960px) {
-    [data-testid="stHorizontalBlock"] {
-        flex-wrap: wrap !important;
-    }
-    [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
-        flex: 1 1 48% !important;
-        min-width: 48% !important;
-    }
-}
+/* Removed: a global @media (max-width: 960px) block here used to wrap
+   every stHorizontalBlock to 48% min-width, which broke the picker
+   table at any narrow-but-not-mobile width. The <640px rule above
+   still handles real phones. */
 </style>
 """, unsafe_allow_html=True)
 
