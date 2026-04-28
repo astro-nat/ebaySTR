@@ -2220,12 +2220,25 @@ elif st.session_state.get('auction_candidates') and st.session_state.phase1_lead
             }
             .picker-row {
                 border-bottom: 1px solid rgba(255,255,255,0.08);
-                padding: 0.4rem 0;
+                padding: 0;
             }
-            .picker-row p { margin-bottom: 0.1rem !important; line-height: 1.35; }
             .picker-row strong { font-weight: 600; }
             .picker-row.header { border-bottom: 2px solid rgba(255,255,255,0.18); }
             .picker-row.header strong { white-space: nowrap; }
+
+            /* Crush the default vertical breathing room on markdown text
+               that sits inside any column on the page. Streamlit wraps
+               every st.markdown in <p> tags with default ~16px margins;
+               that's the main reason picker rows look tall. Scoping to
+               stColumn descendants keeps standalone st.markdown blocks
+               (page captions, info banners) untouched. */
+            [data-testid="stColumn"] [data-testid="stMarkdown"] {
+                margin-bottom: 0 !important;
+            }
+            [data-testid="stColumn"] [data-testid="stMarkdown"] p {
+                margin: 0 !important;
+                line-height: 1.35 !important;
+            }
 
             /* Inline labels appear only on mobile so stacked cells make
                sense without a header row. Hidden on desktop where the
