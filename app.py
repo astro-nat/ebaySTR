@@ -2215,23 +2215,53 @@ elif st.session_state.get('auction_candidates') and st.session_state.phase1_lead
             st.rerun()
 
     # --- Picker UI: card list ---
-    # Streamlit's data_editor is a canvas grid that truncates long names with
-    # no cell-wrap. We render each auction as a card (checkbox + wrapped
-    # markdown block) so titles and summaries flow naturally on any screen.
+    # Streamlit's data_editor is a canvas grid that truncates long names
+    # with no cell-wrap. We mimic a table with st.columns: every row uses
+    # the same column proportions so they align vertically like a real
+    # table, and titles wrap naturally without truncation. CSS shrinks
+    # the per-row gap and adds a subtle bottom border so rows are dense.
     if shown.empty:
         st.info("No auctions match the current filters.")
     else:
+        st.markdown(
+            """
+            <style>
+            div[data-testid="stVerticalBlock"]:has(> div.picker-row) {
+                gap: 0 !important;
+            }
+            .picker-row {
+                border-bottom: 1px solid rgba(255,255,255,0.08);
+                padding: 0.4rem 0;
+            }
+            .picker-row p { margin-bottom: 0.1rem !important; line-height: 1.35; }
+            .picker-row strong { font-weight: 600; }
+            .picker-row.header { border-bottom: 2px solid rgba(255,255,255,0.18); }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        # Same column proportions for every row so they line up like a
+        # table. Auction name gets the lion's share so long titles wrap
+        # in place rather than overflowing.
+        col_widths = [0.05, 0.40, 0.10, 0.16, 0.29]
+
+        # Header row
+        st.markdown('<div class="picker-row header">', unsafe_allow_html=True)
+        h = st.columns(col_widths)
+        h[0].markdown("**Pick**")
+        h[1].markdown("**Auction**")
+        h[2].markdown("**Items**")
+        h[3].markdown("**Closes**")
+        h[4].markdown("**What's in this auction**")
+        st.markdown('</div>', unsafe_allow_html=True)
+
         for _, row in shown.iterrows():
             aid = row['auction_id']
             is_picked = aid in picked
-            # Layout: two columns — small image on the left (fixed ~110px),
-            # everything else (checkbox + name + meta + summary) on the
-            # right. We don't use st.image's container-width because at
-            # narrow viewports the existing mobile CSS wraps columns and
-            # blows up any container-bound element. Fixed pixel dimensions
-            # keep the image bounded no matter how the columns reflow.
-            ck_col, info_col = st.columns([0.08, 0.92])
-            with ck_col:
+            st.markdown('<div class="picker-row">', unsafe_allow_html=True)
+            ck, name_c, items_c, closes_c, summary_c = st.columns(col_widths)
+            with ck:
                 new_state = st.checkbox(
                     "pick",
                     value=is_picked,
@@ -2239,20 +2269,16 @@ elif st.session_state.get('auction_candidates') and st.session_state.phase1_lead
                     label_visibility="collapsed",
                     disabled=fetch_lots_running,
                 )
-            with info_col:
-                items_str = f"**{int(row['items']):,}** items"
-                closes_str = row['closes'] or '(close time TBD)'
-                summary_text = row['summary'] or '—'
-                st.markdown(
-                    f"**{row['name']}**  \n"
-                    f"{items_str} · {closes_str}  \n"
-                    f"{summary_text}"
-                )
+            name_c.markdown(f"**{row['name']}**")
+            items_c.markdown(f"{int(row['items']):,}")
+            closes_c.markdown(row['closes'] or "—")
+            summary_c.markdown(row['summary'] or "—")
+            st.markdown('</div>', unsafe_allow_html=True)
             if new_state and not is_picked:
                 picked.add(aid)
             elif not new_state and is_picked:
                 picked.discard(aid)
-            st.divider()
+
         st.session_state._picked_auction_ids = picked
 
     selected_ids = picked  # everything picked across all filters
