@@ -242,7 +242,8 @@ def _build_category_filter(df, state_key: str = "category_group_picks"):
 st.set_page_config(
     page_title="H-Town TX Finds: ROI Engine",
     page_icon="🛰️",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="collapsed",
 )
 
 # --- MOBILE-RESPONSIVE CSS ---
@@ -485,27 +486,35 @@ def run_async(coro):
     asyncio.set_event_loop(loop)
     return loop.run_until_complete(coro)
 
-# --- SIDEBAR CONTROLS ---
-with st.sidebar:
-    st.header("📍 Sourcing")
-    user_zip = st.text_input("Home Zip Code", value="77058")
-    radius = st.slider("Local Pickup Radius (mi)", 5, 100, 20)
-    include_nationwide = st.checkbox("Include Nationwide (Ship-to-Me)", value=True)
-    closing_days = st.slider("Closing Within (days)", 1, 30, 1)
+# --- MAIN DASHBOARD UI ---
+st.title("🛰️ Auction Intelligence Dashboard")
+st.markdown("Automated sourcing and risk-assessment for H-Town TX Finds.")
 
-    category_filter = st.multiselect(
-        "🏷️ Categories (optional)",
-        options=sorted(set(st.session_state.known_categories)),
-        placeholder="All categories",
-        help=(
-            "Only keep lots whose category matches any selected term (substring, "
-            "case-insensitive). Saves time in Phase 2 by dropping irrelevant items. "
-            "Leave blank to fetch everything. The list grows with any new categories "
-            "seen in prior scrapes."
-        ),
-    )
-
-    st.markdown("---")
+# --- Top-of-page controls (formerly the left sidebar) ---
+# The sidebar pushed the main content around when resizing the window, so
+# both panels now live as expanders directly under the title. Sourcing
+# starts open because users typically tweak it before each run; Memory
+# stays collapsed since it's a less-frequent peek.
+with st.expander("📍 Sourcing", expanded=True):
+    sc_a, sc_b = st.columns(2)
+    with sc_a:
+        user_zip = st.text_input("Home Zip Code", value="77058")
+        radius = st.slider("Local Pickup Radius (mi)", 5, 100, 20)
+        include_nationwide = st.checkbox(
+            "Include Nationwide (Ship-to-Me)", value=True,
+        )
+    with sc_b:
+        closing_days = st.slider("Closing Within (days)", 1, 30, 1)
+        category_filter = st.multiselect(
+            "🏷️ Categories (optional)",
+            options=sorted(set(st.session_state.known_categories)),
+            placeholder="All categories",
+            help=(
+                "Only keep lots whose category matches any selected term "
+                "(substring, case-insensitive). Saves time in Phase 2 by "
+                "dropping irrelevant items. Leave blank to fetch everything."
+            ),
+        )
 
     # --- Step 1: discover auction candidates (cheap — no per-lot fetch) ---
     discover_running = st.session_state.get('discover_running', False)
@@ -531,8 +540,6 @@ with st.sidebar:
              "You'll then pick which ones are worth a deep scan. "
              "Successful runs are cached for 24h and auto-restored on reload.",
     ):
-        # Stash settings for the second-rerun work block so they survive
-        # the flag/rerun dance.
         st.session_state._sourcing_cfg = {
             "zip": user_zip,
             "radius": radius,
@@ -543,9 +550,6 @@ with st.sidebar:
         st.session_state.discover_running = True
         st.rerun()
 
-    # If we restored a recent discovery from disk, tell the user how old it
-    # is so they can decide whether to refresh. Keeps the reminder subtle —
-    # a caption under the button, not a banner.
     if _restored_at and not discover_running:
         _age = datetime.now() - _restored_at
         if _age.total_seconds() < 3600:
@@ -558,12 +562,7 @@ with st.sidebar:
             f"Click to refresh."
         )
 
-    # NOTE: the work block itself is rendered in the MAIN area (not here)
-    # so mobile users with the sidebar collapsed actually SEE the progress.
-
-    # --- Memory / Cache controls ---
-    st.markdown("---")
-    st.header("💾 Memory")
+with st.expander("💾 Memory", expanded=False):
     cached_list = _AUCTION_CACHE.list_all(ttl_days=st.session_state.cache_ttl_days)
     fresh_count = sum(1 for c in cached_list if c['fresh'])
     st.caption(
@@ -598,10 +597,6 @@ with st.sidebar:
         removed = _AUCTION_CACHE.clear_all()
         st.success(f"Cleared {removed} cached auction(s).")
         st.rerun()
-
-# --- MAIN DASHBOARD UI ---
-st.title("🛰️ Auction Intelligence Dashboard")
-st.markdown("Automated sourcing and risk-assessment for H-Town TX Finds.")
 
 # --- Surface any persisted discover/fetch status so errors don't vanish on rerun ---
 for _key, _tb_key, _label in (
