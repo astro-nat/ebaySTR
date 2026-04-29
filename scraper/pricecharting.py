@@ -47,14 +47,27 @@ _PC_TRIGGERS = [
     ]),
     # ---- TCGs / trading cards ----
     ("trading_card", [
+        # TCGs
         "pokemon", "pokémon", "pokemon card",
         "magic the gathering", " mtg ", "mtg booster",
         "yugioh", "yu-gi-oh", "yu gi oh",
         "trading card", " tcg ", "tcg booster",
         "booster pack", "booster box",
-        "psa graded", "psa 10", "psa 9", "bgs graded", "cgc graded",
-        "rookie card",
-        "panini", "topps chrome", "upper deck",
+        # Sports-card brand names — matched as space-padded tokens so
+        # they don't false-match unrelated words. Most sports-card lots
+        # carry the brand somewhere in the title.
+        " topps ", " bowman ", " donruss ", " fleer ", " panini ",
+        " upper deck ", " stadium club ", " prizm ",
+        " select baseball ", " select football ", " select basketball ",
+        # Grading callouts (any grade — these are unique to graded cards)
+        " psa ", " bgs ", " sgc ", " cgc ",
+        "psa 10", "psa 9", "bgs graded", "psa graded", "cgc graded",
+        # Rookie card markers — "rookie" alone is too broad ("rookie
+        # season", "rookie of the year") so anchor it tighter
+        "rookie card", " rc ", " rookie ",
+        # Generic card-collecting markers
+        "card #", " card #", "/auto", " auto ", " autograph ",
+        " refractor ", " parallel ",
     ]),
     # ---- Comics ----
     ("comic", [
