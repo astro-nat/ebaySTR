@@ -3,6 +3,8 @@ import pandas as pd
 from transformers import pipeline
 import warnings
 
+from .pricecharting import classify_for_pricecharting
+
 # Re-check pickup-only language at audit time in case the auction was loaded
 # from cache (where logistics_ease was computed with an older, narrower regex).
 # Keep this list in sync with Phase1Scraper._PICKUP_ONLY_RE.
@@ -254,46 +256,77 @@ class Phase2Scraper:
 
         # --- Step 2: prep texts for classification ---
         # Skip classification for rows we can already disqualify:
-        #   (a) logistics_ease == 'HARD' — Phase 1 already pattern-matched the
-        #       title/category/description against known unshippable items
-        #       (mattresses, vehicles, real estate, etc.). No point paying
-        #       ~50ms of transformer compute to "verify" it.
+        #   (a) logistics_ease == 'HARD' — Phase 1 already pattern-matched
+        #       the title/category/description against known unshippable
+        #       items. No point paying ~50ms of transformer compute to
+        #       "verify" it.
         #   (b) empty/short description — would return "Unknown" anyway.
+        #   (c) PriceCharting-eligible title (cards, video games, comics).
+        #       The AI's risk labels ('broken', 'untested') don't apply
+        #       to collectibles where condition is encoded by grade
+        #       (PSA/BGS) baked into the title — running the model
+        #       produces high false-positive rates on these auctions.
         # Skipped-HARD rows get a distinct "Unshippable (HARD logistics)"
-        # verdict + red_flag=True so they're excluded from comps downstream.
+        # verdict + red_flag=True. Skipped-collectible rows get a
+        # "Skipped (collectible)" verdict and red_flag=False.
         cleaned_texts: list = []
         skip_flags: list = []        # True = don't classify (for ANY reason)
         hard_flags: list = []        # True = HARD-skip specifically
-        for d, log in zip(descs, logistics):
-            # Re-check pickup-only against the current regex. Covers the case
-            # where this auction was loaded from cache (Phase 1 regex may have
-            # been narrower at the time it was scraped) and the case where
-            # Phase 1's title/category match missed but the description gives
-            # it away.
+        collectible_flags: list = [] # True = collectible-skip specifically
+        for t, d, log in zip(titles, descs, logistics):
+            # Re-check pickup-only against the current regex. Covers the
+            # case where this auction was loaded from cache (Phase 1 regex
+            # may have been narrower at the time it was scraped) and the
+            # case where Phase 1's title/category match missed but the
+            # description gives it away.
             pickup_only_in_desc = bool(
                 d and _PICKUP_ONLY_AUDIT_RE.search(d)
             )
             is_hard = (log == 'HARD') or pickup_only_in_desc
+            is_collectible = (
+                not is_hard and bool(classify_for_pricecharting(t))
+            )
             if is_hard:
                 cleaned_texts.append("")
                 skip_flags.append(True)
                 hard_flags.append(True)
+                collectible_flags.append(False)
+            elif is_collectible:
+                cleaned_texts.append("")
+                skip_flags.append(True)
+                hard_flags.append(False)
+                collectible_flags.append(True)
             elif not d or len(d.strip()) < 10:
                 cleaned_texts.append("")
                 skip_flags.append(True)
                 hard_flags.append(False)
+                collectible_flags.append(False)
             else:
                 cleaned_texts.append(re.sub(r'<[^<]+?>', ' ', d)[:1000])
                 skip_flags.append(False)
                 hard_flags.append(False)
+                collectible_flags.append(False)
 
-        # Default verdict for skipped rows. HARD rows get a distinct verdict
-        # so they're separable from "Unknown" (empty description) in the UI.
+        # Default verdict for skipped rows. HARD vs collectible vs short-
+        # description each get distinct labels so the UI can separate them.
+        def _initial_verdict(h: bool, c: bool) -> str:
+            if h:
+                return "Unshippable (HARD logistics)"
+            if c:
+                return "Skipped (collectible)"
+            return "Unknown"
+
         verdicts: list = [
-            "Unshippable (HARD logistics)" if h else "Unknown"
-            for h in hard_flags
+            _initial_verdict(h, c)
+            for h, c in zip(hard_flags, collectible_flags)
         ]
+        # Confidence is 100% for HARD (we matched a regex) and 0% for the
+        # rest — the collectible bypass isn't a confidence judgment, just
+        # an opt-out from a model that doesn't apply.
         confidences: list = [100.0 if h else 0.0 for h in hard_flags]
+        # Only HARD rows are red-flagged by default. Collectibles pass
+        # straight through to the comps pipeline (PriceCharting handles
+        # the pricing for them anyway).
         red_flags: list = [bool(h) for h in hard_flags]
 
         # Positions to actually classify

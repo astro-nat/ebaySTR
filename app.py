@@ -2247,6 +2247,31 @@ if current_auction and not st.session_state.selected_leads.empty:
                 "— uncheck any the audit got wrong",
                 expanded=False,
             ):
+                # Bulk-clear escape hatch for auctions where the audit
+                # is mostly wrong (typically sports cards / TCG / video
+                # games — the AI's risk labels don't apply to collectibles
+                # whose condition is encoded as a grade in the title).
+                # Future audits use a classifier-based bypass for those
+                # categories, but this rescues the current auction in
+                # one click.
+                if st.button(
+                    f"⚡ Clear all {flagged_count} flag(s) in this auction",
+                    help="Set red_flag=False on every flagged row. "
+                         "Use when the audit was systematically wrong "
+                         "(e.g. an auction full of cards or comics). "
+                         "Items will rejoin the next comps batch.",
+                    key=f"clear_all_flags_{st.session_state.get('current_auction', '')}",
+                ):
+                    ar_full.loc[flagged_mask, 'red_flag'] = False
+                    st.session_state.audit_results = ar_full
+                    st.session_state._comps_has_more = True
+                    _save_current_auction_to_cache()
+                    st.success(
+                        f"✓ Cleared all {flagged_count} red flag(s). "
+                        "They'll be included in the next comps batch."
+                    )
+                    st.rerun()
+
                 title_col = (
                     'enriched_title' if 'enriched_title' in ar_full.columns
                     else 'title'
