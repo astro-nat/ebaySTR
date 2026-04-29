@@ -1,5 +1,6 @@
-import streamlit as st
-import streamlit.components.v1 as components
+import streamlit as st # type: ignore
+import streamlit.components.v1 as components # type: ignore
+import numpy as np
 import pandas as pd
 import asyncio
 import os
@@ -325,6 +326,24 @@ button[data-baseweb="tab"] {
    every stHorizontalBlock to 48% min-width, which broke the picker
    table at any narrow-but-not-mobile width. The <640px rule above
    still handles real phones. */
+
+/* ---- Sticky right-side Results panel ----
+   The right column in the analysis split-screen contains the live
+   results table. Make it stick to the top of the viewport as the user
+   scrolls the audit/comps tabs on the left, so the table is always in
+   view. :has() targets the column that contains the marker div we
+   inject inside right_col (see _render_live_results setup). Disabled
+   on narrow viewports where columns stack — sticky on a stacked
+   single column is just confusing. */
+@media (min-width: 641px) {
+    [data-testid="stColumn"]:has(.results-sticky-marker) {
+        position: sticky !important;
+        top: 0.5rem !important;
+        align-self: flex-start !important;
+        max-height: calc(100vh - 1rem);
+        overflow-y: auto;
+    }
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -344,14 +363,17 @@ if 'audit_results' not in st.session_state:
 if 'audit_running' not in st.session_state:
     st.session_state.audit_running = False
 
-# --- Audit speed/accuracy knobs ---
-# Default: bart-large-mnli (already cached on-disk, loads instantly).
-# User can opt into the smaller/faster distilbart model via UI toggle — that
-# one triggers a ~500MB download the first time it's used.
+# --- Audit knobs ---
+# `audit_workers` controls how many parallel Claude API calls run during
+# the AI tier of the condition audit. 8 hits a sweet spot — fast without
+# tripping rate limits. The legacy `audit_fast_mode` and `audit_batch_size`
+# keys are kept (no-ops) so older session state from before the API
+# migration doesn't crash on read.
+if 'audit_workers' not in st.session_state:
+    st.session_state.audit_workers = 8
 if 'audit_fast_mode' not in st.session_state:
     st.session_state.audit_fast_mode = False
 if 'audit_batch_size' not in st.session_state:
-    # 8 is a safe CPU default. Bigger = faster until RAM runs out.
     st.session_state.audit_batch_size = 8
 
 if 'comps_running' not in st.session_state:
@@ -498,6 +520,28 @@ def run_async(coro):
     asyncio.set_event_loop(loop)
     return loop.run_until_complete(coro)
 
+
+def _extract_auction_id(auction_df: pd.DataFrame):
+    """Pull the HiBid auction_id from a DataFrame.
+
+    Discovery rows store it as a URL like https://hibid.com/auction/12345
+    in the 'auction_link' column. We parse the trailing int.
+
+    Defined this early in the file because the header refresh button
+    (rendered above the rest of the analysis-view code) needs it to
+    route a single-auction refresh.
+    """
+    if 'auction_link' not in auction_df.columns or auction_df.empty:
+        return None
+    link = str(auction_df['auction_link'].iloc[0])
+    if '/auction/' not in link:
+        return None
+    try:
+        return int(link.rsplit('/auction/', 1)[1].split('/')[0].split('?')[0])
+    except (ValueError, IndexError):
+        return None
+
+
 # --- MAIN DASHBOARD UI ---
 # Compact top bar: title on the left, settings popovers + Refresh button
 # on the right. Replaces the old left sidebar — settings are tucked behind
@@ -507,6 +551,17 @@ discover_running = st.session_state.get('discover_running', False)
 fetch_lots_running = st.session_state.get('fetch_lots_running', False)
 any_running = discover_running or fetch_lots_running
 _restored_at = st.session_state.get('_discovery_restored_from')
+
+# Refresh-button context: when the user has drilled into an auction, the
+# button should re-fetch JUST that auction (not re-run discovery against
+# the entire HiBid catalog, which is what "Discover" / "Refresh" did
+# historically). We detect that here so the header can render the right
+# label and dispatch the right action.
+_in_analysis_view = (
+    bool(st.session_state.get('current_auction'))
+    and isinstance(st.session_state.get('selected_leads'), pd.DataFrame)
+    and not st.session_state.selected_leads.empty
+)
 
 header_title_col, header_actions_col = st.columns([3, 2])
 with header_title_col:
@@ -572,20 +627,49 @@ with header_actions_col:
     with btn_refresh:
         if discover_running:
             refresh_label = "⏳ Discovering…"
+        elif fetch_lots_running:
+            refresh_label = "⏳ Refreshing…"
+        elif _in_analysis_view:
+            # Drilled into an auction → button re-fetches just this one.
+            refresh_label = "🔄 Refresh auction"
         elif _restored_at:
             refresh_label = "🔄 Refresh"
         else:
             refresh_label = "🔍 Discover"
+
+        refresh_help = (
+            "Re-fetch lots for the auction you're currently viewing. "
+            "Pulls fresh bids; cached audit + comp results are preserved."
+            if _in_analysis_view
+            else "Re-fetch the open-auction list with the current Sourcing "
+                 "settings. Successful runs are cached for 24h and "
+                 "auto-restored on reload."
+        )
+
         if st.button(
             refresh_label,
             type="primary",
             use_container_width=True,
             disabled=any_running,
             key="discover_btn",
-            help="Re-fetch the open-auction list with the current Sourcing "
-                 "settings. Successful runs are cached for 24h and "
-                 "auto-restored on reload.",
+            help=refresh_help,
         ):
+            if _in_analysis_view:
+                # Single-auction refresh path. Pull the auction_id off
+                # the loaded analysis, queue a fetch_lots run for just
+                # that ID, and clear the analysis-view state so the
+                # auto-load step at the top of the dispatch picks the
+                # freshly fetched data back up (with cached audit + comps
+                # merged on top via _load_auction_for_analysis).
+                aid = _extract_auction_id(st.session_state.selected_leads)
+                if aid is not None:
+                    st.session_state._selected_auction_ids = [aid]
+                    st.session_state.current_auction = None
+                    st.session_state.selected_leads = pd.DataFrame()
+                    st.session_state.fetch_lots_running = True
+                    st.rerun()
+                # If we somehow can't extract the auction_id, fall
+                # through to a full discovery as a safe default.
             st.session_state._sourcing_cfg = {
                 "zip": user_zip,
                 "radius": radius,
@@ -815,6 +899,38 @@ if st.session_state.get('fetch_lots_running'):
             sel_ids = set(st.session_state.get('_selected_auction_ids', []))
             selected_candidates = [c for c in candidates if c['auction_id'] in sel_ids]
 
+            # Fallback: synthesize candidates from session-state DataFrames
+            # when the candidate list doesn't have these IDs. Common when
+            # refreshing a cached analysis after the 24h discovery cache
+            # expired — we still know enough about the auction (link,
+            # name, source, closing date) to refetch its lots.
+            if not selected_candidates and sel_ids:
+                seen_ids = {c['auction_id'] for c in selected_candidates}
+                for source_df_name in ('selected_leads', 'audit_results',
+                                        'phase1_leads'):
+                    src = st.session_state.get(source_df_name)
+                    if not isinstance(src, pd.DataFrame) or src.empty:
+                        continue
+                    if 'auction_link' not in src.columns:
+                        continue
+                    for aid in sel_ids - seen_ids:
+                        sub = src[src['auction_link'].fillna('').astype(str)
+                                  .str.contains(f'/auction/{aid}', regex=False)]
+                        if sub.empty:
+                            continue
+                        first = sub.iloc[0]
+                        selected_candidates.append({
+                            'auction_id': aid,
+                            'name': str(first.get('auction') or '(unknown)'),
+                            'source': str(first.get('source') or ''),
+                            'date_end': str(first.get('closing_date') or ''),
+                            'lot_count': len(sub),
+                            'date_info': '',
+                            'city': '',
+                            'state': '',
+                        })
+                        seen_ids.add(aid)
+
             if not selected_candidates:
                 raise RuntimeError(
                     f"No matching auctions found for selected IDs ({len(sel_ids)} ids, "
@@ -1001,6 +1117,14 @@ def _load_auction_for_analysis(auction_name, auction_df):
     # starts a new run instead of trying to continue from the previous one.
     st.session_state.pop('_comps_has_more', None)
     st.session_state.pop('_comps_auction_str_map', None)
+    # Reset all "in-progress" flags. These get set by their respective
+    # buttons and cleared in `finally` blocks inside the analysis view —
+    # but if the user refreshed mid-run, the analysis branch never
+    # executed the finally, so the flags stay True and disable the
+    # buttons on the new auction. Belt-and-suspenders reset here.
+    st.session_state.audit_running = False
+    st.session_state.comps_running = False
+    st.session_state.img_enrich_running = False
 
     # Consult disk cache, keyed by auction_id (pulled from auction_link or a
     # dedicated column if present)
@@ -1021,21 +1145,9 @@ def _load_auction_for_analysis(auction_name, auction_df):
         st.session_state.audit_results = merged
 
 
-def _extract_auction_id(auction_df: pd.DataFrame):
-    """Pull the HiBid auction_id from the DataFrame.
-
-    Discovery rows store it as a URL like https://hibid.com/auction/12345 in
-    the 'auction_link' column. We parse the trailing int.
-    """
-    if 'auction_link' not in auction_df.columns or auction_df.empty:
-        return None
-    link = str(auction_df['auction_link'].iloc[0])
-    if '/auction/' not in link:
-        return None
-    try:
-        return int(link.rsplit('/auction/', 1)[1].split('/')[0].split('?')[0])
-    except (ValueError, IndexError):
-        return None
+# `_extract_auction_id` was hoisted near the top of the file so the
+# header refresh button could call it. Kept the original definition site
+# blank to preserve line numbers; the function is the same.
 
 
 def _save_current_auction_to_cache():
@@ -1119,11 +1231,11 @@ def _render_auction_card(auction_name, auction_df):
 
 @st.cache_resource(show_spinner=False)
 def _get_auditor(model_name: str):
-    """Load (and cache) the Phase2Scraper with the named NLP model.
+    """Load (and cache) the Phase2Scraper.
 
-    Streamlit keys the cache on args, so switching model_name swaps which
-    cached instance is returned. First call per model: download + load
-    (~30s-2min). Subsequent calls: instant.
+    The constructor reads the Anthropic key from `config.json` and
+    lazy-creates the API client on first use — no model download, instant
+    init. Cached so the same instance is reused across reruns.
     """
     from scraper import Phase2Scraper
     return Phase2Scraper(model_name=model_name)
@@ -1134,34 +1246,18 @@ def _run_ai_audit(leads_df, on_progress=None):
     from scraper import Phase2Scraper
 
     total = len(leads_df)
-
-    # Default model is bart-large-mnli (already cached on most dev machines).
-    # Opt-in to the faster distilbart model via "Fast mode" checkbox — that
-    # one triggers a ~500MB download the first time it's used.
-    fast_mode = st.session_state.get('audit_fast_mode', False)
-    model_name = (
-        Phase2Scraper.DEFAULT_MODEL_FAST if fast_mode
-        else Phase2Scraper.DEFAULT_MODEL
-    )
-    batch_size = int(st.session_state.get('audit_batch_size', 8))
+    workers = int(st.session_state.get('audit_workers', 8))
 
     with st.status("🧠 Running AI Condition Audit…", expanded=True) as status:
-        # Phase 1: model load
-        size_note = "~500MB" if fast_mode else "~1.6GB"
-        speed_note = "fast mode, ~3x speedup" if fast_mode else "accuracy mode"
-        st.write(
-            f"**📥 Step 1/3 — Loading NLP model** "
-            f"(`{model_name}`, {size_note}, {speed_note}). "
-            "Downloads on first run, cached after."
-        )
-        if fast_mode:
-            st.caption(
-                "⚠️ First time running Fast mode? Expect a one-time ~500MB "
-                "download. The UI won't update during the download — be "
-                "patient for 1–3 minutes on a decent connection."
+        # Phase 1: pre-flight
+        auditor = _get_auditor(Phase2Scraper.DEFAULT_MODEL)
+        if not auditor.api_key:
+            st.warning(
+                "⚠️ No Anthropic API key found in `config.json`. The audit "
+                "will run keyword-only — items without a keyword match will "
+                "be marked 'Unknown' instead of red-flagged. Add your key "
+                "under `anthropic.api_key` to enable AI classification."
             )
-        auditor = _get_auditor(model_name)
-        st.write("✅ Model ready.")
 
         # Pre-count how many lots will be pre-filtered (HARD logistics) so
         # the user sees the savings up front.
@@ -1169,26 +1265,25 @@ def _run_ai_audit(leads_df, on_progress=None):
         if 'logistics_ease' in leads_df.columns:
             hard_preview = int((leads_df['logistics_ease'] == 'HARD').sum())
 
-        # Phase 2: title enrichment + condition classification
-        if hard_preview > 0:
-            will_classify = total - hard_preview
-            st.write(
-                f"**🔍 Step 2/3 — Classifying {will_classify} items** "
-                f"(batched {batch_size} at a time). "
-                f"⏭️ Skipping **{hard_preview}** HARD-logistics lots "
-                "(mattresses, vehicles, furniture, real estate, etc.) — "
-                "auto-flagged as Unshippable, no AI needed."
-            )
-        else:
-            st.write(
-                f"**🔍 Step 2/3 — Enriching titles and classifying condition** "
-                f"for {total} items (batched {batch_size} at a time)."
-            )
-        st.caption(
-            "Each item: pull model numbers / brands from the description into "
-            "the title, then run zero-shot classification across "
-            "*mint / normal-wear / untested / broken*."
+        st.write(
+            f"**🔎 Step 1/2 — Three-tier condition classification** "
+            f"on {total} items."
         )
+        st.caption(
+            "**Tier 1 — keyword regex** over the description (instant, free): "
+            "matches phrases like *'untested'*, *'doesn't work'*, *'factory "
+            "sealed'*. Most lots short-circuit here.  \n"
+            "**Tier 2 — Claude Haiku text** (~500ms/lot, parallel): for lots "
+            "with a substantial description but no keyword hit.  \n"
+            "**Tier 3 — Claude Haiku vision** (~2s/lot, parallel): for lots "
+            "with a short description, classifies from the thumbnail."
+        )
+        if hard_preview > 0:
+            st.caption(
+                f"⏭️ Skipping AI on **{hard_preview}** HARD-logistics lots "
+                "(mattresses, vehicles, furniture, real estate, etc.) — "
+                "auto-flagged as Unshippable, no API call needed."
+            )
         progress_bar = st.progress(0, text=f"Starting — 0/{total}")
         current_item_placeholder = st.empty()
 
@@ -1224,30 +1319,47 @@ def _run_ai_audit(leads_df, on_progress=None):
         results_df = auditor.batch_audit(
             leads_df,
             progress_callback=ai_progress,
-            batch_size=batch_size,
+            batch_size=workers,
             live_callback=_audit_live_cb,
         )
 
-        # Phase 3: summarize
+        # Phase 2: summarize (counts + per-tier breakdown)
         good = int((~results_df['red_flag']).sum()) if 'red_flag' in results_df.columns else 0
         flagged = int(results_df['red_flag'].sum()) if 'red_flag' in results_df.columns else 0
         skipped_hard = int(results_df.attrs.get('audit_skipped_hard', 0) or 0)
+        skipped_collectible = int(results_df.attrs.get('audit_skipped_collectible', 0) or 0)
         skipped_empty = int(results_df.attrs.get('audit_skipped_empty', 0) or 0)
-        classified = int(results_df.attrs.get('audit_classified', 0) or 0)
+        keyword_hits = int(results_df.attrs.get('audit_keyword_hits', 0) or 0)
+        text_api_calls = int(results_df.attrs.get('audit_text_api_calls', 0) or 0)
+        image_api_calls = int(results_df.attrs.get('audit_image_api_calls', 0) or 0)
+        text_failed = int(results_df.attrs.get('audit_text_api_failed', 0) or 0)
+        image_failed = int(results_df.attrs.get('audit_image_api_failed', 0) or 0)
+        no_signal = int(results_df.attrs.get('audit_no_signal', 0) or 0)
 
         summary_parts = [f"✅ {good} good-condition", f"⚠️ {flagged} red-flagged"]
         if skipped_hard > 0:
             summary_parts.append(f"🚚 {skipped_hard} HARD-logistics (pre-filtered)")
+        if skipped_collectible > 0:
+            summary_parts.append(f"🎴 {skipped_collectible} collectibles (pass-through)")
         if skipped_empty > 0:
-            summary_parts.append(f"❓ {skipped_empty} empty description")
-        st.write(f"**📊 Step 3/3 — Summary:** " + " · ".join(summary_parts))
-        if skipped_hard > 0 and classified > 0:
-            saved_est = skipped_hard * 0.2  # ~200ms per classification on CPU
+            summary_parts.append(f"❓ {skipped_empty} empty rows")
+        st.write(f"**📊 Step 2/2 — Summary:** " + " · ".join(summary_parts))
+
+        tier_parts = []
+        if keyword_hits:
+            tier_parts.append(f"🔍 {keyword_hits} by keyword")
+        if text_api_calls:
+            tier_parts.append(f"📝 {text_api_calls} by text API")
+        if image_api_calls:
+            tier_parts.append(f"🖼️ {image_api_calls} by image API")
+        if no_signal:
+            tier_parts.append(f"❓ {no_signal} no signal (short desc + no thumb)")
+        if tier_parts:
+            st.caption("**Tier breakdown:** " + " · ".join(tier_parts))
+        if text_failed or image_failed:
             st.caption(
-                f"💨 Skipped AI on {skipped_hard} obviously-unshippable lots "
-                f"(~{saved_est:.0f}s saved). Adjust the HARD-logistics "
-                "ship_killers regex in `config.json` if items are being "
-                "wrongly pre-filtered."
+                f"⚠️ {text_failed + image_failed} API call(s) failed and were "
+                "marked Unknown — check your network/key if this is high."
             )
         status.update(label="✅ AI audit complete", state="complete", expanded=False)
 
@@ -1271,11 +1383,15 @@ def _run_image_enrichment(audit_df, min_bid: float = 5.0):
     from scraper.config_loader import load_config
 
     cfg = load_config()
+    anth_cfg = cfg.get("anthropic") or {}
     enricher = EbayImageEnricher(
         cfg["ebay"]["app_id"], cfg["ebay"]["cert_id"],
         hibid_user_agent=cfg.get("api", {}).get(
             "user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"),
+        anthropic_api_key=anth_cfg.get("api_key"),
+        anthropic_model=anth_cfg.get("model", "claude-haiku-4-5"),
     )
+    has_claude_fallback = bool(anth_cfg.get("api_key"))
 
     total = len(audit_df)
 
@@ -1301,22 +1417,33 @@ def _run_image_enrichment(audit_df, min_bid: float = 5.0):
     }
     eligible_count = len(eligible_ids)
 
-    with st.status(
-        f"🖼️ Enriching {eligible_count} titles via eBay image_search…",
-        expanded=True,
-    ) as status:
+    status_label = (
+        f"🖼️ Enriching {eligible_count} titles via image search…"
+        if has_claude_fallback
+        else f"🖼️ Enriching {eligible_count} titles via eBay image_search…"
+    )
+    with st.status(status_label, expanded=True) as status:
         st.write(
             f"**Gated to {eligible_count} of {total} items** — skipping "
             "red-flagged, HARD-logistics, missing-image, and sub-${:.2f} lots."
             .format(min_bid)
         )
-        st.caption(
-            "For each eligible item: download the HiBid thumbnail, POST it "
-            "to eBay's Browse `search_by_image` endpoint, and if the top "
-            "hits agree on a product, rewrite the title to match what eBay "
-            "actually sells it as. Zero API cost — reuses your existing "
-            "Browse API credentials."
-        )
+        if has_claude_fallback:
+            st.caption(
+                "Two-tier flow per item: **eBay image_search first** (free, "
+                "fast), then **Claude vision as a fallback** when eBay can't "
+                "produce a confident match. Claude reads brand/model directly "
+                "off the photo — covers the long tail eBay misses on."
+            )
+        else:
+            st.caption(
+                "For each eligible item: download the HiBid thumbnail, POST it "
+                "to eBay's Browse `search_by_image` endpoint, and if the top "
+                "hits agree on a product, rewrite the title to match what eBay "
+                "actually sells it as. Add an `anthropic.api_key` to "
+                "`config.json` to enable the Claude vision fallback for items "
+                "eBay can't identify."
+            )
 
         progress_bar = st.progress(0, text=f"Starting — 0/{eligible_count}")
         current_item_placeholder = st.empty()
@@ -1348,9 +1475,22 @@ def _run_image_enrichment(audit_df, min_bid: float = 5.0):
         promoted_df = promote_image_titles(
             result_df, min_confidence=0.5, min_hits=3,
         )
-        promoted = int((promoted_df['enriched_title']
-                        != promoted_df.get('enriched_title_pre_image',
-                                           promoted_df['enriched_title'])).sum())
+        promoted_mask = (
+            promoted_df['enriched_title']
+            != promoted_df.get('enriched_title_pre_image',
+                               promoted_df['enriched_title'])
+        )
+        promoted = int(promoted_mask.sum())
+
+        # Per-tier breakdown so the user can see how often each tier saved
+        # the day. img_source is set per row by enrich_one.
+        ebay_promoted = 0
+        claude_promoted = 0
+        if 'img_source' in promoted_df.columns:
+            sources = promoted_df.loc[promoted_mask, 'img_source'].fillna('')
+            ebay_promoted = int((sources == 'ebay').sum())
+            claude_promoted = int((sources == 'claude').sum())
+
         skipped_gate = int(
             (promoted_df['img_error'] == 'skipped_gate').sum()
         ) if 'img_error' in promoted_df.columns else 0
@@ -1359,12 +1499,14 @@ def _run_image_enrichment(audit_df, min_bid: float = 5.0):
             - (promoted_df['img_error'] == 'skipped_gate').sum()
         ) if 'img_error' in promoted_df.columns else 0
 
-        st.write(
-            f"**📊 Summary:** "
-            f"✅ {promoted} titles upgraded from image matches · "
-            f"⏭️ {skipped_gate} gated-out · "
-            f"⚠️ {errored} couldn't identify."
-        )
+        summary_bits = [f"✅ {promoted} titles upgraded"]
+        if has_claude_fallback and (ebay_promoted or claude_promoted):
+            summary_bits.append(
+                f"(🛒 {ebay_promoted} via eBay · 🤖 {claude_promoted} via Claude)"
+            )
+        summary_bits.append(f"⏭️ {skipped_gate} gated-out")
+        summary_bits.append(f"⚠️ {errored} couldn't identify")
+        st.write("**📊 Summary:** " + " · ".join(summary_bits))
         status.update(
             label=f"✅ Image enrichment — {promoted} titles upgraded",
             state="complete", expanded=False,
@@ -1549,13 +1691,19 @@ def _run_ebay_comps(results_df):
             max_workers=workers,
         )
 
-        # ROI
+        # ROI. cost==0 means no bids yet — division-by-zero. Use a 9999%
+        # sentinel so those rows sort to the top of the table instead of
+        # disappearing as None (the user can still see current_bid=0 in
+        # the row to know the cost will go up once someone bids).
         comps_df['est_roi'] = None
-        mask = comps_df['est_resale'].notna() & (comps_df['est_cost'] > 0)
-        comps_df.loc[mask, 'est_roi'] = (
-            (comps_df.loc[mask, 'est_resale'] - comps_df.loc[mask, 'est_cost'])
-            / comps_df.loc[mask, 'est_cost'] * 100
+        resale_num = pd.to_numeric(comps_df['est_resale'], errors='coerce')
+        cost_num = pd.to_numeric(comps_df['est_cost'], errors='coerce')
+        normal = resale_num.notna() & cost_num.gt(0)
+        comps_df.loc[normal, 'est_roi'] = (
+            (resale_num[normal] - cost_num[normal]) / cost_num[normal] * 100
         ).round(0)
+        no_bid = resale_num.gt(0) & cost_num.fillna(0).eq(0)
+        comps_df.loc[no_bid, 'est_roi'] = 9999
 
         found = int(comps_df['est_resale'].notna().sum())
         st.write(f"**📊 Summary:** found price comps for {found}/{total} items.")
@@ -1592,11 +1740,15 @@ def _run_ebay_comps_chunk(audit_df, chunk_size: int = 200, on_lot_priced=None):
     Args:
         audit_df: current full audit_results DataFrame.
         chunk_size: max number of pending lots to comp this call.
-        on_lot_priced: optional callable(completed, total) that fires
-            after EACH individual lot finishes pricing — lets the
-            caller stream live updates into the UI without waiting for
-            the whole chunk to finish. The function is also responsible
-            for any UI refresh; this scope only updates session_state.
+        on_lot_priced: optional callable(completed, total, last_lot)
+            that fires after EACH individual lot finishes pricing.
+            `last_lot` is a small dict with keys 'title', 'resale',
+            'roi', 'ebay_comps', 'mercari_comps' so the caller can
+            render a per-lot ticker without re-scanning the df.
+            Lets the caller stream live updates into the UI without
+            waiting for the whole chunk to finish. The function is
+            also responsible for any UI refresh; this scope only
+            updates session_state.
 
     Returns:
         (updated_df, found_in_chunk, processed_in_chunk, has_more)
@@ -1699,15 +1851,34 @@ def _run_ebay_comps_chunk(audit_df, chunk_size: int = 200, on_lot_priced=None):
                         df.at[target_idx, col] = payload[col]
                 # ROI on this row only — cheap. Full ROI recompute happens
                 # at the bottom of this function after the chunk completes.
+                # cost==0 → no bids yet → display 9999% sentinel so the
+                # row sorts to the top instead of vanishing as None.
                 cost = pd.to_numeric(df.at[target_idx, 'est_cost'], errors='coerce')
                 resale = pd.to_numeric(df.at[target_idx, 'est_resale'], errors='coerce')
-                if pd.notna(resale) and pd.notna(cost) and cost > 0:
-                    df.at[target_idx, 'est_roi'] = round(
-                        (resale - cost) / cost * 100, 0
-                    )
+                if pd.notna(resale):
+                    if pd.notna(cost) and cost > 0:
+                        df.at[target_idx, 'est_roi'] = round(
+                            (resale - cost) / cost * 100, 0
+                        )
+                    elif resale > 0:
+                        df.at[target_idx, 'est_roi'] = 9999
                 st.session_state.audit_results = df
                 if on_lot_priced is not None:
-                    on_lot_priced(completed, total_items)
+                    # Pull a small "last lot" payload so the caller can
+                    # render a per-lot ticker without re-scanning the df.
+                    row = df.iloc[target_idx]
+                    last_lot = {
+                        'title': (
+                            row.get('enriched_title')
+                            or row.get('title')
+                            or ''
+                        ),
+                        'resale': row.get('est_resale'),
+                        'roi': row.get('est_roi'),
+                        'ebay_comps': row.get('ebay_comps') or 0,
+                        'mercari_comps': row.get('mercari_comps') or 0,
+                    }
+                    on_lot_priced(completed, total_items, last_lot)
             except Exception:
                 # Live updates are best-effort — never fail the comp run
                 # because of a UI hiccup.
@@ -1728,13 +1899,17 @@ def _run_ebay_comps_chunk(audit_df, chunk_size: int = 200, on_lot_priced=None):
             if col in chunk_with_comps.columns:
                 df.loc[chunk_indices, col] = chunk_with_comps[col].values
 
-        # Recompute ROI on every row that now has resale + cost.
+        # Recompute ROI on every row that now has resale + cost. Rows
+        # where cost==0 (no bids yet) get a 9999% sentinel so they sort
+        # to the top instead of going None.
         cost_col = pd.to_numeric(df.get('est_cost'), errors='coerce')
         resale_col = pd.to_numeric(df.get('est_resale'), errors='coerce')
         has_data = resale_col.notna() & cost_col.gt(0)
         df.loc[has_data, 'est_roi'] = (
             (resale_col[has_data] - cost_col[has_data]) / cost_col[has_data] * 100
         ).round(0)
+        no_bid = resale_col.gt(0) & cost_col.fillna(0).eq(0)
+        df.loc[no_bid, 'est_roi'] = 9999
 
         found = int(chunk_with_comps['est_resale'].notna().sum())
         has_more = total_pending > len(chunk)
@@ -1765,15 +1940,42 @@ def _compute_max_bid(df, target_roi_val):
     out['max_bid'] = None
     if 'est_resale' not in out.columns:
         return out
-    resale_mask = out['est_resale'].notna()
+    # Cached est_resale can land as `object` dtype with internals
+    # (Decimal, nullable extension dtype) that survive `pd.to_numeric`
+    # but break Series.round. Coerce element-wise to a plain float64
+    # numpy array first — np.round is dtype-strict from the start.
+    resale = _to_float_array(out['est_resale'])
+    resale_mask = ~np.isnan(resale)
     if resale_mask.any():
-        resale = out.loc[resale_mask, 'est_resale']
-        net_resale = resale * (1 - ebay_fee_pct) - ebay_fee_flat
-        item_ship = out.loc[resale_mask, 'source'].apply(
-            lambda s: ship_cost if s == "Ship" else 0
-        ) if 'source' in out.columns else 0
+        net_resale = resale[resale_mask] * (1 - ebay_fee_pct) - ebay_fee_flat
+        if 'source' in out.columns:
+            item_ship = np.array([
+                ship_cost if s == "Ship" else 0
+                for s in out.loc[resale_mask, 'source'].tolist()
+            ], dtype='float64')
+        else:
+            item_ship = 0.0
         max_bid = (net_resale / target_roi_val - item_ship) / (1 + buyer_premium_pct)
-        out.loc[resale_mask, 'max_bid'] = max_bid.clip(lower=0).round(2)
+        max_bid = np.round(np.clip(max_bid, 0, None), 2)
+        out.loc[resale_mask, 'max_bid'] = max_bid
+    return out
+
+
+def _to_float_array(series: pd.Series) -> np.ndarray:
+    """Coerce a Series to a numpy float64 array element-wise.
+
+    Element-wise float() avoids the dtype gotchas of pandas'
+    `to_numeric` on cached payloads — same helper as in scraper/cache.py.
+    """
+    out = np.empty(len(series), dtype='float64')
+    for i, v in enumerate(series):
+        try:
+            if v is None or (isinstance(v, float) and v != v):
+                out[i] = np.nan
+            else:
+                out[i] = float(v)
+        except (TypeError, ValueError):
+            out[i] = np.nan
     return out
 
 
@@ -1895,29 +2097,26 @@ def _render_results_table(results_df):
 
     Sorted by est_roi descending by default.
     """
-    # --- Threshold controls (live) ---
-    st.markdown("#### 🎯 Profitability Targets")
-    st.caption(
-        "Adjust these knobs to see which items meet your goals. "
-        "**Green** rows meet both targets, **yellow** meet one, **uncolored** miss both or lack data. "
-        "The **Max Bid** column recomputes from the ROI target."
-    )
+    # --- Compact filter bar: ROI + STR inputs side-by-side. The 6-cell
+    #     metric grid that used to live here is replaced with a one-line
+    #     status caption below, after the masks are computed.
     tc1, tc2 = st.columns(2)
     with tc1:
         target_roi_val = st.number_input(
-            "Target ROI Multiplier",
+            "🎯 Target ROI ×",
             value=3.0, step=0.5, format="%.1f",
             min_value=1.0,
-            help="Sell for Nx what you paid (3x = sell for 3× total cost). "
-                 "Drives both the highlight and the Max Bid column.",
+            help="Sell for Nx total cost (3x = sell for 3× what you paid). "
+                 "Drives the green/yellow row tint and the Max Bid column. "
+                 "Green rows meet both ROI + STR targets, yellow meet one.",
             key="target_roi_live",
         )
     with tc2:
         target_str_val = st.number_input(
-            "Target eBay STR %",
+            "🎯 Target eBay STR %",
             value=70.0, step=5.0, format="%.0f",
             min_value=0.0, max_value=100.0,
-            help="Minimum sell-through rate on eBay. Higher = faster-selling items.",
+            help="Minimum eBay sell-through %. Higher = faster-selling items.",
             key="target_str_live",
         )
 
@@ -1931,7 +2130,7 @@ def _render_results_table(results_df):
             '_roi_sort', ascending=False, na_position='last'
         ).drop(columns=['_roi_sort']).reset_index(drop=True)
 
-    # --- Threshold masks (for highlight + metrics) ---
+    # --- Threshold masks (for highlight + status counts) ---
     roi_threshold = (target_roi_val - 1) * 100
     meets_roi = (
         working['est_roi'].notna() & (pd.to_numeric(working['est_roi'], errors='coerce') >= roi_threshold)
@@ -1946,21 +2145,20 @@ def _render_results_table(results_df):
     meets_both = meets_roi & meets_str_mask
     meets_either = (meets_roi | meets_str_mask) & ~meets_both
 
-    # --- Metrics ---
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Leads", len(working))
+    # --- One-line status row (replaces the old 6-cell stMetric grid) ---
+    status_bits = [f"**{len(working)}** leads"]
     if 'est_resale' in working.columns:
-        col2.metric("Comps", working['est_resale'].notna().sum())
-    col3.metric("✅ Meets Both Targets", int(meets_both.sum()))
-
-    col4, col5, col6 = st.columns(3)
-    col4.metric("🟡 Meets One", int(meets_either.sum()))
-    if 'ebay_str' in working.columns:
-        has_str = working['ebay_str'].notna().sum()
-        avg_str = pd.to_numeric(working['ebay_str'], errors='coerce').mean()
-        col5.metric("Avg STR", f"{avg_str:.0f}%" if has_str > 0 else "N/A")
+        status_bits.append(f"**{int(working['est_resale'].notna().sum())}** comped")
+    status_bits.append(f"✅ **{int(meets_both.sum())}** meet both")
+    status_bits.append(f"🟡 **{int(meets_either.sum())}** meet one")
     if 'red_flag' in working.columns:
-        col6.metric("Red Flags", int(working['red_flag'].sum()))
+        status_bits.append(f"🚩 **{int(working['red_flag'].sum())}** red-flagged")
+    if 'ebay_str' in working.columns:
+        has_str = int(working['ebay_str'].notna().sum())
+        if has_str:
+            avg_str = pd.to_numeric(working['ebay_str'], errors='coerce').mean()
+            status_bits.append(f"avg STR **{avg_str:.0f}%**")
+    st.caption(" · ".join(status_bits))
 
     filtered_df = working
 
@@ -2096,6 +2294,22 @@ def _render_results_table(results_df):
 # ================================================================
 # SINGLE-PAGE UI: switches between Discovery view and Analysis view
 # ================================================================
+# Auto-skip the per-auction Discovery results page: when lots have just
+# been fetched (phase1_leads filled) but no auction has been loaded into
+# analysis yet, jump straight into the analysis view for the fetched
+# auction. The picker only fetches one auction per click, so this is
+# unambiguous.
+if (
+    not st.session_state.phase1_leads.empty
+    and not st.session_state.get('current_auction')
+):
+    _df = st.session_state.phase1_leads
+    if 'auction' in _df.columns and len(_df):
+        _auction_name = _df['auction'].iloc[0]
+        _auction_df = _df[_df['auction'] == _auction_name].reset_index(drop=True)
+        _load_auction_for_analysis(_auction_name, _auction_df)
+        st.rerun()
+
 current_auction = st.session_state.get('current_auction')
 
 # ---- ANALYSIS VIEW: one auction is loaded ----
@@ -2109,6 +2323,10 @@ if current_auction and not st.session_state.selected_leads.empty:
             st.session_state.selected_leads = pd.DataFrame()
             st.session_state.current_auction = None
             st.session_state.audit_results = {}
+            # Also clear phase1_leads so the auto-load step above doesn't
+            # immediately bounce us back into analysis — we want to land
+            # on the picker (Selection view) instead.
+            st.session_state.phase1_leads = pd.DataFrame()
             st.rerun()
     with bc2:
         st.subheader(f"🔬 {current_auction}")
@@ -2157,7 +2375,19 @@ if current_auction and not st.session_state.selected_leads.empty:
     # the comp run (via the live_callback) and on every Streamlit run
     # (so the panel stays correct after page reloads).
     with right_col:
+        # Marker for the sticky-column CSS rule (see global <style> block).
+        # Keeps the results panel pinned to the top of the viewport as the
+        # left-side tabs scroll.
+        st.markdown(
+            '<div class="results-sticky-marker"></div>',
+            unsafe_allow_html=True,
+        )
         st.markdown("### 📊 Results (live)")
+        # Per-lot ticker — updates instantly as each lot finishes pricing,
+        # independent of the throttled full-table re-render below. Lets the
+        # user see comps streaming in in real time without waiting for the
+        # whole batch.
+        last_priced_placeholder = st.empty()
         results_table_placeholder = st.empty()
         red_flag_placeholder = st.empty()
 
@@ -2169,9 +2399,7 @@ if current_auction and not st.session_state.selected_leads.empty:
         if not (isinstance(ar, pd.DataFrame) and not ar.empty):
             with results_table_placeholder.container():
                 st.info(
-                    "Results will appear here as the audit and comps run. "
-                    "Each priced lot streams in immediately — no need to "
-                    "wait for the whole batch."
+                    "Results will appear here."
                 )
             with red_flag_placeholder.container():
                 pass
@@ -2210,29 +2438,17 @@ if current_auction and not st.session_state.selected_leads.empty:
 
         audit_btn_label = "⏳ Running audit…" if audit_running else "🧠 Run AI Condition Audit"
 
-        # ---- Audit speed/accuracy knobs ----
-        with st.expander("⚙️ Audit speed vs accuracy (optional)", expanded=False):
-            ac_col1, ac_col2 = st.columns(2)
-            with ac_col1:
-                st.checkbox(
-                    "🚀 Fast mode (smaller model)",
-                    key="audit_fast_mode",
-                    help="Use distilbart-mnli-12-3 (~500MB, ~3x faster) instead "
-                         "of bart-large-mnli. First run triggers a one-time "
-                         "~500MB download — the UI may appear frozen for 1–3 "
-                         "minutes during that download. Leave off to use the "
-                         "already-cached bart-large-mnli.",
-                )
-            with ac_col2:
-                st.slider(
-                    "Batch size (per forward pass)",
-                    min_value=1, max_value=32, step=1,
-                    key="audit_batch_size",
-                    help="Descriptions classified in one forward pass. Bigger = "
-                         "faster but more RAM. Start at 8; drop to 4 if OOM, "
-                         "push to 16-32 on a beefy box. Batching alone gives a "
-                         "~2-3x speedup over the old serial code.",
-                )
+        # ---- Audit knobs ----
+        with st.expander("⚙️ Audit settings (optional)", expanded=False):
+            st.slider(
+                "Parallel workers",
+                min_value=1, max_value=16, step=1,
+                key="audit_workers",
+                help="Concurrent Claude API calls during the AI tier. "
+                     "Default 8 — fast without tripping rate limits. "
+                     "Drop to 1-2 if you see HTTP 429s; push to 12-16 on "
+                     "a high-tier API plan.",
+            )
 
         if st.button(
             audit_btn_label,
@@ -2260,7 +2476,7 @@ if current_auction and not st.session_state.selected_leads.empty:
                 _audit_last = [0.0]
                 def _on_audit_progress(processed, total_items):
                     now = _time.time()
-                    if (now - _audit_last[0]) < 0.6 and processed < total_items:
+                    if (now - _audit_last[0]) < 0.3 and processed < total_items:
                         return
                     _audit_last[0] = now
                     _render_live_results()
@@ -2473,17 +2689,48 @@ if current_auction and not st.session_state.selected_leads.empty:
                     if not any_comped:
                         st.session_state.pop('_comps_auction_str_map', None)
 
-                    # Throttle the right-panel re-renders so the comp
-                    # run stays fast — render at most every ~600ms even
-                    # if 8 workers are completing 8 lots/second. Always
-                    # render the very last update so the panel matches
-                    # the final state.
+                    # Two streams of updates per lot:
+                    #   - **Per-lot ticker** (no throttle): a one-line
+                    #     "🔥 N/M priced — TITLE: $RESALE (ROI X%)" that
+                    #     updates instantly. Cheap render, makes "live"
+                    #     obvious without churning the full table.
+                    #   - **Full table re-render** (throttled to 300ms):
+                    #     keeps the comp run fast even when 8 workers are
+                    #     completing 8 lots/second. The very last update
+                    #     always fires so the final state is correct.
                     import time as _time
                     _last = [0.0]
 
-                    def _on_lot_priced(completed, total_items):
+                    def _on_lot_priced(completed, total_items, last_lot=None):
+                        # Ticker update — instant, every lot.
+                        if last_lot is not None:
+                            title = (last_lot.get('title') or '')[:60]
+                            resale = last_lot.get('resale')
+                            roi = last_lot.get('roi')
+                            comps = (
+                                int(last_lot.get('ebay_comps') or 0)
+                                + int(last_lot.get('mercari_comps') or 0)
+                            )
+                            bits = [f"🔥 **{completed}/{total_items}** priced"]
+                            if title:
+                                if pd.notna(resale):
+                                    detail = f"*{title}* → **${float(resale):.2f}**"
+                                    if pd.notna(roi):
+                                        detail += f" (ROI {int(roi)}%)"
+                                    if comps:
+                                        detail += f" · {comps} comps"
+                                    bits.append(detail)
+                                else:
+                                    bits.append(f"*{title}* → no comps found")
+                            try:
+                                last_priced_placeholder.markdown(
+                                    " · ".join(bits)
+                                )
+                            except Exception:
+                                pass
+                        # Throttled full-table render.
                         now = _time.time()
-                        if (now - _last[0]) < 0.6 and completed < total_items:
+                        if (now - _last[0]) < 0.3 and completed < total_items:
                             return
                         _last[0] = now
                         _render_live_results()
@@ -2521,12 +2768,9 @@ elif st.session_state.get('auction_candidates') and st.session_state.phase1_lead
     candidates = st.session_state.auction_candidates
     cat_samples = st.session_state.get('category_samples', {})
 
-    st.subheader(f"📋 Step 2: Pick which auctions to deep-scan")
+    st.subheader(f"Pick which auctions to deep-scan")
     st.caption(
-        f"Found **{len(candidates)}** open auctions matching your filters. "
-        "Check the ones worth a full item-level scan, then click **📥 Fetch items** "
-        "to pull every lot, current bids, and descriptions for those auctions only. "
-        "Big auctions (1000+ items) take noticeably longer — pick selectively."
+        f"Found **{len(candidates)}** auctions matching your criteria. "
     )
 
     # --- Build the picker DataFrame ---
@@ -2611,25 +2855,31 @@ elif st.session_state.get('auction_candidates') and st.session_state.phase1_lead
         placeholder="e.g. 'fishing', 'estate', 'tools'",
     ).strip().lower()
     sources_avail = picker_df['source'].unique().tolist()
-    source_filter = st.radio(
-        "Source:", ["All"] + sources_avail,
-        horizontal=True, key="picker_source",
-    ) if len(sources_avail) > 1 else "All"
-
+    sort_options = [
+        "🔢 Most items first",
+        "🔢 Fewest items first",
+        "⏰ Closing soonest",
+        "⏰ Closing latest",
+    ]
     # Sort selector. Default is "most items first" — big auctions are the
     # ones most worth deep-scanning, so surfacing them first matches the
     # typical workflow.
-    sort_choice = st.radio(
-        "Sort by:",
-        options=[
-            "🔢 Most items first",
-            "🔢 Fewest items first",
-            "⏰ Closing soonest",
-            "⏰ Closing latest",
-        ],
-        horizontal=True,
-        key="picker_sort",
-    )
+    if len(sources_avail) > 1:
+        src_col, sort_col = st.columns(2)
+        with src_col:
+            source_filter = st.radio(
+                "Source:", ["All"] + sources_avail,
+                horizontal=True, key="picker_source",
+            )
+        with sort_col:
+            sort_choice = st.selectbox(
+                "Sort by:", options=sort_options, key="picker_sort",
+            )
+    else:
+        source_filter = "All"
+        sort_choice = st.selectbox(
+            "Sort by:", options=sort_options, key="picker_sort",
+        )
 
     shown = picker_df.copy()
     if picker_search:
