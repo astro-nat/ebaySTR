@@ -243,7 +243,20 @@ st.set_page_config(
     page_title="H-Town TX Finds: ROI Engine",
     page_icon="🛰️",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
+)
+
+# Hide the sidebar's collapse-control nub since we never render any
+# sidebar content. Pure cosmetic — nothing breaks if this CSS lapses.
+st.markdown(
+    """
+    <style>
+    [data-testid="stSidebar"], [data-testid="collapsedControl"] {
+        display: none !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
 )
 
 # --- MOBILE-RESPONSIVE CSS ---
@@ -486,111 +499,137 @@ def run_async(coro):
     return loop.run_until_complete(coro)
 
 # --- MAIN DASHBOARD UI ---
-st.title("🛰️ Auction Intelligence Dashboard")
-st.markdown("Automated sourcing and risk-assessment for H-Town TX Finds.")
+# Compact top bar: title on the left, settings popovers + Refresh button
+# on the right. Replaces the old left sidebar — settings are tucked behind
+# a popover instead of taking permanent screen space, since the user
+# rarely changes them.
+discover_running = st.session_state.get('discover_running', False)
+fetch_lots_running = st.session_state.get('fetch_lots_running', False)
+any_running = discover_running or fetch_lots_running
+_restored_at = st.session_state.get('_discovery_restored_from')
 
-# --- SIDEBAR CONTROLS ---
-with st.sidebar:
-    st.header("📍 Sourcing")
-    user_zip = st.text_input("Home Zip Code", value="77058")
-    radius = st.slider("Local Pickup Radius (mi)", 5, 100, 20)
-    include_nationwide = st.checkbox("Include Nationwide (Ship-to-Me)", value=True)
-    closing_days = st.slider("Closing Within (days)", 1, 30, 1)
+header_title_col, header_actions_col = st.columns([3, 2])
+with header_title_col:
+    st.markdown("## 🛰️ Auction Intelligence Dashboard")
 
-    category_filter = st.multiselect(
-        "🏷️ Categories (optional)",
-        options=sorted(set(st.session_state.known_categories)),
-        placeholder="All categories",
-        help=(
-            "Only keep lots whose category matches any selected term (substring, "
-            "case-insensitive). Saves time in Phase 2 by dropping irrelevant items. "
-            "Leave blank to fetch everything."
-        ),
-    )
+with header_actions_col:
+    pop_sourcing, pop_memory, btn_refresh = st.columns([1, 1, 1])
 
-    st.markdown("---")
+    with pop_sourcing:
+        with st.popover("📍 Sourcing", use_container_width=True):
+            user_zip = st.text_input("Home Zip Code", value="77058")
+            radius = st.slider("Local Pickup Radius (mi)", 5, 100, 20)
+            include_nationwide = st.checkbox(
+                "Include Nationwide (Ship-to-Me)", value=True,
+            )
+            closing_days = st.slider("Closing Within (days)", 1, 30, 1)
+            category_filter = st.multiselect(
+                "🏷️ Categories (optional)",
+                options=sorted(set(st.session_state.known_categories)),
+                placeholder="All categories",
+                help=(
+                    "Only keep lots whose category matches any selected term "
+                    "(substring, case-insensitive). Saves time in Phase 2 by "
+                    "dropping irrelevant items. Leave blank to fetch everything."
+                ),
+            )
 
-    # --- Step 1: discover auction candidates (cheap — no per-lot fetch) ---
-    discover_running = st.session_state.get('discover_running', False)
-    fetch_lots_running = st.session_state.get('fetch_lots_running', False)
-    any_running = discover_running or fetch_lots_running
+    with pop_memory:
+        with st.popover("💾 Memory", use_container_width=True):
+            cached_list = _AUCTION_CACHE.list_all(ttl_days=st.session_state.cache_ttl_days)
+            fresh_count = sum(1 for c in cached_list if c['fresh'])
+            st.caption(
+                f"**{fresh_count}** auction(s) cached. "
+                "Audit + price-comp results are reused when you re-open an auction — "
+                "current bids refresh every discovery run."
+            )
+            st.session_state.cache_ttl_days = st.slider(
+                "Auto-purge after (days)",
+                min_value=1, max_value=30,
+                value=int(st.session_state.cache_ttl_days),
+                help="Cached analyses older than this get deleted automatically. "
+                     "Auctions are also purged as soon as their closing date passes.",
+            )
+            if cached_list:
+                with st.expander(f"📋 View {len(cached_list)} cached entries", expanded=False):
+                    for entry in cached_list[:25]:
+                        badge = "🟢" if entry['fresh'] else "🔴 stale"
+                        try:
+                            cached_at = datetime.fromisoformat(entry['cached_at'])
+                            age = datetime.now() - cached_at
+                            age_str = f"{age.days}d ago" if age.days > 0 else f"{int(age.seconds / 3600)}h ago"
+                        except Exception:
+                            age_str = "?"
+                        st.caption(f"{badge} **{entry['auction_name']}** — {entry['items']} items · {age_str}")
+                    if len(cached_list) > 25:
+                        st.caption(f"...and {len(cached_list) - 25} more")
+            if st.button("🗑️ Clear all memory", use_container_width=True,
+                         help="Delete every cached auction analysis. Use if results feel stale."):
+                removed = _AUCTION_CACHE.clear_all()
+                st.success(f"Cleared {removed} cached auction(s).")
+                st.rerun()
 
-    _restored_at = st.session_state.get('_discovery_restored_from')
-    if discover_running:
-        discover_label = "⏳ Discovering…"
-    elif _restored_at:
-        discover_label = "🔄 Refresh Auctions"
-    else:
-        discover_label = "🔍 Discover Auctions"
-    if st.button(
-        discover_label,
-        type="primary",
-        use_container_width=True,
-        disabled=any_running,
-        key="discover_btn",
-        help="Step 1 of 2: fetch the LIST of open auctions (no per-lot data yet). "
-             "You'll then pick which ones are worth a deep scan. "
-             "Successful runs are cached for 24h and auto-restored on reload.",
-    ):
-        st.session_state._sourcing_cfg = {
-            "zip": user_zip,
-            "radius": radius,
-            "include_nationwide": include_nationwide,
-            "closing_days": closing_days,
-            "category_filter": category_filter,
-        }
-        st.session_state.discover_running = True
-        st.rerun()
-
-    if _restored_at and not discover_running:
-        _age = datetime.now() - _restored_at
-        if _age.total_seconds() < 3600:
-            _age_str = f"{int(_age.total_seconds() / 60)} min ago"
+    with btn_refresh:
+        if discover_running:
+            refresh_label = "⏳ Discovering…"
+        elif _restored_at:
+            refresh_label = "🔄 Refresh"
         else:
-            _age_str = f"{_age.total_seconds() / 3600:.1f}h ago"
-        st.caption(
-            f"♻️ Showing results from **{_age_str}** "
-            f"({len(st.session_state.auction_candidates)} auctions). "
-            f"Click to refresh."
-        )
+            refresh_label = "🔍 Discover"
+        if st.button(
+            refresh_label,
+            type="primary",
+            use_container_width=True,
+            disabled=any_running,
+            key="discover_btn",
+            help="Re-fetch the open-auction list with the current Sourcing "
+                 "settings. Successful runs are cached for 24h and "
+                 "auto-restored on reload.",
+        ):
+            st.session_state._sourcing_cfg = {
+                "zip": user_zip,
+                "radius": radius,
+                "include_nationwide": include_nationwide,
+                "closing_days": closing_days,
+                "category_filter": category_filter,
+            }
+            st.session_state.discover_running = True
+            st.rerun()
 
-    # --- Memory / Cache controls ---
-    st.markdown("---")
-    st.header("💾 Memory")
-    cached_list = _AUCTION_CACHE.list_all(ttl_days=st.session_state.cache_ttl_days)
-    fresh_count = sum(1 for c in cached_list if c['fresh'])
+# Auto-discover on first page load when there's no cached discovery to
+# show — saves the user a click. The flag prevents re-triggering across
+# Streamlit reruns within the same session if the discover fails or
+# returns zero candidates.
+if (
+    not st.session_state.get('_auto_discover_triggered', False)
+    and not any_running
+    and st.session_state.phase1_leads.empty
+    and not st.session_state.get('auction_candidates')
+):
+    st.session_state._auto_discover_triggered = True
+    st.session_state._sourcing_cfg = {
+        "zip": user_zip,
+        "radius": radius,
+        "include_nationwide": include_nationwide,
+        "closing_days": closing_days,
+        "category_filter": category_filter,
+    }
+    st.session_state.discover_running = True
+    st.rerun()
+
+# Subtle "showing cached results" caption under the header, only when
+# we restored from disk (so the user knows the results aren't fresh).
+if _restored_at and not discover_running:
+    _age = datetime.now() - _restored_at
+    if _age.total_seconds() < 3600:
+        _age_str = f"{int(_age.total_seconds() / 60)} min ago"
+    else:
+        _age_str = f"{_age.total_seconds() / 3600:.1f}h ago"
     st.caption(
-        f"**{fresh_count}** auction(s) cached. "
-        f"Audit + price-comp results are reused when you re-open an auction — "
-        f"current bids refresh every discovery run."
+        f"♻️ Showing cached results from **{_age_str}** "
+        f"({len(st.session_state.auction_candidates)} auctions). "
+        f"Click 🔄 Refresh to re-fetch."
     )
-    st.session_state.cache_ttl_days = st.slider(
-        "Auto-purge after (days)",
-        min_value=1, max_value=30,
-        value=int(st.session_state.cache_ttl_days),
-        help="Cached analyses older than this get deleted automatically. "
-             "Auctions are also purged as soon as their closing date passes.",
-    )
-
-    if cached_list:
-        with st.expander(f"📋 View {len(cached_list)} cached entries", expanded=False):
-            for entry in cached_list[:25]:
-                badge = "🟢" if entry['fresh'] else "🔴 stale"
-                try:
-                    cached_at = datetime.fromisoformat(entry['cached_at'])
-                    age = datetime.now() - cached_at
-                    age_str = f"{age.days}d ago" if age.days > 0 else f"{int(age.seconds / 3600)}h ago"
-                except Exception:
-                    age_str = "?"
-                st.caption(f"{badge} **{entry['auction_name']}** — {entry['items']} items · {age_str}")
-            if len(cached_list) > 25:
-                st.caption(f"...and {len(cached_list) - 25} more")
-
-    if st.button("🗑️ Clear all memory", use_container_width=True,
-                 help="Delete every cached auction analysis. Use if results feel stale."):
-        removed = _AUCTION_CACHE.clear_all()
-        st.success(f"Cleared {removed} cached auction(s).")
-        st.rerun()
 
 # --- Surface any persisted discover/fetch status so errors don't vanish on rerun ---
 for _key, _tb_key, _label in (
@@ -629,7 +668,7 @@ for _key, _tb_key, _label in (
                 f"- **Raw lots from HiBid:** {_diag.get('raw_count', 0)}\n"
                 f"- **Kept after filtering:** {_diag.get('kept', 0)}\n"
                 f"- **Dropped as CLOSED / Bidding Closed:** {_diag.get('filtered_status', 0)}\n"
-                f"- **Dropped by sidebar category filter:** {_diag.get('filtered_cat', 0)}"
+                f"- **Dropped by category filter:** {_diag.get('filtered_cat', 0)}"
             )
             _sv = _diag.get('status_values') or {}
             if _sv:
@@ -880,7 +919,7 @@ if st.session_state.get('fetch_lots_running'):
                         f"Status values seen: `{status_values}`."
                     )
                 elif filtered_cat == raw_count:
-                    reason = f"All {raw_count} lots were excluded by the sidebar category filter."
+                    reason = f"All {raw_count} lots were excluded by the category filter."
                 else:
                     reason = f"{raw_count} raw lots, all dropped by a mix of status + category filters."
                 fetch_result_msg = f"⚠️ Scan complete — 0 items survived. {reason}"
@@ -2928,12 +2967,11 @@ elif not st.session_state.phase1_leads.empty:
 
 # ---- EMPTY STATE: nothing discovered yet ----
 else:
+    # If we just auto-triggered a discovery on page load, this state
+    # is a brief flash before discover_running flips True. Otherwise
+    # the user has dismissed/failed a discovery — show a re-run hint.
     st.info(
-        "👋 **Two-step discovery:**\n\n"
-        "1. Configure your filters in the sidebar and click **🔍 Discover Auctions** — "
-        "pulls the list of open auctions and a lot-preview per auction so you can "
-        "see what's in each.\n"
-        "2. Pick which auctions are worth deep-scanning based on the "
-        "*What's in this auction* column.\n"
-        "3. Click **📥 Fetch items** to pull every lot for just your picks."
+        "No auctions discovered yet. Click **🔍 Discover** in the top "
+        "right to fetch the open-auction list. (We'll do this "
+        "automatically on first page load.)"
     )
