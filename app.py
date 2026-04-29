@@ -1090,7 +1090,7 @@ def _get_auditor(model_name: str):
     return Phase2Scraper(model_name=model_name)
 
 
-def _run_ai_audit(leads_df):
+def _run_ai_audit(leads_df, on_progress=None):
     """Run Phase 2 AI condition audit with detailed phase-by-phase status."""
     from scraper import Phase2Scraper
 
@@ -1172,10 +1172,21 @@ def _run_ai_audit(leads_df):
                     f"🔎 Last batch ended near: *{title_preview}*"
                 )
 
+        # Live callback: every batch boundary, push the partial df into
+        # session_state and notify the caller (which throttles UI refresh).
+        def _audit_live_cb(processed, total_items, partial_df):
+            try:
+                st.session_state.audit_results = partial_df
+                if on_progress is not None:
+                    on_progress(processed, total_items)
+            except Exception:
+                pass
+
         results_df = auditor.batch_audit(
             leads_df,
             progress_callback=ai_progress,
             batch_size=batch_size,
+            live_callback=_audit_live_cb,
         )
 
         # Phase 3: summarize
@@ -2204,7 +2215,20 @@ if current_auction and not st.session_state.selected_leads.empty:
                 "display settings before kicking off long runs."
             )
             try:
-                st.session_state.audit_results = _run_ai_audit(leads_df)
+                # Throttle right-panel refreshes during the audit so the
+                # classifier doesn't compete with UI rendering.
+                import time as _time
+                _audit_last = [0.0]
+                def _on_audit_progress(processed, total_items):
+                    now = _time.time()
+                    if (now - _audit_last[0]) < 0.6 and processed < total_items:
+                        return
+                    _audit_last[0] = now
+                    _render_live_results()
+
+                st.session_state.audit_results = _run_ai_audit(
+                    leads_df, on_progress=_on_audit_progress,
+                )
                 _save_current_auction_to_cache()
             except Exception as e:
                 st.error(f"Audit failed: {e}")
