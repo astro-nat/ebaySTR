@@ -1528,7 +1528,7 @@ _COMP_COLUMNS = (
 )
 
 
-def _run_ebay_comps_chunk(audit_df, chunk_size: int = 200):
+def _run_ebay_comps_chunk(audit_df, chunk_size: int = 200, on_lot_priced=None):
     """Run price comps on the NEXT batch of eligible-but-uncomped lots.
 
     Lets the user review earlier results while later chunks process.
@@ -1538,6 +1538,15 @@ def _run_ebay_comps_chunk(audit_df, chunk_size: int = 200):
       2. Runs comps on the first chunk_size of those.
       3. Merges the chunk's comp columns back into the input df at
          the original row indices.
+
+    Args:
+        audit_df: current full audit_results DataFrame.
+        chunk_size: max number of pending lots to comp this call.
+        on_lot_priced: optional callable(completed, total) that fires
+            after EACH individual lot finishes pricing — lets the
+            caller stream live updates into the UI without waiting for
+            the whole chunk to finish. The function is also responsible
+            for any UI refresh; this scope only updates session_state.
 
     Returns:
         (updated_df, found_in_chunk, processed_in_chunk, has_more)
@@ -1628,11 +1637,38 @@ def _run_ebay_comps_chunk(audit_df, chunk_size: int = 200):
             if title_preview:
                 current_item.caption(f"🔎 Just priced: *{title_preview}*")
 
+        # Per-lot live callback. Fires from the main thread (drained via
+        # as_completed) so it's safe to touch Streamlit state. Merges the
+        # individual lot's comp result into df + session_state on the
+        # spot, then defers to the caller's UI-refresh hook.
+        def _live_cb(chunk_idx, payload, completed, total_items):
+            try:
+                target_idx = chunk_indices[chunk_idx]
+                for col in _COMP_COLUMNS:
+                    if col in payload:
+                        df.at[target_idx, col] = payload[col]
+                # ROI on this row only — cheap. Full ROI recompute happens
+                # at the bottom of this function after the chunk completes.
+                cost = pd.to_numeric(df.at[target_idx, 'est_cost'], errors='coerce')
+                resale = pd.to_numeric(df.at[target_idx, 'est_resale'], errors='coerce')
+                if pd.notna(resale) and pd.notna(cost) and cost > 0:
+                    df.at[target_idx, 'est_roi'] = round(
+                        (resale - cost) / cost * 100, 0
+                    )
+                st.session_state.audit_results = df
+                if on_lot_priced is not None:
+                    on_lot_priced(completed, total_items)
+            except Exception:
+                # Live updates are best-effort — never fail the comp run
+                # because of a UI hiccup.
+                pass
+
         chunk_with_comps = ebay.batch_lookup(
             chunk,
             progress_callback=price_cb,
             auction_str_map=auction_str_map,
             max_workers=int(st.session_state.get('comps_workers', 8)),
+            live_callback=_live_cb,
         )
 
         # Merge comp columns from chunk back into df at the original
@@ -1689,6 +1725,114 @@ def _compute_max_bid(df, target_roi_val):
         max_bid = (net_resale / target_roi_val - item_ship) / (1 + buyer_premium_pct)
         out.loc[resale_mask, 'max_bid'] = max_bid.clip(lower=0).round(2)
     return out
+
+
+def _render_red_flag_editor(ar_full):
+    """Render the red-flag review expander (bulk-clear button + editor).
+
+    Pulled out of the inline analysis-view so the right-side results panel
+    can render it from anywhere. ar_full is mutated in place when the
+    user clicks the bulk-clear button or unchecks individual rows;
+    audit_results in session_state is also written to keep things in sync.
+    """
+    flagged_mask = ar_full['red_flag'].fillna(False).astype(bool)
+    flagged_count = int(flagged_mask.sum())
+    with st.expander(
+        f"🚩 Review {flagged_count} red-flagged item(s) "
+        "— uncheck any the audit got wrong",
+        expanded=False,
+    ):
+        # Bulk-clear escape hatch for auctions where the audit is mostly
+        # wrong (typically sports cards / TCG / video games — the AI's
+        # risk labels don't apply to collectibles whose condition is
+        # encoded as a grade in the title).
+        if st.button(
+            f"⚡ Clear all {flagged_count} flag(s) in this auction",
+            help="Set red_flag=False on every flagged row. "
+                 "Use when the audit was systematically wrong "
+                 "(e.g. an auction full of cards or comics). "
+                 "Items will rejoin the next comps batch.",
+            key=f"clear_all_flags_{st.session_state.get('current_auction', '')}",
+        ):
+            ar_full.loc[flagged_mask, 'red_flag'] = False
+            st.session_state.audit_results = ar_full
+            st.session_state._comps_has_more = True
+            _save_current_auction_to_cache()
+            st.success(
+                f"✓ Cleared all {flagged_count} red flag(s). "
+                "They'll be included in the next comps batch."
+            )
+            st.rerun()
+
+        title_col = (
+            'enriched_title' if 'enriched_title' in ar_full.columns
+            else 'title'
+        )
+        review_cols = ['red_flag', title_col, 'verdict']
+        if 'confidence' in ar_full.columns:
+            review_cols.append('confidence')
+        if 'description' in ar_full.columns:
+            review_cols.append('description')
+        if 'lot_link' in ar_full.columns:
+            review_cols.append('lot_link')
+        review_cols = [c for c in review_cols if c in ar_full.columns]
+        review_df = ar_full.loc[flagged_mask, review_cols].copy()
+        editor_sig = (
+            st.session_state.get('current_auction', ''),
+            flagged_count,
+            tuple(review_df.index.tolist()[:50]),
+        )
+        editor_key = f"red_flag_review_{hash(editor_sig)}"
+
+        edited_review = st.data_editor(
+            review_df,
+            use_container_width=True,
+            hide_index=True,
+            column_order=review_cols,
+            disabled=[c for c in review_cols if c != 'red_flag'],
+            column_config={
+                "red_flag": st.column_config.CheckboxColumn(
+                    "🚩 Flagged",
+                    help="Uncheck to clear the flag and let this "
+                         "item join the next comps batch.",
+                    width="small",
+                ),
+                title_col: st.column_config.TextColumn(
+                    "Title", width="large",
+                ),
+                "verdict": st.column_config.TextColumn(
+                    "Reason", width="medium",
+                ),
+                "confidence": st.column_config.ProgressColumn(
+                    "Confidence", min_value=0, max_value=100,
+                    format="%.0f%%",
+                ),
+                "description": st.column_config.TextColumn(
+                    "Description", width="large",
+                    help="Original lot description — gives the "
+                         "context the AI scored against.",
+                ),
+                "lot_link": st.column_config.LinkColumn(
+                    "Open", display_text="🔗",
+                ),
+            },
+            key=editor_key,
+        )
+
+        unchecked = review_df.index[
+            review_df['red_flag'].fillna(False).astype(bool)
+            & ~edited_review['red_flag'].fillna(False).astype(bool).values
+        ]
+        if len(unchecked) > 0:
+            ar_full.loc[unchecked, 'red_flag'] = False
+            st.session_state.audit_results = ar_full
+            st.session_state._comps_has_more = True
+            _save_current_auction_to_cache()
+            st.success(
+                f"✓ Unflagged {len(unchecked)} item(s). They'll be "
+                "included in the next price-comps batch."
+            )
+            st.rerun()
 
 
 def _render_results_table(results_df):
@@ -1951,14 +2095,58 @@ if current_auction and not st.session_state.selected_leads.empty:
     comps_running = st.session_state.get('comps_running', False)
     img_enrich_running = st.session_state.get('img_enrich_running', False)
 
-    # --- Top-level tabs for the analysis workflow ---
-    # Audit + image enrichment go in one tab (both "judge what's in the
-    # lot" steps), comps in their own (the slow part), and the final
-    # review + results table in a third (where the user actually spends
-    # time once the work is done).
-    tab_audit, tab_comps, tab_results = st.tabs([
-        "🛡️ Audit", "💰 Comps", "📊 Results",
-    ])
+    # --- Split-screen layout ---
+    # Left column: tabs with Audit + Comps controls. Right column: live
+    # Results panel that's ALWAYS visible and updates per-lot during a
+    # comp run (see live_update_cb below). Streamlit stacks these
+    # vertically on narrow viewports automatically.
+    left_col, right_col = st.columns([2, 3], gap="medium")
+
+    # The results-table placeholder lives in the right column and is the
+    # target of per-lot live updates. We re-render the table both during
+    # the comp run (via the live_callback) and on every Streamlit run
+    # (so the panel stays correct after page reloads).
+    with right_col:
+        st.markdown("### 📊 Results (live)")
+        results_table_placeholder = st.empty()
+        red_flag_placeholder = st.empty()
+
+    # Helper: render whatever is in audit_results into the right panel.
+    # Called once on initial render, and again from the live_callback
+    # after each individual lot is comped.
+    def _render_live_results():
+        ar = st.session_state.get('audit_results')
+        if not (isinstance(ar, pd.DataFrame) and not ar.empty):
+            with results_table_placeholder.container():
+                st.info(
+                    "Results will appear here as the audit and comps run. "
+                    "Each priced lot streams in immediately — no need to "
+                    "wait for the whole batch."
+                )
+            with red_flag_placeholder.container():
+                pass
+            return
+        with results_table_placeholder.container():
+            _render_results_table(ar)
+
+    def _render_red_flag_review():
+        """Red-flag review editor — rendered separately from the live
+        table so the data_editor key doesn't churn during comp runs."""
+        ar = st.session_state.get('audit_results')
+        if not (isinstance(ar, pd.DataFrame) and not ar.empty):
+            return
+        with red_flag_placeholder.container():
+            if 'red_flag' in ar.columns and ar['red_flag'].fillna(False).any():
+                _render_red_flag_editor(ar)
+
+    # Initial render — both panels reflect the current state.
+    _render_live_results()
+    _render_red_flag_review()
+
+    # Tabs live INSIDE the left column. Calling left_col.tabs() (instead
+    # of `with left_col: st.tabs(...)`) means the existing `with tab_X:`
+    # blocks below keep their original indentation — no deep re-indent.
+    tab_audit, tab_comps = left_col.tabs(["🛡️ Audit", "💰 Comps"])
 
     with tab_audit:
         # Step 1: AI audit
@@ -2098,7 +2286,7 @@ if current_auction and not st.session_state.selected_leads.empty:
                 st.rerun()
 
         if has_audit and not (audit_running or img_enrich_running):
-            st.caption("✅ Audit done — switch to **💰 Comps** tab when ready.")
+            st.caption("✅ Audit done — open the **💰 Comps** tab to start pricing.")
 
     with tab_comps:
         # Step 2: eBay + Mercari comps (only after audit)
@@ -2221,8 +2409,25 @@ if current_auction and not st.session_state.selected_leads.empty:
                     # map so we re-sample for the new auction.
                     if not any_comped:
                         st.session_state.pop('_comps_auction_str_map', None)
+
+                    # Throttle the right-panel re-renders so the comp
+                    # run stays fast — render at most every ~600ms even
+                    # if 8 workers are completing 8 lots/second. Always
+                    # render the very last update so the panel matches
+                    # the final state.
+                    import time as _time
+                    _last = [0.0]
+
+                    def _on_lot_priced(completed, total_items):
+                        now = _time.time()
+                        if (now - _last[0]) < 0.6 and completed < total_items:
+                            return
+                        _last[0] = now
+                        _render_live_results()
+
                     updated, found, processed, has_more = _run_ebay_comps_chunk(
                         ar, chunk_size=chunk_size,
+                        on_lot_priced=_on_lot_priced,
                     )
                     st.session_state.audit_results = updated
                     st.session_state._comps_has_more = has_more
@@ -2246,130 +2451,7 @@ if current_auction and not st.session_state.selected_leads.empty:
                 st.rerun()
 
             if any_comped and not comps_running:
-                st.caption("📊 Priced lots are visible in the **Results** tab.")
-
-    with tab_results:
-        if (
-            isinstance(st.session_state.get('audit_results'), pd.DataFrame)
-            and not st.session_state.audit_results.empty
-        ):
-            ar_full = st.session_state.audit_results
-            # --- Red-flag review: let the user uncheck items the audit got wrong ---
-            # Some red flags are obviously right (bedframe, mattress, lawnmower).
-            # Others — especially "Unknown" or low-confidence "untested" calls —
-            # are noise. Surface them in an editable expander so the user can
-            # rescue items back into the comps pool without leaving this page.
-            if 'red_flag' in ar_full.columns and ar_full['red_flag'].fillna(False).any():
-                flagged_mask = ar_full['red_flag'].fillna(False).astype(bool)
-                flagged_count = int(flagged_mask.sum())
-                with st.expander(
-                    f"🚩 Review {flagged_count} red-flagged item(s) "
-                    "— uncheck any the audit got wrong",
-                    expanded=False,
-                ):
-                    # Bulk-clear escape hatch for auctions where the audit
-                    # is mostly wrong (typically sports cards / TCG / video
-                    # games — the AI's risk labels don't apply to collectibles
-                    # whose condition is encoded as a grade in the title).
-                    if st.button(
-                        f"⚡ Clear all {flagged_count} flag(s) in this auction",
-                        help="Set red_flag=False on every flagged row. "
-                             "Use when the audit was systematically wrong "
-                             "(e.g. an auction full of cards or comics). "
-                             "Items will rejoin the next comps batch.",
-                        key=f"clear_all_flags_{st.session_state.get('current_auction', '')}",
-                    ):
-                        ar_full.loc[flagged_mask, 'red_flag'] = False
-                        st.session_state.audit_results = ar_full
-                        st.session_state._comps_has_more = True
-                        _save_current_auction_to_cache()
-                        st.success(
-                            f"✓ Cleared all {flagged_count} red flag(s). "
-                            "They'll be included in the next comps batch."
-                        )
-                        st.rerun()
-
-                    title_col = (
-                        'enriched_title' if 'enriched_title' in ar_full.columns
-                        else 'title'
-                    )
-                    # Build the editor view: only the columns useful for review.
-                    review_cols = ['red_flag', title_col, 'verdict']
-                    if 'confidence' in ar_full.columns:
-                        review_cols.append('confidence')
-                    if 'description' in ar_full.columns:
-                        review_cols.append('description')
-                    if 'lot_link' in ar_full.columns:
-                        review_cols.append('lot_link')
-                    review_cols = [c for c in review_cols if c in ar_full.columns]
-                    review_df = ar_full.loc[flagged_mask, review_cols].copy()
-                    # Stable widget key per audit run so unchecks don't bleed
-                    # across auctions.
-                    editor_sig = (
-                        st.session_state.get('current_auction', ''),
-                        flagged_count,
-                        tuple(review_df.index.tolist()[:50]),
-                    )
-                    editor_key = f"red_flag_review_{hash(editor_sig)}"
-
-                    edited_review = st.data_editor(
-                        review_df,
-                        use_container_width=True,
-                        hide_index=True,
-                        column_order=review_cols,
-                        disabled=[c for c in review_cols if c != 'red_flag'],
-                        column_config={
-                            "red_flag": st.column_config.CheckboxColumn(
-                                "🚩 Flagged",
-                                help="Uncheck to clear the flag and let this "
-                                     "item join the next comps batch.",
-                                width="small",
-                            ),
-                            title_col: st.column_config.TextColumn(
-                                "Title", width="large",
-                            ),
-                            "verdict": st.column_config.TextColumn(
-                                "Reason", width="medium",
-                            ),
-                            "confidence": st.column_config.ProgressColumn(
-                                "Confidence", min_value=0, max_value=100,
-                                format="%.0f%%",
-                            ),
-                            "description": st.column_config.TextColumn(
-                                "Description", width="large",
-                                help="Original lot description — gives the "
-                                     "context the AI scored against.",
-                            ),
-                            "lot_link": st.column_config.LinkColumn(
-                                "Open", display_text="🔗",
-                            ),
-                        },
-                        key=editor_key,
-                    )
-
-                    # Detect rows the user unchecked and write them back.
-                    unchecked = review_df.index[
-                        review_df['red_flag'].fillna(False).astype(bool)
-                        & ~edited_review['red_flag'].fillna(False).astype(bool).values
-                    ]
-                    if len(unchecked) > 0:
-                        ar_full.loc[unchecked, 'red_flag'] = False
-                        st.session_state.audit_results = ar_full
-                        st.session_state._comps_has_more = True
-                        _save_current_auction_to_cache()
-                        st.success(
-                            f"✓ Unflagged {len(unchecked)} item(s). They'll be "
-                            "included in the next price-comps batch."
-                        )
-                        st.rerun()
-
-            st.markdown("### Results")
-            _render_results_table(st.session_state.audit_results)
-        else:
-            st.info(
-                "No results yet. Run the audit (in the **🛡️ Audit** tab) "
-                "and price comps (in the **💰 Comps** tab) to populate this view."
-            )
+                st.caption("📊 Priced lots stream live to the right panel.")
 
 # ---- SELECTION VIEW: candidates loaded, user picking which to deep-scan ----
 elif st.session_state.get('auction_candidates') and st.session_state.phase1_leads.empty:

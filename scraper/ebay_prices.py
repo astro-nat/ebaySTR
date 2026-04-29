@@ -721,7 +721,8 @@ class EbayPriceLookup:
 
     def batch_lookup(self, df: pd.DataFrame, progress_callback=None,
                      auction_str_map: Optional[dict] = None,
-                     max_workers: int = 8) -> pd.DataFrame:
+                     max_workers: int = 8,
+                     live_callback=None) -> pd.DataFrame:
         """Add price range, STR, and source columns to a DataFrame.
 
         Runs `lookup_price_range()` in parallel across a thread pool. STR is
@@ -832,6 +833,21 @@ class EbayPriceLookup:
 
         workers = max(1, int(max_workers))
 
+        def _fire_live(idx: int, payload):
+            """Call live_callback with (chunk_idx, payload, completed, total).
+
+            Lets the caller stream a single lot's price result into the UI
+            as soon as it completes, rather than waiting for the whole
+            batch to finish. Errors in the callback are swallowed so a
+            UI hiccup never poisons the price run.
+            """
+            if live_callback is None or payload is None:
+                return
+            try:
+                live_callback(idx, payload, completed, total)
+            except Exception:
+                pass
+
         # Serial path — avoid thread overhead when max_workers == 1
         if workers == 1:
             for i in range(total):
@@ -842,6 +858,7 @@ class EbayPriceLookup:
                     str_results[i] = sr
                 completed += 1
                 _emit(completed, titles[i][:70])
+                _fire_live(i, price_info)
         else:
             # Parallel path — submit all price jobs; interleave STR jobs only
             # when we don't have a precomputed auction map.
@@ -861,6 +878,7 @@ class EbayPriceLookup:
                         price_results[idx] = payload
                         completed += 1
                         _emit(completed, titles[idx][:70])
+                        _fire_live(idx, payload)
                     else:
                         str_results[idx] = payload
 
