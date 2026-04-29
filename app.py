@@ -1945,253 +1945,70 @@ if current_auction and not st.session_state.selected_leads.empty:
         and 'verdict' in st.session_state.audit_results.columns
     )
 
-    # Step 1: AI audit
-    st.markdown("---")
-    st.markdown("### Step 1: AI Condition Audit")
-
-    if has_audit:
-        ar = st.session_state.audit_results
-        good_count = (~ar['red_flag']).sum()
-        flagged_count = ar['red_flag'].sum()
-        st.success(f"Audit complete — **{good_count} good+** condition, {flagged_count} red-flagged")
-
+    # Hoisted "running" flags so each tab can disable buttons consistently
+    # regardless of which tab the user has open.
     audit_running = st.session_state.get('audit_running', False)
     comps_running = st.session_state.get('comps_running', False)
-    audit_btn_label = "⏳ Running audit…" if audit_running else "🧠 Run AI Condition Audit"
-
-    # ---- Audit speed/accuracy knobs ----
-    with st.expander("⚙️ Audit speed vs accuracy (optional)", expanded=False):
-        ac_col1, ac_col2 = st.columns(2)
-        with ac_col1:
-            st.checkbox(
-                "🚀 Fast mode (smaller model)",
-                key="audit_fast_mode",
-                help="Use distilbart-mnli-12-3 (~500MB, ~3x faster) instead "
-                     "of bart-large-mnli. First run triggers a one-time "
-                     "~500MB download — the UI may appear frozen for 1–3 "
-                     "minutes during that download. Leave off to use the "
-                     "already-cached bart-large-mnli.",
-            )
-        with ac_col2:
-            st.slider(
-                "Batch size (per forward pass)",
-                min_value=1, max_value=32, step=1,
-                key="audit_batch_size",
-                help="Descriptions classified in one forward pass. Bigger = "
-                     "faster but more RAM. Start at 8; drop to 4 if OOM, "
-                     "push to 16-32 on a beefy box. Batching alone gives a "
-                     "~2-3x speedup over the old serial code.",
-            )
-
-    if st.button(
-        audit_btn_label,
-        type="primary",
-        use_container_width=True,
-        disabled=audit_running or comps_running,
-        key="run_audit_btn",
-    ):
-        st.session_state.audit_running = True
-        st.rerun()
-
-    # If the flag is set, we're on the second rerun — do the actual work
-    # with the button now rendered disabled above. Clear the flag when done.
-    if audit_running:
-        _keep_screen_awake()
-        st.info(
-            "🔋 Keeping screen awake while this runs. "
-            "If your phone still locks, set **Auto-Lock → Never** in your phone's "
-            "display settings before kicking off long runs."
-        )
-        try:
-            st.session_state.audit_results = _run_ai_audit(leads_df)
-            _save_current_auction_to_cache()
-        except Exception as e:
-            st.error(f"Audit failed: {e}")
-        finally:
-            st.session_state.audit_running = False
-        st.rerun()
-
-    # Step 1.5: Image-based title enrichment (optional; improves Step 2 quality)
     img_enrich_running = st.session_state.get('img_enrich_running', False)
-    st.markdown("---")
-    st.markdown("### Step 1.5: Upgrade Titles via eBay Image Match  ·  *optional*")
 
-    if not has_audit:
-        st.info(
-            "Run the AI audit first — image enrichment only runs on **good+** lots "
-            "that pass the condition filter."
-        )
-    else:
-        ar = st.session_state.audit_results
-        # Count what would actually be analyzed so the user knows the scope
-        if 'thumbnail_url' in ar.columns:
-            with_thumbs = int(ar['thumbnail_url'].fillna('').astype(bool).sum())
-        else:
-            with_thumbs = 0
+    # --- Top-level tabs for the analysis workflow ---
+    # Audit + image enrichment go in one tab (both "judge what's in the
+    # lot" steps), comps in their own (the slow part), and the final
+    # review + results table in a third (where the user actually spends
+    # time once the work is done).
+    tab_audit, tab_comps, tab_results = st.tabs([
+        "🛡️ Audit", "💰 Comps", "📊 Results",
+    ])
 
-        img_upgraded = 0
-        if 'img_enriched_title' in ar.columns:
-            img_upgraded = int(ar['img_enriched_title'].notna().sum())
+    with tab_audit:
+        # Step 1: AI audit
+        st.markdown("### Step 1: AI Condition Audit")
 
-        caption_bits = [f"🖼️ {with_thumbs} items have thumbnails"]
-        if img_upgraded:
-            caption_bits.append(f"✨ {img_upgraded} already upgraded")
-        st.caption(" · ".join(caption_bits))
+        if has_audit:
+            ar = st.session_state.audit_results
+            good_count = (~ar['red_flag']).sum()
+            flagged_count = ar['red_flag'].sum()
+            st.success(f"Audit complete — **{good_count} good+** condition, {flagged_count} red-flagged")
 
-        st.caption(
-            "Downloads each lot's first thumbnail, runs it through eBay's "
-            "`search_by_image`, and rewrites the title with brand / model / "
-            "year pulled from matching listings. **Zero-cost** — reuses your "
-            "Browse API credentials. Skips red-flagged, HARD-to-ship, "
-            "and low-bid lots by default."
-        )
+        audit_btn_label = "⏳ Running audit…" if audit_running else "🧠 Run AI Condition Audit"
 
-        c1, c2 = st.columns([2, 1])
-        with c2:
-            min_bid = st.number_input(
-                "Skip lots below bid $",
-                min_value=0.0, max_value=500.0, step=1.0,
-                value=float(st.session_state.img_enrich_min_bid),
-                key="img_enrich_min_bid_input",
-                help="Junk filter. Don't burn cycles identifying $1 lots.",
-            )
-            st.session_state.img_enrich_min_bid = float(min_bid)
-
-        img_btn_label = ("⏳ Identifying items…" if img_enrich_running
-                         else "🖼️ Upgrade Titles from Images")
-        if c1.button(
-            img_btn_label,
-            type="secondary",
-            use_container_width=True,
-            disabled=audit_running or comps_running or img_enrich_running,
-            key="run_img_enrich_btn",
-        ):
-            st.session_state.img_enrich_running = True
-            st.rerun()
-
-        if img_enrich_running:
-            _keep_screen_awake()
-            try:
-                st.session_state.audit_results = _run_image_enrichment(
-                    st.session_state.audit_results,
-                    min_bid=st.session_state.img_enrich_min_bid,
-                )
-                _save_current_auction_to_cache()
-            except Exception as e:
-                import traceback
-                st.error(f"Image enrichment failed: {e}")
-                st.code(traceback.format_exc(), language="python")
-            finally:
-                st.session_state.img_enrich_running = False
-            st.rerun()
-
-    # Step 2: eBay + Mercari comps (only after audit)
-    st.markdown("---")
-    st.markdown("### Step 2: eBay + Mercari Price Comps & STR")
-
-    if not has_audit:
-        st.info("Run the AI audit first — price lookups only run on **good+ condition** items.")
-    else:
-        ar = st.session_state.audit_results
-        good_df = ar[~ar['red_flag']]
-        flagged_df = ar[ar['red_flag']]
-        st.caption(f"💰 {len(good_df)} good+ items eligible for lookup ({len(flagged_df)} red-flagged skipped)")
-
-        # ---- Pre-comps filter panel ----
-        # Comps are ~3s/lot; a 1000-lot auction takes ~50 min unfiltered.
-        # Let the user trim the target set before launch.
-        with st.expander("⚙️ Narrow down what to comp (optional — big speedup on large auctions)",
-                         expanded=(len(good_df) >= 300)):
-            f_col1, f_col2 = st.columns(2)
-            with f_col1:
-                st.number_input(
-                    "Minimum current bid ($)",
-                    min_value=0.0, max_value=500.0, step=1.0,
-                    key="comps_min_bid",
-                    help="Skip lots with bids below this — cheap bids usually = junk.",
-                )
-                st.number_input(
-                    "Cap total lots to comp (0 = no cap)",
-                    min_value=0, max_value=5000, step=50,
-                    key="comps_max_lots",
-                    help="Keep only the top-N by current bid. Useful for massive auctions.",
-                )
-            with f_col2:
+        # ---- Audit speed/accuracy knobs ----
+        with st.expander("⚙️ Audit speed vs accuracy (optional)", expanded=False):
+            ac_col1, ac_col2 = st.columns(2)
+            with ac_col1:
                 st.checkbox(
-                    "Exclude HARD logistics lots",
-                    key="comps_exclude_hard",
-                    help="Skip items flagged as hard to ship/pick up.",
+                    "🚀 Fast mode (smaller model)",
+                    key="audit_fast_mode",
+                    help="Use distilbart-mnli-12-3 (~500MB, ~3x faster) instead "
+                         "of bart-large-mnli. First run triggers a one-time "
+                         "~500MB download — the UI may appear frozen for 1–3 "
+                         "minutes during that download. Leave off to use the "
+                         "already-cached bart-large-mnli.",
                 )
-                st.checkbox(
-                    "Only image-promoted titles",
-                    key="comps_only_img_promoted",
-                    help="Only comp lots whose title was upgraded in Step 1.5 "
-                         "(highest-confidence product matches). Leave off unless "
-                         "you've already run image enrichment.",
-                )
-                st.checkbox(
-                    "Fast STR (sample 3 lots per auction)",
-                    key="comps_use_auction_str",
-                    help="STR is a marketplace signal, not per-lot. Sampling "
-                         "replaces ~1000 scrapes with ~15 on a typical run. "
-                         "Big time saver — leave on.",
-                )
+            with ac_col2:
                 st.slider(
-                    "Parallel workers",
-                    min_value=1, max_value=16, step=1,
-                    key="comps_workers",
-                    help="Thread pool size for price lookups. Default 8 — "
-                         "roughly 8x faster than serial. Drop to 1 if you "
-                         "suspect rate-limiting; push to 12-16 on a fast "
-                         "connection.",
+                    "Batch size (per forward pass)",
+                    min_value=1, max_value=32, step=1,
+                    key="audit_batch_size",
+                    help="Descriptions classified in one forward pass. Bigger = "
+                         "faster but more RAM. Start at 8; drop to 4 if OOM, "
+                         "push to 16-32 on a beefy box. Batching alone gives a "
+                         "~2-3x speedup over the old serial code.",
                 )
-                st.slider(
-                    "Comp batch size",
-                    min_value=50, max_value=1000, step=50,
-                    key="comps_chunk_size",
-                    help="Process eligible lots N at a time so you can "
-                         "review the first N's results while the next "
-                         "batch runs. After each batch, a 'Continue' "
-                         "button appears if more pending lots remain.",
-                )
-
-            # Live preview of how many lots will actually be comped
-            try:
-                preview_df, preview_skipped, preview_summary = _apply_comps_filters(good_df)
-                st.caption(
-                    f"**🎯 Will comp {len(preview_df)} lots** "
-                    f"(of {len(good_df)} good+) · {preview_summary}"
-                )
-            except Exception:
-                pass
-
-        # Decide which button label to show. The first chunk uses
-        # "Run Price Comps"; subsequent chunks use "Continue with next
-        # batch". `_comps_has_more` is set after each chunk completes.
-        chunk_size = int(st.session_state.get('comps_chunk_size', 200))
-        has_more = st.session_state.get('_comps_has_more', False)
-        any_comped = (
-            'est_resale' in ar.columns
-            and ar['est_resale'].notna().any()
-        )
-        if comps_running:
-            comps_btn_label = "⏳ Running price comps…"
-        elif any_comped and has_more:
-            comps_btn_label = f"➡️ Continue with next {chunk_size} lot(s)"
-        else:
-            comps_btn_label = f"💰 Run Price Comps (first {chunk_size} lot(s))"
 
         if st.button(
-            comps_btn_label,
+            audit_btn_label,
             type="primary",
             use_container_width=True,
-            disabled=audit_running or comps_running or img_enrich_running,
-            key="run_comps_btn",
+            disabled=audit_running or comps_running,
+            key="run_audit_btn",
         ):
-            st.session_state.comps_running = True
+            st.session_state.audit_running = True
             st.rerun()
 
-        if comps_running:
+        # If the flag is set, we're on the second rerun — do the actual work
+        # with the button now rendered disabled above. Clear the flag when done.
+        if audit_running:
             _keep_screen_awake()
             st.info(
                 "🔋 Keeping screen awake while this runs. "
@@ -2199,163 +2016,360 @@ if current_auction and not st.session_state.selected_leads.empty:
                 "display settings before kicking off long runs."
             )
             try:
-                # First chunk on a fresh auction? Reset the cached STR
-                # map so we re-sample for the new auction.
-                if not any_comped:
-                    st.session_state.pop('_comps_auction_str_map', None)
-                updated, found, processed, has_more = _run_ebay_comps_chunk(
-                    ar, chunk_size=chunk_size,
-                )
-                st.session_state.audit_results = updated
-                st.session_state._comps_has_more = has_more
+                st.session_state.audit_results = _run_ai_audit(leads_df)
                 _save_current_auction_to_cache()
-                if processed:
-                    st.success(
-                        f"Batch complete — priced {found}/{processed} lot(s)."
-                        + ("  More lots remain — click again to continue."
-                           if has_more else
-                           "  ✅ All eligible lots have been comped.")
-                    )
-                else:
-                    st.warning(
-                        "No eligible lots remain to comp. Loosen filters or "
-                        "fetch a different auction."
-                    )
             except Exception as e:
-                st.error(f"Price comps failed: {e}")
+                st.error(f"Audit failed: {e}")
             finally:
-                st.session_state.comps_running = False
+                st.session_state.audit_running = False
             st.rerun()
 
-    # Results table (if anything exists)
-    if (
-        isinstance(st.session_state.get('audit_results'), pd.DataFrame)
-        and not st.session_state.audit_results.empty
-    ):
+        # Step 1.5: Image-based title enrichment (optional; improves Step 2 quality)
         st.markdown("---")
-        ar_full = st.session_state.audit_results
-        # --- Red-flag review: let the user uncheck items the audit got wrong ---
-        # Some red flags are obviously right (bedframe, mattress, lawnmower).
-        # Others — especially "Unknown" or low-confidence "untested" calls —
-        # are noise. Surface them in an editable expander so the user can
-        # rescue items back into the comps pool without leaving this page.
-        if 'red_flag' in ar_full.columns and ar_full['red_flag'].fillna(False).any():
-            flagged_mask = ar_full['red_flag'].fillna(False).astype(bool)
-            flagged_count = int(flagged_mask.sum())
-            with st.expander(
-                f"🚩 Review {flagged_count} red-flagged item(s) "
-                "— uncheck any the audit got wrong",
-                expanded=False,
+        st.markdown("### Step 1.5: Upgrade Titles via eBay Image Match  ·  *optional*")
+
+        if not has_audit:
+            st.info(
+                "Run the AI audit first — image enrichment only runs on **good+** lots "
+                "that pass the condition filter."
+            )
+        else:
+            ar = st.session_state.audit_results
+            # Count what would actually be analyzed so the user knows the scope
+            if 'thumbnail_url' in ar.columns:
+                with_thumbs = int(ar['thumbnail_url'].fillna('').astype(bool).sum())
+            else:
+                with_thumbs = 0
+
+            img_upgraded = 0
+            if 'img_enriched_title' in ar.columns:
+                img_upgraded = int(ar['img_enriched_title'].notna().sum())
+
+            caption_bits = [f"🖼️ {with_thumbs} items have thumbnails"]
+            if img_upgraded:
+                caption_bits.append(f"✨ {img_upgraded} already upgraded")
+            st.caption(" · ".join(caption_bits))
+
+            st.caption(
+                "Downloads each lot's first thumbnail, runs it through eBay's "
+                "`search_by_image`, and rewrites the title with brand / model / "
+                "year pulled from matching listings. **Zero-cost** — reuses your "
+                "Browse API credentials. Skips red-flagged, HARD-to-ship, "
+                "and low-bid lots by default."
+            )
+
+            c1, c2 = st.columns([2, 1])
+            with c2:
+                min_bid = st.number_input(
+                    "Skip lots below bid $",
+                    min_value=0.0, max_value=500.0, step=1.0,
+                    value=float(st.session_state.img_enrich_min_bid),
+                    key="img_enrich_min_bid_input",
+                    help="Junk filter. Don't burn cycles identifying $1 lots.",
+                )
+                st.session_state.img_enrich_min_bid = float(min_bid)
+
+            img_btn_label = ("⏳ Identifying items…" if img_enrich_running
+                             else "🖼️ Upgrade Titles from Images")
+            if c1.button(
+                img_btn_label,
+                type="secondary",
+                use_container_width=True,
+                disabled=audit_running or comps_running or img_enrich_running,
+                key="run_img_enrich_btn",
             ):
-                # Bulk-clear escape hatch for auctions where the audit
-                # is mostly wrong (typically sports cards / TCG / video
-                # games — the AI's risk labels don't apply to collectibles
-                # whose condition is encoded as a grade in the title).
-                # Future audits use a classifier-based bypass for those
-                # categories, but this rescues the current auction in
-                # one click.
-                if st.button(
-                    f"⚡ Clear all {flagged_count} flag(s) in this auction",
-                    help="Set red_flag=False on every flagged row. "
-                         "Use when the audit was systematically wrong "
-                         "(e.g. an auction full of cards or comics). "
-                         "Items will rejoin the next comps batch.",
-                    key=f"clear_all_flags_{st.session_state.get('current_auction', '')}",
+                st.session_state.img_enrich_running = True
+                st.rerun()
+
+            if img_enrich_running:
+                _keep_screen_awake()
+                try:
+                    st.session_state.audit_results = _run_image_enrichment(
+                        st.session_state.audit_results,
+                        min_bid=st.session_state.img_enrich_min_bid,
+                    )
+                    _save_current_auction_to_cache()
+                except Exception as e:
+                    import traceback
+                    st.error(f"Image enrichment failed: {e}")
+                    st.code(traceback.format_exc(), language="python")
+                finally:
+                    st.session_state.img_enrich_running = False
+                st.rerun()
+
+        if has_audit and not (audit_running or img_enrich_running):
+            st.caption("✅ Audit done — switch to **💰 Comps** tab when ready.")
+
+    with tab_comps:
+        # Step 2: eBay + Mercari comps (only after audit)
+        st.markdown("### Step 2: eBay + Mercari Price Comps & STR")
+
+        if not has_audit:
+            st.info(
+                "Run the AI audit first (in the **🛡️ Audit** tab) — "
+                "price lookups only run on **good+ condition** items."
+            )
+        else:
+            ar = st.session_state.audit_results
+            good_df = ar[~ar['red_flag']]
+            flagged_df = ar[ar['red_flag']]
+            st.caption(f"💰 {len(good_df)} good+ items eligible for lookup ({len(flagged_df)} red-flagged skipped)")
+
+            # ---- Pre-comps filter panel ----
+            # Comps are ~3s/lot; a 1000-lot auction takes ~50 min unfiltered.
+            # Let the user trim the target set before launch.
+            with st.expander("⚙️ Narrow down what to comp (optional — big speedup on large auctions)",
+                             expanded=(len(good_df) >= 300)):
+                f_col1, f_col2 = st.columns(2)
+                with f_col1:
+                    st.number_input(
+                        "Minimum current bid ($)",
+                        min_value=0.0, max_value=500.0, step=1.0,
+                        key="comps_min_bid",
+                        help="Skip lots with bids below this — cheap bids usually = junk.",
+                    )
+                    st.number_input(
+                        "Cap total lots to comp (0 = no cap)",
+                        min_value=0, max_value=5000, step=50,
+                        key="comps_max_lots",
+                        help="Keep only the top-N by current bid. Useful for massive auctions.",
+                    )
+                with f_col2:
+                    st.checkbox(
+                        "Exclude HARD logistics lots",
+                        key="comps_exclude_hard",
+                        help="Skip items flagged as hard to ship/pick up.",
+                    )
+                    st.checkbox(
+                        "Only image-promoted titles",
+                        key="comps_only_img_promoted",
+                        help="Only comp lots whose title was upgraded in Step 1.5 "
+                             "(highest-confidence product matches). Leave off unless "
+                             "you've already run image enrichment.",
+                    )
+                    st.checkbox(
+                        "Fast STR (sample 3 lots per auction)",
+                        key="comps_use_auction_str",
+                        help="STR is a marketplace signal, not per-lot. Sampling "
+                             "replaces ~1000 scrapes with ~15 on a typical run. "
+                             "Big time saver — leave on.",
+                    )
+                    st.slider(
+                        "Parallel workers",
+                        min_value=1, max_value=16, step=1,
+                        key="comps_workers",
+                        help="Thread pool size for price lookups. Default 8 — "
+                             "roughly 8x faster than serial. Drop to 1 if you "
+                             "suspect rate-limiting; push to 12-16 on a fast "
+                             "connection.",
+                    )
+                    st.slider(
+                        "Comp batch size",
+                        min_value=50, max_value=1000, step=50,
+                        key="comps_chunk_size",
+                        help="Process eligible lots N at a time so you can "
+                             "review the first N's results while the next "
+                             "batch runs. After each batch, a 'Continue' "
+                             "button appears if more pending lots remain.",
+                    )
+
+                # Live preview of how many lots will actually be comped
+                try:
+                    preview_df, preview_skipped, preview_summary = _apply_comps_filters(good_df)
+                    st.caption(
+                        f"**🎯 Will comp {len(preview_df)} lots** "
+                        f"(of {len(good_df)} good+) · {preview_summary}"
+                    )
+                except Exception:
+                    pass
+
+            # Decide which button label to show. The first chunk uses
+            # "Run Price Comps"; subsequent chunks use "Continue with next
+            # batch". `_comps_has_more` is set after each chunk completes.
+            chunk_size = int(st.session_state.get('comps_chunk_size', 200))
+            has_more = st.session_state.get('_comps_has_more', False)
+            any_comped = (
+                'est_resale' in ar.columns
+                and ar['est_resale'].notna().any()
+            )
+            if comps_running:
+                comps_btn_label = "⏳ Running price comps…"
+            elif any_comped and has_more:
+                comps_btn_label = f"➡️ Continue with next {chunk_size} lot(s)"
+            else:
+                comps_btn_label = f"💰 Run Price Comps (first {chunk_size} lot(s))"
+
+            if st.button(
+                comps_btn_label,
+                type="primary",
+                use_container_width=True,
+                disabled=audit_running or comps_running or img_enrich_running,
+                key="run_comps_btn",
+            ):
+                st.session_state.comps_running = True
+                st.rerun()
+
+            if comps_running:
+                _keep_screen_awake()
+                st.info(
+                    "🔋 Keeping screen awake while this runs. "
+                    "If your phone still locks, set **Auto-Lock → Never** in your phone's "
+                    "display settings before kicking off long runs."
+                )
+                try:
+                    # First chunk on a fresh auction? Reset the cached STR
+                    # map so we re-sample for the new auction.
+                    if not any_comped:
+                        st.session_state.pop('_comps_auction_str_map', None)
+                    updated, found, processed, has_more = _run_ebay_comps_chunk(
+                        ar, chunk_size=chunk_size,
+                    )
+                    st.session_state.audit_results = updated
+                    st.session_state._comps_has_more = has_more
+                    _save_current_auction_to_cache()
+                    if processed:
+                        st.success(
+                            f"Batch complete — priced {found}/{processed} lot(s)."
+                            + ("  More lots remain — click again to continue."
+                               if has_more else
+                               "  ✅ All eligible lots have been comped.")
+                        )
+                    else:
+                        st.warning(
+                            "No eligible lots remain to comp. Loosen filters or "
+                            "fetch a different auction."
+                        )
+                except Exception as e:
+                    st.error(f"Price comps failed: {e}")
+                finally:
+                    st.session_state.comps_running = False
+                st.rerun()
+
+            if any_comped and not comps_running:
+                st.caption("📊 Priced lots are visible in the **Results** tab.")
+
+    with tab_results:
+        if (
+            isinstance(st.session_state.get('audit_results'), pd.DataFrame)
+            and not st.session_state.audit_results.empty
+        ):
+            ar_full = st.session_state.audit_results
+            # --- Red-flag review: let the user uncheck items the audit got wrong ---
+            # Some red flags are obviously right (bedframe, mattress, lawnmower).
+            # Others — especially "Unknown" or low-confidence "untested" calls —
+            # are noise. Surface them in an editable expander so the user can
+            # rescue items back into the comps pool without leaving this page.
+            if 'red_flag' in ar_full.columns and ar_full['red_flag'].fillna(False).any():
+                flagged_mask = ar_full['red_flag'].fillna(False).astype(bool)
+                flagged_count = int(flagged_mask.sum())
+                with st.expander(
+                    f"🚩 Review {flagged_count} red-flagged item(s) "
+                    "— uncheck any the audit got wrong",
+                    expanded=False,
                 ):
-                    ar_full.loc[flagged_mask, 'red_flag'] = False
-                    st.session_state.audit_results = ar_full
-                    st.session_state._comps_has_more = True
-                    _save_current_auction_to_cache()
-                    st.success(
-                        f"✓ Cleared all {flagged_count} red flag(s). "
-                        "They'll be included in the next comps batch."
+                    # Bulk-clear escape hatch for auctions where the audit
+                    # is mostly wrong (typically sports cards / TCG / video
+                    # games — the AI's risk labels don't apply to collectibles
+                    # whose condition is encoded as a grade in the title).
+                    if st.button(
+                        f"⚡ Clear all {flagged_count} flag(s) in this auction",
+                        help="Set red_flag=False on every flagged row. "
+                             "Use when the audit was systematically wrong "
+                             "(e.g. an auction full of cards or comics). "
+                             "Items will rejoin the next comps batch.",
+                        key=f"clear_all_flags_{st.session_state.get('current_auction', '')}",
+                    ):
+                        ar_full.loc[flagged_mask, 'red_flag'] = False
+                        st.session_state.audit_results = ar_full
+                        st.session_state._comps_has_more = True
+                        _save_current_auction_to_cache()
+                        st.success(
+                            f"✓ Cleared all {flagged_count} red flag(s). "
+                            "They'll be included in the next comps batch."
+                        )
+                        st.rerun()
+
+                    title_col = (
+                        'enriched_title' if 'enriched_title' in ar_full.columns
+                        else 'title'
                     )
-                    st.rerun()
-
-                title_col = (
-                    'enriched_title' if 'enriched_title' in ar_full.columns
-                    else 'title'
-                )
-                # Build the editor view: only the columns useful for review.
-                review_cols = ['red_flag', title_col, 'verdict']
-                if 'confidence' in ar_full.columns:
-                    review_cols.append('confidence')
-                if 'description' in ar_full.columns:
-                    review_cols.append('description')
-                if 'lot_link' in ar_full.columns:
-                    review_cols.append('lot_link')
-                review_cols = [c for c in review_cols if c in ar_full.columns]
-                review_df = ar_full.loc[flagged_mask, review_cols].copy()
-                # Stable widget key per audit run so unchecks don't bleed
-                # across auctions.
-                editor_sig = (
-                    st.session_state.get('current_auction', ''),
-                    flagged_count,
-                    tuple(review_df.index.tolist()[:50]),  # cheap fingerprint
-                )
-                editor_key = f"red_flag_review_{hash(editor_sig)}"
-
-                edited_review = st.data_editor(
-                    review_df,
-                    use_container_width=True,
-                    hide_index=True,
-                    column_order=review_cols,
-                    disabled=[c for c in review_cols if c != 'red_flag'],
-                    column_config={
-                        "red_flag": st.column_config.CheckboxColumn(
-                            "🚩 Flagged",
-                            help="Uncheck to clear the flag and let this "
-                                 "item join the next comps batch.",
-                            width="small",
-                        ),
-                        title_col: st.column_config.TextColumn(
-                            "Title", width="large",
-                        ),
-                        "verdict": st.column_config.TextColumn(
-                            "Reason", width="medium",
-                        ),
-                        "confidence": st.column_config.ProgressColumn(
-                            "Confidence", min_value=0, max_value=100,
-                            format="%.0f%%",
-                        ),
-                        "description": st.column_config.TextColumn(
-                            "Description", width="large",
-                            help="Original lot description — gives the "
-                                 "context the AI scored against.",
-                        ),
-                        "lot_link": st.column_config.LinkColumn(
-                            "Open", display_text="🔗",
-                        ),
-                    },
-                    key=editor_key,
-                )
-
-                # Detect rows the user unchecked and write them back to
-                # audit_results. Keys are positional inside review_df, but
-                # since we sliced by mask the original index is preserved.
-                unchecked = review_df.index[
-                    review_df['red_flag'].fillna(False).astype(bool)
-                    & ~edited_review['red_flag'].fillna(False).astype(bool).values
-                ]
-                if len(unchecked) > 0:
-                    ar_full.loc[unchecked, 'red_flag'] = False
-                    st.session_state.audit_results = ar_full
-                    # The chunked comps function detects pending lots via
-                    # est_resale.isna() & ~red_flag, so unflagged items
-                    # auto-rejoin the next batch — no extra plumbing needed.
-                    # Re-enable the "Continue" button by clearing has_more
-                    # cap if it was set to False just because no eligible
-                    # lots remained.
-                    st.session_state._comps_has_more = True
-                    _save_current_auction_to_cache()
-                    st.success(
-                        f"✓ Unflagged {len(unchecked)} item(s). They'll be "
-                        "included in the next price-comps batch."
+                    # Build the editor view: only the columns useful for review.
+                    review_cols = ['red_flag', title_col, 'verdict']
+                    if 'confidence' in ar_full.columns:
+                        review_cols.append('confidence')
+                    if 'description' in ar_full.columns:
+                        review_cols.append('description')
+                    if 'lot_link' in ar_full.columns:
+                        review_cols.append('lot_link')
+                    review_cols = [c for c in review_cols if c in ar_full.columns]
+                    review_df = ar_full.loc[flagged_mask, review_cols].copy()
+                    # Stable widget key per audit run so unchecks don't bleed
+                    # across auctions.
+                    editor_sig = (
+                        st.session_state.get('current_auction', ''),
+                        flagged_count,
+                        tuple(review_df.index.tolist()[:50]),
                     )
-                    st.rerun()
+                    editor_key = f"red_flag_review_{hash(editor_sig)}"
 
-        st.markdown("### Results")
-        _render_results_table(st.session_state.audit_results)
+                    edited_review = st.data_editor(
+                        review_df,
+                        use_container_width=True,
+                        hide_index=True,
+                        column_order=review_cols,
+                        disabled=[c for c in review_cols if c != 'red_flag'],
+                        column_config={
+                            "red_flag": st.column_config.CheckboxColumn(
+                                "🚩 Flagged",
+                                help="Uncheck to clear the flag and let this "
+                                     "item join the next comps batch.",
+                                width="small",
+                            ),
+                            title_col: st.column_config.TextColumn(
+                                "Title", width="large",
+                            ),
+                            "verdict": st.column_config.TextColumn(
+                                "Reason", width="medium",
+                            ),
+                            "confidence": st.column_config.ProgressColumn(
+                                "Confidence", min_value=0, max_value=100,
+                                format="%.0f%%",
+                            ),
+                            "description": st.column_config.TextColumn(
+                                "Description", width="large",
+                                help="Original lot description — gives the "
+                                     "context the AI scored against.",
+                            ),
+                            "lot_link": st.column_config.LinkColumn(
+                                "Open", display_text="🔗",
+                            ),
+                        },
+                        key=editor_key,
+                    )
+
+                    # Detect rows the user unchecked and write them back.
+                    unchecked = review_df.index[
+                        review_df['red_flag'].fillna(False).astype(bool)
+                        & ~edited_review['red_flag'].fillna(False).astype(bool).values
+                    ]
+                    if len(unchecked) > 0:
+                        ar_full.loc[unchecked, 'red_flag'] = False
+                        st.session_state.audit_results = ar_full
+                        st.session_state._comps_has_more = True
+                        _save_current_auction_to_cache()
+                        st.success(
+                            f"✓ Unflagged {len(unchecked)} item(s). They'll be "
+                            "included in the next price-comps batch."
+                        )
+                        st.rerun()
+
+            st.markdown("### Results")
+            _render_results_table(st.session_state.audit_results)
+        else:
+            st.info(
+                "No results yet. Run the audit (in the **🛡️ Audit** tab) "
+                "and price comps (in the **💰 Comps** tab) to populate this view."
+            )
 
 # ---- SELECTION VIEW: candidates loaded, user picking which to deep-scan ----
 elif st.session_state.get('auction_candidates') and st.session_state.phase1_leads.empty:
