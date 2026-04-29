@@ -1859,6 +1859,17 @@ def _render_results_table(results_df):
 
     if 'verdict' in filtered_df.columns:
         display_cols += ['verdict', 'confidence', 'red_flag']
+        col_config["verdict"] = st.column_config.TextColumn(
+            "Flag Reason",
+            help=(
+                "Why the audit flagged the item. "
+                "'Unshippable (HARD logistics)' = pickup-only or oversized. "
+                "'broken, damaged, or for parts' = AI flagged the description "
+                "as condition risk. 'untested or unknown condition' = "
+                "description suggests the seller couldn't verify it works. "
+                "'Unknown' = description was empty or too short to classify."
+            ),
+        )
         col_config["confidence"] = st.column_config.ProgressColumn("Confidence", min_value=0, max_value=100, format="%.1f%%")
         col_config["red_flag"] = st.column_config.CheckboxColumn("Red Flag")
 
@@ -2222,6 +2233,102 @@ if current_auction and not st.session_state.selected_leads.empty:
         and not st.session_state.audit_results.empty
     ):
         st.markdown("---")
+        ar_full = st.session_state.audit_results
+        # --- Red-flag review: let the user uncheck items the audit got wrong ---
+        # Some red flags are obviously right (bedframe, mattress, lawnmower).
+        # Others — especially "Unknown" or low-confidence "untested" calls —
+        # are noise. Surface them in an editable expander so the user can
+        # rescue items back into the comps pool without leaving this page.
+        if 'red_flag' in ar_full.columns and ar_full['red_flag'].fillna(False).any():
+            flagged_mask = ar_full['red_flag'].fillna(False).astype(bool)
+            flagged_count = int(flagged_mask.sum())
+            with st.expander(
+                f"🚩 Review {flagged_count} red-flagged item(s) "
+                "— uncheck any the audit got wrong",
+                expanded=False,
+            ):
+                title_col = (
+                    'enriched_title' if 'enriched_title' in ar_full.columns
+                    else 'title'
+                )
+                # Build the editor view: only the columns useful for review.
+                review_cols = ['red_flag', title_col, 'verdict']
+                if 'confidence' in ar_full.columns:
+                    review_cols.append('confidence')
+                if 'description' in ar_full.columns:
+                    review_cols.append('description')
+                if 'lot_link' in ar_full.columns:
+                    review_cols.append('lot_link')
+                review_cols = [c for c in review_cols if c in ar_full.columns]
+                review_df = ar_full.loc[flagged_mask, review_cols].copy()
+                # Stable widget key per audit run so unchecks don't bleed
+                # across auctions.
+                editor_sig = (
+                    st.session_state.get('current_auction', ''),
+                    flagged_count,
+                    tuple(review_df.index.tolist()[:50]),  # cheap fingerprint
+                )
+                editor_key = f"red_flag_review_{hash(editor_sig)}"
+
+                edited_review = st.data_editor(
+                    review_df,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_order=review_cols,
+                    disabled=[c for c in review_cols if c != 'red_flag'],
+                    column_config={
+                        "red_flag": st.column_config.CheckboxColumn(
+                            "🚩 Flagged",
+                            help="Uncheck to clear the flag and let this "
+                                 "item join the next comps batch.",
+                            width="small",
+                        ),
+                        title_col: st.column_config.TextColumn(
+                            "Title", width="large",
+                        ),
+                        "verdict": st.column_config.TextColumn(
+                            "Reason", width="medium",
+                        ),
+                        "confidence": st.column_config.ProgressColumn(
+                            "Confidence", min_value=0, max_value=100,
+                            format="%.0f%%",
+                        ),
+                        "description": st.column_config.TextColumn(
+                            "Description", width="large",
+                            help="Original lot description — gives the "
+                                 "context the AI scored against.",
+                        ),
+                        "lot_link": st.column_config.LinkColumn(
+                            "Open", display_text="🔗",
+                        ),
+                    },
+                    key=editor_key,
+                )
+
+                # Detect rows the user unchecked and write them back to
+                # audit_results. Keys are positional inside review_df, but
+                # since we sliced by mask the original index is preserved.
+                unchecked = review_df.index[
+                    review_df['red_flag'].fillna(False).astype(bool)
+                    & ~edited_review['red_flag'].fillna(False).astype(bool).values
+                ]
+                if len(unchecked) > 0:
+                    ar_full.loc[unchecked, 'red_flag'] = False
+                    st.session_state.audit_results = ar_full
+                    # The chunked comps function detects pending lots via
+                    # est_resale.isna() & ~red_flag, so unflagged items
+                    # auto-rejoin the next batch — no extra plumbing needed.
+                    # Re-enable the "Continue" button by clearing has_more
+                    # cap if it was set to False just because no eligible
+                    # lots remained.
+                    st.session_state._comps_has_more = True
+                    _save_current_auction_to_cache()
+                    st.success(
+                        f"✓ Unflagged {len(unchecked)} item(s). They'll be "
+                        "included in the next price-comps batch."
+                    )
+                    st.rerun()
+
         st.markdown("### Results")
         _render_results_table(st.session_state.audit_results)
 
