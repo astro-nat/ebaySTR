@@ -141,13 +141,25 @@ class Phase1Scraper:
 
     def classify_logistics(self, title: str, category: str, description: str = "") -> str:
         text = f"{title} {category}".lower()
-        if re.search(self.ship_killers, text):
-            return "HARD"
-        # Check description for pickup-only language
+
+        # 1. Description "pickup only" language trumps everything — it's an
+        #    explicit seller statement, not a title heuristic. A jewelry lot
+        #    that says "must pick up in person" really is pickup-only.
         if description and self._PICKUP_ONLY_RE.search(description):
             return "HARD"
+
+        # 2. Mailbox-winner keywords (coin, jewelry, watch, card, etc.) are
+        #    very specific small-item signals — they beat generic size
+        #    words in ship_killers. Avoids false HARD on titles like
+        #    "Large Morgan Silver Dollar Collection" (gold/silver/coin
+        #    matches mailbox_winners; "large" matches ship_killers).
         if re.search(self.mailbox_winners, text):
             return "EASY"
+
+        # 3. Otherwise fall back to the ship_killers heuristic.
+        if re.search(self.ship_killers, text):
+            return "HARD"
+
         return "NEUTRAL"
 
     def estimate_total_cost(self, bid: float) -> float:

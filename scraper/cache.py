@@ -17,6 +17,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, List, Dict
 
+import numpy as np
 import pandas as pd
 
 # Columns we trust from cache (they don't change within an auction's life).
@@ -191,18 +192,48 @@ def merge_cached_analysis(fresh_df: pd.DataFrame,
     cached_slim = cached_df[['lot_id'] + analysis_cols].drop_duplicates(subset=['lot_id'])
     merged = fresh_df.merge(cached_slim, on='lot_id', how='left')
 
-    # Recompute est_roi from fresh est_cost (bids may have climbed)
+    # Recompute est_roi from fresh est_cost (bids may have climbed).
+    # We compute on raw numpy arrays here — earlier attempts using
+    # `pd.to_numeric(...).round()` still produced "Expected numeric dtype,
+    # got object" failures on certain cached payloads (likely Decimal or
+    # nullable-extension internals that survive coercion but break
+    # Series.round). Going via np.array(..., dtype=float) bottoms out at
+    # plain float64 so np.round always works.
+    # cost==0 (no bids yet) gets a 9999% sentinel so the row sorts to
+    # the top of the results table rather than vanishing as None.
     if 'est_resale' in merged.columns and 'est_cost' in merged.columns:
         merged['est_roi'] = None
-        mask = (
-            merged['est_resale'].notna()
-            & merged['est_cost'].notna()
-            & (merged['est_cost'] > 0)
-        )
+        resale = _to_float_array(merged['est_resale'])
+        cost = _to_float_array(merged['est_cost'])
+        mask = ~np.isnan(resale) & ~np.isnan(cost) & (cost > 0)
         if mask.any():
-            merged.loc[mask, 'est_roi'] = (
-                (merged.loc[mask, 'est_resale'] - merged.loc[mask, 'est_cost'])
-                / merged.loc[mask, 'est_cost'] * 100
-            ).round(0)
+            roi = np.round((resale[mask] - cost[mask]) / cost[mask] * 100, 0)
+            merged.loc[mask, 'est_roi'] = roi
+        no_bid = ~np.isnan(resale) & (resale > 0) & (
+            np.isnan(cost) | (cost == 0)
+        )
+        if no_bid.any():
+            merged.loc[no_bid, 'est_roi'] = 9999
 
     return merged
+
+
+def _to_float_array(series: pd.Series) -> np.ndarray:
+    """Coerce a Series to a numpy float64 array, NaN for unconvertible cells.
+
+    `pd.to_numeric(errors='coerce')` is supposed to do this but doesn't
+    always — Decimal values, nullable Float64 extension dtype, and certain
+    pickled-cache shapes keep the resulting Series at object dtype, which
+    then breaks `.round()`. Doing the coercion element-wise via float()
+    is slow on huge frames but bulletproof.
+    """
+    out = np.empty(len(series), dtype='float64')
+    for i, v in enumerate(series):
+        try:
+            if v is None or (isinstance(v, float) and v != v):
+                out[i] = np.nan
+            else:
+                out[i] = float(v)
+        except (TypeError, ValueError):
+            out[i] = np.nan
+    return out
