@@ -215,7 +215,7 @@ class Phase2Scraper:
         }
 
     def batch_audit(self, df: pd.DataFrame, progress_callback=None,
-                    batch_size: int = 8) -> pd.DataFrame:
+                    batch_size: int = 8, live_callback=None) -> pd.DataFrame:
         """Run AI condition audit on a DataFrame that has a 'description' column.
 
         Enriches titles using description details and runs condition
@@ -379,6 +379,21 @@ class Phase2Scraper:
                     if skip_flags[i] and i <= (chunk[-1] if chunk else 0)
                 )
                 progress_callback(min(current_total, total), total)
+
+            # Live callback fires AFTER each classification batch with a
+            # partial DataFrame so the caller can stream results into the
+            # UI without waiting for the entire audit to finish. We
+            # rebuild a fresh df copy each batch (cheap for ≤10K rows).
+            if live_callback:
+                try:
+                    partial_df = df.copy()
+                    partial_df['enriched_title'] = enriched_titles
+                    partial_df['verdict'] = verdicts
+                    partial_df['confidence'] = confidences
+                    partial_df['red_flag'] = red_flags
+                    live_callback(processed, live_n, partial_df)
+                except Exception:
+                    pass  # Live updates are best-effort
 
         # Ensure final progress hit 100%
         if progress_callback:
