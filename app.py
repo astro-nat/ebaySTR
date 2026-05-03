@@ -405,7 +405,7 @@ if 'comps_workers' not in st.session_state:
     st.session_state.comps_workers = 8
 
 if 'cache_ttl_days' not in st.session_state:
-    st.session_state.cache_ttl_days = 14
+    st.session_state.cache_ttl_days = 1
 
 if 'cache_purged_this_session' not in st.session_state:
     # Purge expired entries once per session, not every rerun
