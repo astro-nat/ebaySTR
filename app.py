@@ -555,51 +555,43 @@ _in_analysis_view = (
 )
 
 # Auto-collapse the sidebar when the user starts working an auction.
-# Streamlit doesn't expose a programmatic "collapse sidebar" call, so
-# we inject a one-shot JS click on the sidebar's built-in collapse
-# button. Detected via the in-analysis transition (was-not, is-now)
-# so it only fires on the rerun where the user picked an auction;
-# manual reopens via the hamburger stay sticky.
+# Streamlit doesn't expose a programmatic "collapse sidebar" call,
+# and the JS-click-via-components-html approach is unreliable because
+# of iframe sandboxing across Streamlit versions. CSS-based hiding is
+# the bulletproof alternative: track a `_sidebar_force_collapsed`
+# session-state flag and inject a `display: none` rule when it's set.
+#
+# Auto-set the flag on the (was-not, is-now)-in-analysis transition,
+# auto-clear it when the user goes back to the discovery view, and
+# expose a manual toggle button so the user can override either way.
 _was_in_analysis = st.session_state.get('_was_in_analysis', False)
 _just_entered_analysis = _in_analysis_view and not _was_in_analysis
+_just_left_analysis = _was_in_analysis and not _in_analysis_view
 st.session_state._was_in_analysis = _in_analysis_view
 
 if _just_entered_analysis:
-    components.html(
+    st.session_state._sidebar_force_collapsed = True
+elif _just_left_analysis:
+    # Back to the picker — show the auction list again automatically.
+    st.session_state._sidebar_force_collapsed = False
+
+if st.session_state.get('_sidebar_force_collapsed', False):
+    # Hide the sidebar AND the collapse-toggle button that Streamlit
+    # otherwise renders in the corner. We provide our own manual
+    # reopen button below the header so the toggle stays in a
+    # predictable place.
+    st.markdown(
         """
-        <script>
-        (function() {
-            // Streamlit's components iframe lives on the same origin so
-            // window.parent.document is reachable. The collapse button's
-            // testid varies slightly between Streamlit versions; try a
-            // few candidates and stop at the first hit.
-            const tryCollapse = () => {
-                const doc = window.parent && window.parent.document;
-                if (!doc) return false;
-                const candidates = [
-                    '[data-testid="stSidebarCollapseButton"]',
-                    '[data-testid="baseButton-headerNoPadding"]',
-                    '[data-testid="stSidebarCollapsedControl"]',
-                    'button[kind="headerNoPadding"]',
-                ];
-                for (const sel of candidates) {
-                    const btn = doc.querySelector(sel);
-                    if (btn) { btn.click(); return true; }
-                }
-                return false;
-            };
-            // First-attempt fast path, then retry briefly while the
-            // Streamlit DOM finishes mounting.
-            if (!tryCollapse()) {
-                let tries = 0;
-                const t = setInterval(() => {
-                    if (tryCollapse() || ++tries > 15) clearInterval(t);
-                }, 80);
-            }
-        })();
-        </script>
+        <style>
+        section[data-testid="stSidebar"] {
+            display: none !important;
+        }
+        [data-testid="collapsedControl"] {
+            display: none !important;
+        }
+        </style>
         """,
-        height=0,
+        unsafe_allow_html=True,
     )
 
 header_title_col, header_actions_col = st.columns([3, 2])
@@ -607,7 +599,10 @@ with header_title_col:
     st.markdown("## 🛰️ Auction Intelligence Dashboard")
 
 with header_actions_col:
-    pop_sourcing, pop_memory = st.columns(2)
+    # Three slots: Sourcing popover, Memory popover, and a sidebar
+    # toggle that's always reachable so the user can manually reopen
+    # the auction list after the auto-collapse fires.
+    pop_sourcing, pop_memory, btn_sidebar = st.columns(3)
 
     with pop_sourcing:
         with st.popover("📍 Sourcing", use_container_width=True):
@@ -666,6 +661,23 @@ with header_actions_col:
     # The Refresh / Discover button moved to the top of the sidebar
     # auction list (see _render_sidebar_refresh_button below) so it's
     # adjacent to the list it refreshes.
+
+    with btn_sidebar:
+        # Manual sidebar toggle so the user can override the auto-
+        # collapse behavior in either direction. Label flips based on
+        # the current force-collapsed state.
+        _is_hidden = bool(st.session_state.get('_sidebar_force_collapsed', False))
+        _toggle_label = "📋 Show auctions" if _is_hidden else "🔽 Hide auctions"
+        if st.button(
+            _toggle_label,
+            use_container_width=True,
+            key="sidebar_toggle_btn",
+            help=("Show the auction-list sidebar."
+                  if _is_hidden else
+                  "Hide the auction-list sidebar to free up screen space."),
+        ):
+            st.session_state._sidebar_force_collapsed = not _is_hidden
+            st.rerun()
 
 # Auto-discover on first page load when there's no cached discovery to
 # show — saves the user a click. The flag prevents re-triggering across
