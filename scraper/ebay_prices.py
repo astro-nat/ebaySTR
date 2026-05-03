@@ -273,39 +273,66 @@ class EbayPriceLookup:
 
             html = resp.text
 
-            # Extract prices from s-item__price spans
-            # Handles: <span class="s-item__price">$24.99</span>
-            # And: <span class="s-item__price"><span class="POSITIVE">$24.99</span></span>
-            # Skip range listings ("$10.00 to $20.00") since those are ambiguous
+            # Extract prices. eBay redesigned their search page in 2026
+            # — the price class became `s-card__price` (with various
+            # su-styled-text modifiers) instead of the older
+            # `s-item__price`. Try both patterns so the parser keeps
+            # working if eBay rolls back or different pages still use
+            # the old markup.
             prices = []
-            # Find all s-item__price blocks
-            blocks = re.findall(
-                r'class="s-item__price"[^>]*>(.*?)</span>\s*</div>',
-                html,
-                flags=re.DOTALL,
-            )
-            if not blocks:
-                # Fallback: simpler pattern
-                blocks = re.findall(r'class="s-item__price"[^>]*>([^<]+(?:<[^>]+>[^<]+</[^>]+>)*)', html)
 
-            for block in blocks:
-                # Skip ranges ("X to Y")
-                if ' to ' in block.lower():
+            # NEW (2026) markup. Example block:
+            #   <span class="su-styled-text positive bold large-1
+            #                s-card__price">$20.00</span>
+            # 'strikethrough' variants are crossed-out original prices
+            # — the actual sold price is the non-strikethrough sibling.
+            new_blocks = re.findall(
+                r'class="([^"]*s-card__price[^"]*)"[^>]*>([^<]+)</span>',
+                html,
+            )
+            for class_str, content in new_blocks:
+                if 'strikethrough' in class_str:
                     continue
-                # Extract the dollar amount
-                m = re.search(r'\$([\d,]+(?:\.\d{2})?)', block)
+                if ' to ' in content.lower():
+                    continue
+                m = re.search(r'\$([\d,]+(?:\.\d{2})?)', content)
                 if m:
                     try:
                         p = float(m.group(1).replace(",", ""))
-                        if 0.99 < p < 50000:  # Sanity bounds
+                        if 0.99 < p < 50000:
                             prices.append(p)
                     except ValueError:
                         pass
                 if len(prices) >= max_prices:
                     break
 
-            # First result is often the "Shop on eBay" placeholder — skip if wildly inconsistent
-            # Actually, placeholder has no price, so list naturally excludes it.
+            # LEGACY (pre-2026) markup. Only run if the new pattern
+            # found nothing — some result pages might lag.
+            if not prices:
+                blocks = re.findall(
+                    r'class="s-item__price"[^>]*>(.*?)</span>\s*</div>',
+                    html,
+                    flags=re.DOTALL,
+                )
+                if not blocks:
+                    blocks = re.findall(
+                        r'class="s-item__price"[^>]*>'
+                        r'([^<]+(?:<[^>]+>[^<]+</[^>]+>)*)', html,
+                    )
+                for block in blocks:
+                    if ' to ' in block.lower():
+                        continue
+                    m = re.search(r'\$([\d,]+(?:\.\d{2})?)', block)
+                    if m:
+                        try:
+                            p = float(m.group(1).replace(",", ""))
+                            if 0.99 < p < 50000:
+                                prices.append(p)
+                        except ValueError:
+                            pass
+                    if len(prices) >= max_prices:
+                        break
+
             if prices:
                 type(self)._scrape_stats['ebay_sold_success'] += 1
             return prices
