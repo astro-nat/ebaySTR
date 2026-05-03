@@ -201,7 +201,10 @@ class PriceChartingLookup:
         )
         clean = re.sub(r'\bQty[:\-]?\s*\d+\s*', '', clean, flags=re.IGNORECASE)
         clean = re.sub(r'\([^)]{1,25}\)', '', clean)
-        clean = re.sub(r'[,;:/\\|]+', ' ', clean)
+        # Strip dashes — PriceCharting's product matcher treats them as
+        # token separators which can cause partial-match weirdness, and
+        # mirrors the same fix applied to eBay queries.
+        clean = re.sub(r'[,;:/\\|\-]+', ' ', clean)
         clean = re.sub(r'\s+', ' ', clean).strip(' .,-')
         return clean
 

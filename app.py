@@ -2681,9 +2681,26 @@ def _compute_resale_confidence(row):
     else:
         spread_score = 0.7
 
-    return int(round((source_score * 0.5
-                      + sample_score * 0.3
-                      + spread_score * 0.2) * 100))
+    base_score = (source_score * 0.5 + sample_score * 0.3 + spread_score * 0.2)
+
+    # Reality check: if the live current_bid is multiples of our est,
+    # the market is loudly disagreeing with us. Our query probably
+    # matched the wrong product / grade / variant. Knock confidence
+    # down hard so the user can spot these in the table.
+    try:
+        bid = float(row.get('current_bid') or 0)
+        if bid > 0 and median > 0:
+            ratio = bid / median
+            if ratio >= 10:
+                base_score *= 0.25      # bid >= 10x est → est is almost certainly wrong
+            elif ratio >= 5:
+                base_score *= 0.4
+            elif ratio >= 2.5:
+                base_score *= 0.6
+    except (TypeError, ValueError):
+        pass
+
+    return int(round(base_score * 100))
 
 
 def _render_results_table(results_df):
