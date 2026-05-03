@@ -29,6 +29,9 @@ _BASE_URL = "https://www.pricecharting.com/api"
 # coffee mug" lot. The classifier returns a category hint we can use for
 # logging but PriceCharting's search itself is category-agnostic.
 _PC_TRIGGERS = [
+    # Order matters — first category match wins. We list comic BEFORE
+    # trading_card so a 'Marvel Comics ... CGC 9.8' title doesn't get
+    # claimed by trading_card's bare ` cgc ` trigger first.
     # ---- Video game consoles & branded handhelds ----
     ("video_game", [
         "nintendo 64", " n64 ", "n64,", "n64 ",
@@ -44,6 +47,19 @@ _PC_TRIGGERS = [
         "atari 2600", "atari 5200", "atari 7800", "atari jaguar", "atari lynx",
         "video game", "videogame",
         " rom cartridge", "game cartridge",
+    ]),
+    # ---- Comics ----
+    # The bare "comic book" / "comic books" triggers used to live here
+    # but they false-matched indie/art-book lots ("Superhumanity Super
+    # Australians Comic Book Vol 1" was a $70 phantom). Almost every
+    # legitimate single-comic lot also carries a publisher name or a
+    # CGC/CBCS grade callout, so requiring those is a much sharper
+    # signal.
+    ("comic", [
+        "marvel comics", "dc comics", "image comics",
+        "dark horse comics", "idw comics", "boom! studios",
+        "vertigo comics",
+        "cgc comic", "cgc 9.", "cgc 8.", " cbcs ",
     ]),
     # ---- TCGs / trading cards ----
     # IMPORTANT: only include keywords that DO NOT also appear in the
@@ -79,13 +95,42 @@ _PC_TRIGGERS = [
         # "/auto" was here — removed because it false-matches text like
         # "12/automotive" or filenames like "/auto.jpg" in scraped data.
     ]),
-    # ---- Comics ----
-    ("comic", [
-        "comic book", "comic books",
-        "marvel comics", "dc comics",
-        "cgc comic", "cgc 9.", "cgc 8.",
-    ]),
 ]
+
+
+# Anti-triggers — words that strongly indicate the lot is a physical
+# collectible, NOT a tradable card / game / comic. If any of these
+# appear in the title we suppress the classification entirely. The
+# motivation: PriceCharting will obligingly return a product match
+# even when the lot isn't really one of its products (e.g. a Pokemon
+# Nanoblock toy returned $110 because PC matched it to some Pokemon
+# card). PC has no idea Nanoblocks exist; the price is noise.
+_PC_ANTI_TRIGGERS = [
+    # Building toys
+    "nanoblock", "lego ", "mega bloks", "minifig", "minifigure",
+    # Figurines / statues
+    "figurine", "figurines", "statue", "statuette", " bust ",
+    "funko", "pop figure", "pop! figure", "pop vinyl",
+    "iron studios", "minico",
+    # Plush
+    "plush", "plushie", "plushies", "stuffed animal",
+    # Paper / 3D toys
+    "puzzle", "jigsaw",
+    # Music / audio
+    "vinyl ", " lp ", "lp record", "soundtrack",
+    # Wall / room decor
+    "poster", "wall art", "tapestry",
+    # Wearables
+    " shirt", "t-shirt", "hoodie", " hat ", " cap ",
+    "blanket", " towel",
+    # Drinkware
+    " mug ", "tumbler", "water bottle",
+    # Smaller merch
+    "keychain", "lanyard", "enamel pin", "pin set",
+    # Stationery
+    "notebook", "journal", " sticker",
+]
+
 
 
 def classify_for_pricecharting(title: str) -> Optional[str]:
@@ -95,10 +140,19 @@ def classify_for_pricecharting(title: str) -> Optional[str]:
     Pads with spaces on both ends so word-boundary matching works for the
     one-letter abbreviations like ' ps2 ' that can't be safely searched
     without surrounding whitespace.
+
+    Anti-triggers run first: a single physical-collectible word
+    (nanoblock, statue, plush, vinyl, funko, etc.) suppresses the
+    classification regardless of any matching category trigger. PC's
+    database doesn't cover those products, and a stray product match
+    on a related card/game is just noise.
     """
     if not title:
         return None
     padded = f" {title.lower()} "
+    for kw in _PC_ANTI_TRIGGERS:
+        if kw in padded:
+            return None
     for category, keywords in _PC_TRIGGERS:
         for kw in keywords:
             if kw in padded:
