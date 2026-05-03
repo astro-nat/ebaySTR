@@ -2764,19 +2764,35 @@ def _render_results_table(results_df):
         ).drop(columns=['_roi_sort']).reset_index(drop=True)
 
     # --- Threshold masks (for highlight + status counts) ---
+    # When STR data is unavailable for the entire auction (e.g. coin
+    # auctions where STR scraping doesn't reliably resolve), don't
+    # require STR for the green highlight. Fall back to ROI-only so
+    # rows still flag profitable. We detect "no STR data available"
+    # by checking if any row has a non-null STR value.
     roi_threshold = (target_roi_val - 1) * 100
     meets_roi = (
         working['est_roi'].notna() & (pd.to_numeric(working['est_roi'], errors='coerce') >= roi_threshold)
         if 'est_roi' in working.columns
         else pd.Series(False, index=working.index)
     )
+    str_known_anywhere = (
+        'ebay_str' in working.columns
+        and working['ebay_str'].notna().any()
+    )
     meets_str_mask = (
         working['ebay_str'].notna() & (pd.to_numeric(working['ebay_str'], errors='coerce') >= target_str_val)
         if 'ebay_str' in working.columns
         else pd.Series(False, index=working.index)
     )
-    meets_both = meets_roi & meets_str_mask
-    meets_either = (meets_roi | meets_str_mask) & ~meets_both
+    if str_known_anywhere:
+        meets_both = meets_roi & meets_str_mask
+        meets_either = (meets_roi | meets_str_mask) & ~meets_both
+    else:
+        # No STR data at all — promote ROI-only to "meets both" so the
+        # green highlight still works on auctions where STR can't be
+        # scraped (coins, bullion, niche collectibles).
+        meets_both = meets_roi
+        meets_either = pd.Series(False, index=working.index)
 
     # --- One-line status row (replaces the old 6-cell stMetric grid) ---
     status_bits = [f"**{len(working)}** leads"]
@@ -3001,10 +3017,115 @@ def _render_results_table(results_df):
                 "'Unknown' = description was empty or too short to classify."
             ),
         )
-        col_config["confidence"] = st.column_config.ProgressColumn("Confidence", min_value=0, max_value=100, format="%.1f%%")
+        col_config["confidence"] = st.column_config.ProgressColumn(
+            "Audit Conf.",
+            min_value=0, max_value=100, format="%.1f%%",
+            help="The AI condition-audit's confidence in its verdict "
+                 "(see 'Flag Reason' column). Distinct from the "
+                 "'Resale Conf.' column which scores trust in the "
+                 "est_resale price. Often 0 for collectible-bypass "
+                 "lots (cards/comics/games) where the audit is "
+                 "skipped on purpose.",
+        )
         col_config["red_flag"] = st.column_config.CheckboxColumn("Red Flag")
 
     final_cols = [c for c in display_cols if c in filtered_df.columns]
+
+    # --- Column show/hide controls ---
+    # Auto-detect columns that have no useful data on this auction
+    # (all-null or all-zero) and default-hide them. The user can
+    # toggle visibility per column from the expander above the table.
+    # Common case this addresses: coin auctions where STR scraping
+    # returns nothing, or audit was bypassed so 'confidence' is 0.
+    def _column_is_empty(col: str) -> bool:
+        if col not in filtered_df.columns:
+            return True
+        s = filtered_df[col]
+        if s.isna().all():
+            return True
+        # Numeric-like check: treat all-zero as empty too. Don't apply
+        # to text columns where '0' could be a real category label.
+        if pd.api.types.is_numeric_dtype(s) or pd.api.types.is_bool_dtype(s):
+            try:
+                numeric = pd.to_numeric(s, errors='coerce').fillna(0)
+                if (numeric == 0).all():
+                    return True
+            except (TypeError, ValueError):
+                pass
+        return False
+
+    # Friendly labels for the checkbox UI. Falls back to the column
+    # name when not specified.
+    _col_labels = {
+        'thumbnail_url': '📷 Image',
+        'enriched_title': 'Title (Enriched)',
+        'title': 'Original Title',
+        'lot_link': 'Item link',
+        'auction_link': 'Auction link',
+        'category': 'Category',
+        'current_bid': 'Current Bid',
+        'next_bid': 'Next Bid',
+        'est_cost': 'Est. Cost',
+        'est_resale': 'Est. Resale',
+        'price_low': 'Price Low',
+        'price_high': 'Price High',
+        'comp_count': 'Comp Count',
+        'ebay_comps': 'eBay Comps',
+        'mercari_comps': 'Mercari Comps',
+        'pricecharting_comps': 'PC Hit',
+        'gocollect_comps': 'GoCollect Hit',
+        'price_source': 'Price Source',
+        'resale_confidence': 'Resale Conf.',
+        'ebay_str': 'STR %',
+        'str_source': 'STR Source',
+        'bid_count': 'Bids',
+        'verdict': 'Flag Reason',
+        'confidence': 'Audit Conf.',
+        'red_flag': 'Red Flag',
+        'est_roi': 'ROI %',
+        'max_bid': 'Max Bid',
+        'low_comp_confidence': 'Low Conf. (legacy)',
+    }
+    # Persist user picks across reruns. Key includes a fingerprint of
+    # the current column set so a different auction's columns don't
+    # inherit a stale picks set.
+    _empty_cols = {c: _column_is_empty(c) for c in final_cols}
+    n_empty = sum(_empty_cols.values())
+    n_visible = len(final_cols) - n_empty
+    with st.expander(
+        f"📋 Show / hide columns "
+        f"({n_visible} visible · {n_empty} auto-hidden as empty)",
+        expanded=False,
+    ):
+        st.caption(
+            "Empty columns (all-null or all-zero) are auto-hidden by "
+            "default. Tick a checkbox to force-show one anyway."
+        )
+        cb_cols = st.columns(4)
+        kept_cols = []
+        for i, c in enumerate(final_cols):
+            with cb_cols[i % 4]:
+                empty = _empty_cols[c]
+                label = _col_labels.get(c, c)
+                if empty:
+                    label = f"{label}  _(empty)_"
+                # Default: hide if empty, show otherwise. The state
+                # key is per-column so picks persist across reruns
+                # but reset cleanly between auctions (different
+                # current_auction → different audit_results df shape).
+                shown = st.checkbox(
+                    label,
+                    value=not empty,
+                    key=f"colshow_{c}",
+                )
+                if shown:
+                    kept_cols.append(c)
+        final_cols = kept_cols
+
+    if not final_cols:
+        st.info("All columns hidden — tick at least one in the expander above.")
+        return
+
     display_df = filtered_df[final_cols].copy()
 
     # Row-level highlighting based on the threshold masks computed above.
