@@ -61,39 +61,45 @@ _PC_TRIGGERS = [
         "vertigo comics",
         "cgc comic", "cgc 9.", "cgc 8.", " cbcs ",
     ]),
-    # ---- TCGs / trading cards ----
-    # IMPORTANT: only include keywords that DO NOT also appear in the
-    # vocabulary of unrelated antiques / tools / advertising. We previously
-    # had `" auto "`, `"/auto"`, and `" rookie "` here — those false-matched
-    # an estate auction's "Auto Body Spoon & Tool", "Western Auto Supply"
-    # oil cans, and "RC Car Toy" lots into PriceCharting trading-card
-    # records, producing $11 oil cans and $0.66 motor-oil cans. The fix:
-    # only accept card-specific terms.
-    ("trading_card", [
-        # TCGs
+    # ---- TCGs (Pokemon, Magic, Yu-Gi-Oh, sealed product) ----
+    # PriceCharting's pricing model maps cleanly here: loose-price IS
+    # the raw single-card / sealed-pack price, cib/new are alternates.
+    ("tcg", [
         "pokemon", "pokémon", "pokemon card",
         "magic the gathering", " mtg ", "mtg booster",
         "yugioh", "yu-gi-oh", "yu gi oh",
         "trading card", " tcg ", "tcg booster",
         "booster pack", "booster box",
-        # Sports-card brand names — matched as space-padded tokens so
-        # they don't false-match unrelated words. Most sports-card lots
-        # carry the brand somewhere in the title.
+    ]),
+    # ---- Sports cards (Topps, Panini, Bowman, etc.) ----
+    # Audited 5/3 — PriceCharting returns inflated graded-tier prices
+    # in the loose-price field for older popular cards (1990 Fleer
+    # #513 Griffey returned $600 from PC vs $1.72-$3.00 raw on eBay;
+    # 2023 Panini Absolute #100 DeVonta Smith $106 vs $0.79). The
+    # loose/cib/new field model doesn't map to raw/graded for sports
+    # cards. classify_for_pricecharting still tags these so they bypass
+    # the AI condition audit, but PriceChartingLookup.lookup() returns
+    # None for sports_card so the eBay sold-listing scraper handles
+    # them — eBay has plenty of raw-card sales and IQR outlier filtering
+    # produces a sensible median.
+    ("sports_card", [
+        # Brand names — matched as space-padded tokens so they don't
+        # false-match unrelated words.
         " topps ", " bowman ", " donruss ", " fleer ", " panini ",
         " upper deck ", " stadium club ", " prizm ",
         " select baseball ", " select football ", " select basketball ",
-        # Grading callouts (any grade — these are unique to graded cards)
+        # Grading callouts. Universal across TCG and sports cards but
+        # since they always indicate "this is a card lot", grouping with
+        # sports_card is fine — PC is suppressed for both anyway when
+        # the lot is graded (graded cards need eBay's actual graded-comp
+        # data, not PC's tier estimate).
         " psa ", " bgs ", " sgc ", " cgc ",
         "psa 10", "psa 9", "bgs graded", "psa graded", "cgc graded",
-        # Rookie card markers — "rookie card" only (the word "rookie"
-        # alone matches "rookie season", "rookie of the year", and the
-        # bare " rc " token matches RC cars / RC boats / RC trucks).
+        # Rookie card markers — "rookie card" only (the bare word
+        # "rookie" matches "rookie season"/"of the year").
         "rookie card",
-        # Card-specific markers — "autograph" only (not " auto " which
-        # matches Auto Body / Western Auto / Auto Parts / Automotive)
+        # Card-specific markers
         "card #", " autograph ", " refractor ",
-        # "/auto" was here — removed because it false-matches text like
-        # "12/automotive" or filenames like "/auto.jpg" in scraped data.
     ]),
 ]
 
@@ -220,6 +226,16 @@ class PriceChartingLookup:
 
         category = classify_for_pricecharting(title)
         if not category:
+            return None
+
+        # Sports cards bypass PriceCharting entirely. PC's pricing fields
+        # (loose / cib / new) don't map to raw vs graded condition for
+        # sports cards — older popular cards return graded-tier prices
+        # in the loose-price field, producing wildly inflated estimates
+        # ($600 for a 1990 Fleer Griffey raw card that sells for $2 on
+        # eBay; $106 for a $1 DeVonta Smith base card). The eBay sold
+        # scraper handles these correctly with plenty of raw-card comps.
+        if category == "sports_card":
             return None
 
         query = self._clean_query(title)
