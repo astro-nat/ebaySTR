@@ -50,7 +50,8 @@ class EbayPriceLookup:
         return dict(cls._scrape_stats)
 
     def __init__(self, app_id: str, cert_id: str, pricecharting=None,
-                 scrapingbee_key: Optional[str] = None):
+                 scrapingbee_key: Optional[str] = None,
+                 gocollect=None):
         """eBay/Mercari price lookup, optionally augmented with PriceCharting.
 
         Args:
@@ -73,6 +74,14 @@ class EbayPriceLookup:
         self.cert_id = cert_id
         self.pricecharting = pricecharting
         self.scrapingbee_key = scrapingbee_key
+        # GoCollect: curated CGC/BGS-graded comic prices. Tried FIRST
+        # for graded comic lots — its grade-specific data outperforms
+        # both PriceCharting (which matches at the series level, not
+        # the grade level) and the eBay-sold scrape (which contaminates
+        # results with modern reprints for rare keys). Pass None to
+        # disable; module-level enabled flag also short-circuits when
+        # the daily quota is exhausted.
+        self.gocollect = gocollect
         self._token: Optional[str] = None
         # Guard token fetch under parallel workers — avoids redundant OAuth calls
         self._token_lock = threading.Lock()
@@ -486,11 +495,25 @@ class EbayPriceLookup:
             }
             or None if no data available.
         """
-        # Category-specific: try PriceCharting first for games / TCG / comics.
-        # When their classifier matches and they have the product, the data
-        # is materially better than scraping eBay sold (already aggregated,
-        # condition-normalized, canonical product ID). Falls through to the
-        # eBay/Mercari path on miss.
+        # Tier 1: GoCollect for professionally-graded comics. Their
+        # data is keyed by issue + specific grade so a 'Phantom Lady
+        # 17 CGC 4.0' lookup returns the actual graded fair-market
+        # value, not modern-reprint contamination from eBay or
+        # series-level averages from PriceCharting. Fires only when
+        # the title carries an explicit grading callout (CGC/BGS/SGC/
+        # CBCS/PSA + grade number).
+        if self.gocollect is not None and self.gocollect.enabled:
+            try:
+                gc_result = self.gocollect.lookup(title)
+                if gc_result is not None:
+                    return gc_result
+            except Exception:
+                pass  # Best-effort — never let GoCollect break the run
+
+        # Tier 2: PriceCharting for games / TCG / comics. Aggregated
+        # sold data, condition-normalized, canonical product ID.
+        # Strong on Pokemon/MTG/video games; weaker than GoCollect on
+        # graded comics specifically, hence the order.
         if self.pricecharting is not None and self.pricecharting.enabled:
             try:
                 pc_result = self.pricecharting.lookup(title)
@@ -1059,7 +1082,9 @@ class EbayPriceLookup:
 
         # Unpack price_results into column lists
         medians, lows, highs, counts = [], [], [], []
-        ebay_counts, mercari_counts, pc_counts, price_sources = [], [], [], []
+        ebay_counts, mercari_counts, pc_counts, gc_counts, price_sources = (
+            [], [], [], [], []
+        )
         for info in price_results:
             if info:
                 medians.append(info["median"])
@@ -1069,6 +1094,7 @@ class EbayPriceLookup:
                 ebay_counts.append(info.get("ebay_count", 0))
                 mercari_counts.append(info.get("mercari_count", 0))
                 pc_counts.append(info.get("pricecharting_count", 0))
+                gc_counts.append(info.get("gocollect_count", 0))
                 price_sources.append(info["source"])
             else:
                 medians.append(None)
@@ -1078,6 +1104,7 @@ class EbayPriceLookup:
                 ebay_counts.append(0)
                 mercari_counts.append(0)
                 pc_counts.append(0)
+                gc_counts.append(0)
                 price_sources.append(None)
 
         str_values = [s[0] for s in str_results]
@@ -1090,6 +1117,7 @@ class EbayPriceLookup:
         df['ebay_comps'] = ebay_counts
         df['mercari_comps'] = mercari_counts
         df['pricecharting_comps'] = pc_counts
+        df['gocollect_comps'] = gc_counts
         df['price_source'] = price_sources
         df['ebay_str'] = str_values
         df['str_source'] = str_sources

@@ -2106,15 +2106,19 @@ def _run_ebay_comps(results_df):
 
     from scraper.ebay_prices import EbayPriceLookup
     from scraper.pricecharting import PriceChartingLookup
+    from scraper.gocollect import GoCollectLookup
     from scraper.config_loader import load_config
     cfg = load_config()
     pc_token = (cfg.get("pricecharting") or {}).get("token") or None
     pc_client = PriceChartingLookup(pc_token)
+    gc_key = (cfg.get("gocollect") or {}).get("api_key") or None
+    gc_client = GoCollectLookup(gc_key)
     sb_key = (cfg.get("scrapingbee") or {}).get("api_key") or None
     ebay = EbayPriceLookup(
         cfg["ebay"]["app_id"], cfg["ebay"]["cert_id"],
         pricecharting=pc_client,
         scrapingbee_key=sb_key,
+        gocollect=gc_client,
     )
 
     total = len(eligible_df)
@@ -2232,7 +2236,7 @@ def _run_ebay_comps(results_df):
 # accumulating audit_results DataFrame.
 _COMP_COLUMNS = (
     'est_resale', 'price_low', 'price_high', 'comp_count',
-    'ebay_comps', 'mercari_comps', 'pricecharting_comps',
+    'ebay_comps', 'mercari_comps', 'pricecharting_comps', 'gocollect_comps',
     'price_source', 'ebay_str', 'str_source',
 )
 
@@ -2296,14 +2300,17 @@ def _run_ebay_comps_chunk(audit_df, chunk_size: int = 200, on_lot_priced=None):
 
     from scraper.ebay_prices import EbayPriceLookup
     from scraper.pricecharting import PriceChartingLookup
+    from scraper.gocollect import GoCollectLookup
     from scraper.config_loader import load_config
     cfg = load_config()
     pc_token = (cfg.get("pricecharting") or {}).get("token") or None
+    gc_key = (cfg.get("gocollect") or {}).get("api_key") or None
     sb_key = (cfg.get("scrapingbee") or {}).get("api_key") or None
     ebay = EbayPriceLookup(
         cfg["ebay"]["app_id"], cfg["ebay"]["cert_id"],
         pricecharting=PriceChartingLookup(pc_token),
         scrapingbee_key=sb_key,
+        gocollect=GoCollectLookup(gc_key),
     )
 
     label = f"💰 Comping next {len(chunk)} of {total_pending} pending lot(s)…"
@@ -2632,13 +2639,18 @@ def _compute_resale_confidence(row):
     src = str(row.get('price_source') or '').lower()
     comp_count = int(row.get('comp_count') or 0)
     pc_comps = int(row.get('pricecharting_comps') or 0)
+    gc_comps = int(row.get('gocollect_comps') or 0)
     low = row.get('price_low')
     high = row.get('price_high')
     low = low if pd.notna(low) else median
     high = high if pd.notna(high) else median
 
     # Source quality (0-1)
-    if 'sold' in src and 'thin' not in src:
+    if gc_comps > 0 or 'gocollect' in src:
+        # GoCollect: curated CGC/BGS/SGC-graded data, matched at the
+        # issue+grade level. Highest signal we have for graded comics.
+        source_score = 0.95
+    elif 'sold' in src and 'thin' not in src:
         source_score = 1.0 if 'ebay+mercari' in src else 0.9
     elif pc_comps > 0 or 'pricecharting' in src:
         source_score = 0.75
@@ -2650,7 +2662,12 @@ def _compute_resale_confidence(row):
         source_score = 0.5
 
     # Sample size (0-1)
-    if pc_comps > 0:
+    if gc_comps > 0:
+        # GoCollect's single match is a curated issue+grade record
+        # backed by Heritage / eBay / ComicConnect aggregation —
+        # treat like a high-comp PC hit.
+        sample_score = 0.9
+    elif pc_comps > 0:
         sample_score = 0.85
     elif comp_count >= 5:
         sample_score = 1.0
