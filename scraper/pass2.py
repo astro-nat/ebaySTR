@@ -1,8 +1,12 @@
+import json
+import os
 import re
-import pandas as pd
-from transformers import pipeline
-import warnings
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
+import pandas as pd
+
+from .config_loader import load_config
 from .pricecharting import classify_for_pricecharting
 
 # Re-check pickup-only language at audit time in case the auction was loaded
@@ -38,9 +42,6 @@ _PICKUP_ONLY_AUDIT_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Suppress HuggingFace warnings for cleaner terminal output
-warnings.filterwarnings("ignore")
-
 # Common filler words to skip when extracting details from descriptions
 _FILLER = {
     'the', 'a', 'an', 'and', 'or', 'but', 'is', 'are', 'was', 'were', 'be',
@@ -72,28 +73,198 @@ _HIBID_HEADER_TOKENS = {
 }
 
 
+# --- Verdict labels ---
+# Kept in sync with the historical zero-shot classifier output so cached
+# audit rows from older runs still merge cleanly.
+_RISK_LABELS = [
+    "broken, damaged, or for parts",
+    "untested or unknown condition",
+    "mint condition or working perfectly",
+    "normal wear and tear",
+]
+_RED_FLAG_LABELS = {
+    "broken, damaged, or for parts",
+    "untested or unknown condition",
+}
+
+
+# --- Tier 1: keyword classification ---
+# Rule-based first pass. Hits short-circuit the API call entirely. Patterns
+# are intentionally narrow — we only match unambiguous condition language
+# ("untested", "doesn't work") rather than soft signals ("as-is", "no
+# returns") that show up in auction-house boilerplate regardless of item
+# condition. Anything ambiguous falls through to the API for context-aware
+# classification.
+#
+# Each tuple: (compiled regex, verdict, red_flag).
+_KEYWORD_PATTERNS = [
+    # --- Broken / damaged / for-parts ---
+    (re.compile(r"\b(?:doesn'?t|does\s+not)\s+work\b", re.IGNORECASE),
+     "broken, damaged, or for parts", True),
+    (re.compile(r"\bnon[\s-]*work(?:ing|s)?\b", re.IGNORECASE),
+     "broken, damaged, or for parts", True),
+    (re.compile(r"\bnot\s+working\b", re.IGNORECASE),
+     "broken, damaged, or for parts", True),
+    (re.compile(r"\bfor\s+parts(?:\s+(?:only|or\s+repair))?\b", re.IGNORECASE),
+     "broken, damaged, or for parts", True),
+    (re.compile(r"\bparts\s+only\b", re.IGNORECASE),
+     "broken, damaged, or for parts", True),
+    (re.compile(r"\b(?:is|was|are|were)\s+broken\b", re.IGNORECASE),
+     "broken, damaged, or for parts", True),
+    (re.compile(r"\bshattered\b", re.IGNORECASE),
+     "broken, damaged, or for parts", True),
+    (re.compile(r"\bwon'?t\s+(?:turn\s+on|power|start|charge|work)\b", re.IGNORECASE),
+     "broken, damaged, or for parts", True),
+    (re.compile(r"\bwill\s+not\s+(?:turn\s+on|power|start|work)\b", re.IGNORECASE),
+     "broken, damaged, or for parts", True),
+
+    # --- Untested / unknown condition ---
+    (re.compile(r"\buntested\b", re.IGNORECASE),
+     "untested or unknown condition", True),
+    (re.compile(r"\bnot\s+tested\b", re.IGNORECASE),
+     "untested or unknown condition", True),
+    (re.compile(r"\b(?:unknown|unspecified)\s+condition\b", re.IGNORECASE),
+     "untested or unknown condition", True),
+    (re.compile(r"\bcondition\s+(?:unknown|unspecified)\b", re.IGNORECASE),
+     "untested or unknown condition", True),
+    (re.compile(r"\b(?:could\s+not|cannot|can'?t|unable\s+to)\s+test\b", re.IGNORECASE),
+     "untested or unknown condition", True),
+    (re.compile(r"\bnot\s+able\s+to\s+test\b", re.IGNORECASE),
+     "untested or unknown condition", True),
+
+    # --- Positive signals (NEW IN BOX, sealed, tested-working) ---
+    (re.compile(r"\b(?:brand\s+new|new\s+in\s+(?:box|package|wrapper))\b", re.IGNORECASE),
+     "mint condition or working perfectly", False),
+    (re.compile(r"\bfactory\s+sealed\b", re.IGNORECASE),
+     "mint condition or working perfectly", False),
+    (re.compile(r"\bstill\s+sealed\b", re.IGNORECASE),
+     "mint condition or working perfectly", False),
+    (re.compile(r"\b(?:NIB|NWT|NWB)\b"),  # acronyms — case-sensitive on purpose
+     "mint condition or working perfectly", False),
+    (re.compile(r"\bunopened\b", re.IGNORECASE),
+     "mint condition or working perfectly", False),
+    (re.compile(r"\btested\s+(?:and\s+)?(?:working|functional)\b", re.IGNORECASE),
+     "mint condition or working perfectly", False),
+    (re.compile(r"\bfully\s+functional\b", re.IGNORECASE),
+     "mint condition or working perfectly", False),
+    (re.compile(r"\bworks?\s+(?:perfectly|great|like\s+new|as\s+intended)\b", re.IGNORECASE),
+     "mint condition or working perfectly", False),
+]
+
+
+def _classify_by_keyword(desc: str):
+    """Return a classification dict if a keyword pattern matches, else None.
+
+    Keyword hits are 95%-confidence — we only match unambiguous phrases.
+    """
+    if not desc:
+        return None
+    for pattern, verdict, red_flag in _KEYWORD_PATTERNS:
+        if pattern.search(desc):
+            return {
+                "verdict": verdict,
+                "confidence": 95.0,
+                "red_flag": red_flag,
+                "source": "keyword",
+            }
+    return None
+
+
+# --- Tier 2 / 3: Claude API ---
+# JSON Schema enforced server-side via output_config — Claude is guaranteed
+# to return text that parses into this shape, no defensive parsing needed.
+_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "verdict": {"type": "string", "enum": _RISK_LABELS},
+        "confidence": {
+            "type": "number",
+            "description": "Confidence 0-100 in the verdict.",
+        },
+        "reason": {
+            "type": "string",
+            "description": "Short justification under 80 characters.",
+        },
+    },
+    "required": ["verdict", "confidence", "reason"],
+    "additionalProperties": False,
+}
+
+
+_SYSTEM_PROMPT = """You evaluate auction lot descriptions and photos and classify each item's condition. You will be given either a text description or an image of a single auction lot, and must return a JSON object with the verdict, a confidence score, and a brief reason.
+
+Choose ONE verdict from this exact list:
+- "broken, damaged, or for parts" — the item is explicitly broken, non-functional, sold for parts, or damaged in a way that prevents normal use.
+- "untested or unknown condition" — the seller has not tested the item or cannot verify it works. Use this for items where the seller explicitly disclaims condition knowledge.
+- "mint condition or working perfectly" — the item is described as new, sealed, unopened, or explicitly tested-and-working.
+- "normal wear and tear" — used but implied to function normally. This is the DEFAULT for typical resale items where the description doesn't say anything alarming.
+
+CRITICAL RULES:
+- Auction-house boilerplate ("all items sold as-is", "no returns", "all sales final", "buyer beware") is generic legal language used regardless of item condition — do NOT classify based on it. Only classify based on item-specific condition language.
+- "Used" or "previously owned" alone → "normal wear and tear", NOT untested.
+- "Lot of N items" with no individual condition info and items appear intact → "normal wear and tear".
+- For images: visible cracks, missing pieces, or obvious damage → "broken, damaged, or for parts". A normal-looking item in a generic photo → "normal wear and tear".
+- For collectibles where condition is encoded by grade (PSA/BGS-graded cards, sealed video games, mint-stamped coins) → "mint condition or working perfectly" if the grade indicates good condition.
+- Be conservative — when in doubt, prefer "normal wear and tear" over red-flagging. False red flags cost the user good resale opportunities."""
+
+
 class Phase2Scraper:
-    # DEFAULT_MODEL is bart-large-mnli — the historical default, and likely
-    # already cached on any machine that's run this app before, so it loads
-    # instantly. DEFAULT_MODEL_FAST (DistilBART-MNLI) is ~3x faster but
-    # requires a fresh ~500MB download on first use. We let the UI pick.
-    DEFAULT_MODEL = "facebook/bart-large-mnli"
-    DEFAULT_MODEL_FAST = "valhalla/distilbart-mnli-12-3"
-    # Back-compat alias used elsewhere before the fast/accurate split
-    DEFAULT_MODEL_ACCURATE = DEFAULT_MODEL
+    """Audits HiBid lot descriptions for condition risk.
+
+    Three-tier classification, in order of cost:
+
+      1. **Keyword regex** over the description — instant, free. Only
+         matches unambiguous phrases ("untested", "doesn't work",
+         "factory sealed"). Most resale-worthy lots short-circuit here.
+      2. **Claude Haiku text classification** — when the description has
+         enough material (≥ ~80 chars after HTML strip) for the model to
+         extract signal.
+      3. **Claude Haiku vision classification** — when the description
+         is too short, falls back to analyzing the lot's thumbnail. The
+         URL is sent directly; Anthropic fetches it server-side.
+
+    Items pre-flagged by Phase 1 (HARD logistics, collectibles, totally
+    empty rows) skip all three tiers — Phase 1 already has higher-
+    confidence signal for those buckets.
+    """
+
+    # Back-compat aliases — both old constants now point to Haiku 4.5.
+    # The local-model fast/accurate split was retired when we moved off
+    # transformers/torch onto the Anthropic API. Old session state that
+    # references DEFAULT_MODEL_FAST keeps working without code changes.
+    DEFAULT_MODEL = "claude-haiku-4-5"
+    DEFAULT_MODEL_FAST = "claude-haiku-4-5"
+    DEFAULT_MODEL_ACCURATE = "claude-haiku-4-5"
+
+    # Below this many chars of cleaned description, we skip the text API
+    # and go straight to image analysis. Picked empirically — anything
+    # shorter than ~80 chars is usually just the title repeated and gives
+    # the text classifier nothing to chew on.
+    _MIN_DESC_FOR_TEXT_API = 80
 
     def __init__(self, model_name: str = None):
-        model = model_name or self.DEFAULT_MODEL
-        self.model_name = model
-        print(f"Initializing NLP Engine ({model}; may download on first use)...")
-        self.classifier = pipeline("zero-shot-classification", model=model)
+        cfg = load_config()
+        anth = cfg.get("anthropic", {}) or {}
+        self.api_key = (
+            anth.get("api_key")
+            or os.environ.get("ANTHROPIC_API_KEY")
+            or None
+        )
+        self.model_name = (
+            model_name or anth.get("model") or self.DEFAULT_MODEL
+        )
+        self._client = None  # lazy-init on first API call
 
-        self.risk_labels = [
-            "broken, damaged, or for parts",
-            "untested or unknown condition",
-            "mint condition or working perfectly",
-            "normal wear and tear"
-        ]
+    @property
+    def client(self):
+        """Lazy-init the Anthropic client. Returns None if no key configured."""
+        if self._client is None and self.api_key:
+            try:
+                import anthropic
+                self._client = anthropic.Anthropic(api_key=self.api_key)
+            except ImportError:
+                return None
+        return self._client
 
     def _enrich_title(self, original_title: str, description: str) -> str:
         """Build a detailed, eBay-searchable title from auction title + description.
@@ -123,16 +294,8 @@ class Phase2Scraper:
             low = t.lower()
             if low in seen or low in _FILLER:
                 return
-            # Skip known HiBid section-header boilerplate that keeps leaking
-            # into enriched titles ("Condition", "Damaged", "No In Packaging"
-            # etc. are structural labels on the listing, not product features).
             if low in _HIBID_HEADER_TOKENS:
                 return
-            # Skip if every word of the phrase is either already in the title
-            # OR a filler/header token — i.e. the phrase adds no new signal.
-            # (Previously we only checked issubset(title_words), which let
-            # phrases like "Remote Condition" through when the title already
-            # had "Remote" and "Condition" is a header.)
             words = set(re.findall(r'[a-z0-9]+', low))
             if not words:
                 return
@@ -146,33 +309,31 @@ class Phase2Scraper:
         for m in re.finditer(r'\b([A-Z][A-Za-z]*[\s-]?[A-Z0-9][\w-]*(?:[\s-][A-Z0-9][\w-]*)*)\b', clean):
             _add(m.group(1))
 
-        # 2. Model / part numbers: alphanumeric with hyphens or dots (e.g. "A1234", "NES-001")
+        # 2. Model / part numbers: alphanumeric with hyphens or dots
         for m in re.finditer(r'\b([A-Z]{1,4}[\-.]?\d{2,}[\w\-.]*)\b', clean):
             _add(m.group(1))
 
-        # 3. Year mentions (e.g. "1943", "2019")
+        # 3. Year mentions
         for m in re.finditer(r'\b(1[89]\d{2}|20[0-2]\d)\b', clean):
             _add(m.group(1))
 
-        # 4. Quoted product names (e.g. '"Elvis #1 Hits"')
-        for m in re.finditer(r'["\u201c]([^"\u201d]{3,40})["\u201d]', clean):
+        # 4. Quoted product names
+        for m in re.finditer(r'["“]([^"”]{3,40})["”]', clean):
             _add(m.group(1))
 
-        # 5. Key product phrases: "Brand + Product" patterns in first 300 chars
+        # 5. Capitalized multi-word phrases in the first 300 chars
         first_chunk = clean[:300]
-        # Extract capitalized multi-word phrases (likely product names)
         for m in re.finditer(r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b', first_chunk):
             phrase = m.group(1)
             if len(phrase.split()) <= 4:
                 _add(phrase)
 
-        # 6. Extract first meaningful sentence as fallback context
+        # 6. First meaningful sentence as fallback context
         sentences = re.split(r'[.!?\n]', first_chunk)
         for sent in sentences:
             sent = sent.strip()
             if len(sent) > 15 and not any(skip in sent.lower() for skip in
                                            ['shipping', 'payment', 'pickup', 'bid', 'click', 'terms']):
-                # Pull individual significant words from first sentence
                 for word in sent.split():
                     w_clean = re.sub(r'[^a-zA-Z0-9\-]', '', word)
                     if (len(w_clean) > 3
@@ -181,7 +342,6 @@ class Phase2Scraper:
                         _add(w_clean)
                 break
 
-        # Build enriched title: original + best new details, up to ~80 chars
         enriched = original_title.rstrip('.')
         for detail in new_details:
             candidate = f"{enriched} {detail}"
@@ -191,94 +351,193 @@ class Phase2Scraper:
 
         return enriched
 
+    def _classify_by_text_api(self, clean_desc: str):
+        """Tier 2: send the cleaned description to Claude.
+
+        Returns the parsed result dict on success, or None if the API
+        call failed (network error, rate limit, parse error, no client).
+        Caller falls through to the image tier or marks as Unknown on None.
+        """
+        if not self.client:
+            return None
+        # Trim to a generous limit — input cost is dwarfed by per-call
+        # latency, so giving the model more context is cheap.
+        snippet = clean_desc[:2500]
+        try:
+            response = self.client.messages.create(
+                model=self.model_name,
+                max_tokens=200,
+                system=_SYSTEM_PROMPT,
+                messages=[{
+                    "role": "user",
+                    "content": (
+                        "Classify the condition of this auction lot.\n\n"
+                        f"DESCRIPTION:\n{snippet}"
+                    ),
+                }],
+                output_config={
+                    "format": {
+                        "type": "json_schema",
+                        "schema": _OUTPUT_SCHEMA,
+                    }
+                },
+            )
+            text = next(
+                (b.text for b in response.content if b.type == "text"), ""
+            )
+            data = json.loads(text)
+            verdict = data["verdict"]
+            return {
+                "verdict": verdict,
+                "confidence": float(data.get("confidence", 70)),
+                "red_flag": verdict in _RED_FLAG_LABELS,
+                "source": "text_api",
+                "reason": data.get("reason", ""),
+            }
+        except Exception:
+            return None
+
+    def _classify_by_image_api(self, thumbnail_url: str):
+        """Tier 3: send the thumbnail URL to Claude vision.
+
+        Anthropic fetches the URL server-side — no client-side download.
+        Returns None on failure so the caller can mark the lot as Unknown.
+        """
+        if not self.client or not thumbnail_url:
+            return None
+        try:
+            response = self.client.messages.create(
+                model=self.model_name,
+                max_tokens=200,
+                system=_SYSTEM_PROMPT,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "url",
+                                "url": thumbnail_url,
+                            },
+                        },
+                        {
+                            "type": "text",
+                            "text": (
+                                "Classify the condition of this auction lot "
+                                "based on the photo. The description was too "
+                                "short to use, so this is your only signal."
+                            ),
+                        },
+                    ],
+                }],
+                output_config={
+                    "format": {
+                        "type": "json_schema",
+                        "schema": _OUTPUT_SCHEMA,
+                    }
+                },
+            )
+            text = next(
+                (b.text for b in response.content if b.type == "text"), ""
+            )
+            data = json.loads(text)
+            verdict = data["verdict"]
+            return {
+                "verdict": verdict,
+                "confidence": float(data.get("confidence", 60)),
+                "red_flag": verdict in _RED_FLAG_LABELS,
+                "source": "image_api",
+                "reason": data.get("reason", ""),
+            }
+        except Exception:
+            return None
+
     def analyze_condition(self, description_text: str) -> dict:
-        """Runs the HuggingFace model against a single description."""
+        """Single-description classification — keyword pass, then text API.
+
+        Kept for backward compat with anything that imports this method
+        directly. Most callers should use batch_audit().
+        """
         if not description_text or len(description_text.strip()) < 10:
             return {"verdict": "Unknown", "confidence": 0.0, "red_flag": False}
-
-        text_to_analyze = re.sub('<[^<]+?>', ' ', description_text)[:1000]
-
-        result = self.classifier(text_to_analyze, self.risk_labels)
-
-        top_label = result['labels'][0]
-        top_score = result['scores'][0]
-
-        is_red_flag = top_label in [
-            "broken, damaged, or for parts",
-            "untested or unknown condition"
-        ]
-
-        return {
-            "verdict": top_label,
-            "confidence": round(top_score * 100, 1),
-            "red_flag": is_red_flag
-        }
+        kw = _classify_by_keyword(description_text)
+        if kw is not None:
+            return {
+                "verdict": kw["verdict"],
+                "confidence": kw["confidence"],
+                "red_flag": kw["red_flag"],
+            }
+        clean = re.sub(r'<[^<]+?>', ' ', description_text)
+        result = self._classify_by_text_api(clean.strip())
+        if result is not None:
+            return {
+                "verdict": result["verdict"],
+                "confidence": result["confidence"],
+                "red_flag": result["red_flag"],
+            }
+        return {"verdict": "Unknown", "confidence": 0.0, "red_flag": False}
 
     def batch_audit(self, df: pd.DataFrame, progress_callback=None,
                     batch_size: int = 8, live_callback=None) -> pd.DataFrame:
-        """Run AI condition audit on a DataFrame that has a 'description' column.
-
-        Enriches titles using description details and runs condition
-        classification. Classification runs in BATCHES rather than one text
-        at a time — the HF pipeline accepts a list of texts and does a single
-        forward pass per batch, amortizing Python overhead and letting PyTorch
-        BLAS parallelize across cores.
-
-        Typical speedup on CPU: 2-3x from batching alone, more when combined
-        with the lighter distilbart-mnli model (~6-10x total vs serial
-        bart-large).
+        """Three-tier condition audit. See class docstring for the flow.
 
         Args:
-            df: DataFrame with at least 'title' and 'description' columns
+            df: DataFrame with 'title', 'description', and (ideally)
+                'thumbnail_url' columns.
             progress_callback: Optional callable(current, total) for progress
-                updates. Fires at batch boundaries, not per-item.
-            batch_size: How many descriptions to classify per forward pass.
-                Memory scales with this × sequence length × label count.
-                8 is a safe default on typical hardware; bump to 16 on a
-                beefy machine, drop to 4 if you see OOMs.
+                updates. Fires after each lot is classified.
+            batch_size: Max parallel API workers. Renamed from "batch size"
+                in the old transformer-based version; signature kept for
+                compatibility with app.py session state. 8 is a sensible
+                default — pushes through ~8 lots/sec when hot.
+            live_callback: Optional callable(processed, total, partial_df)
+                that fires periodically (~every 600ms) with the in-progress
+                results so the UI can stream updates.
 
         Returns:
-            Original DataFrame with 'enriched_title', 'verdict', 'confidence',
-            and 'red_flag' columns added.
+            DataFrame with 'enriched_title', 'verdict', 'confidence',
+            'red_flag', and 'audit_source' columns added. The audit_source
+            column tells the UI which tier classified each lot ('keyword',
+            'text_api', 'image_api', 'skip_hard', 'skip_collectible',
+            'skip_empty', 'no_signal', or '*_api_failed').
         """
         total = len(df)
-        titles = df['title'].fillna('').astype(str).tolist() if 'title' in df.columns else [''] * total
-        descs = df['description'].fillna('').astype(str).tolist() if 'description' in df.columns else [''] * total
+        titles = (
+            df['title'].fillna('').astype(str).tolist()
+            if 'title' in df.columns else [''] * total
+        )
+        descs = (
+            df['description'].fillna('').astype(str).tolist()
+            if 'description' in df.columns else [''] * total
+        )
+        thumbs = (
+            df['thumbnail_url'].fillna('').astype(str).tolist()
+            if 'thumbnail_url' in df.columns else [''] * total
+        )
         logistics = (
             df['logistics_ease'].fillna('').astype(str).tolist()
             if 'logistics_ease' in df.columns else [''] * total
         )
 
-        # --- Step 1: enrich titles (regex-only, microseconds — serial is fine) ---
+        # --- Step 1: enrich titles (regex-only, microseconds) ---
         enriched_titles = [
             self._enrich_title(t, d) for t, d in zip(titles, descs)
         ]
 
-        # --- Step 2: prep texts for classification ---
-        # Skip classification for rows we can already disqualify:
-        #   (a) logistics_ease == 'HARD' — Phase 1 already pattern-matched
-        #       the title/category/description against known unshippable
-        #       items. No point paying ~50ms of transformer compute to
-        #       "verify" it.
-        #   (b) empty/short description — would return "Unknown" anyway.
-        #   (c) PriceCharting-eligible title (cards, video games, comics).
-        #       The AI's risk labels ('broken', 'untested') don't apply
-        #       to collectibles where condition is encoded by grade
-        #       (PSA/BGS) baked into the title — running the model
-        #       produces high false-positive rates on these auctions.
-        # Skipped-HARD rows get a distinct "Unshippable (HARD logistics)"
-        # verdict + red_flag=True. Skipped-collectible rows get a
-        # "Skipped (collectible)" verdict and red_flag=False.
-        cleaned_texts: list = []
-        skip_flags: list = []        # True = don't classify (for ANY reason)
-        hard_flags: list = []        # True = HARD-skip specifically
-        collectible_flags: list = [] # True = collectible-skip specifically
-        for t, d, log in zip(titles, descs, logistics):
-            # Re-check pickup-only against the current regex. Covers the
-            # case where this auction was loaded from cache (Phase 1 regex
-            # may have been narrower at the time it was scraped) and the
-            # case where Phase 1's title/category match missed but the
-            # description gives it away.
+        # --- Step 2: pre-classify (skip flags) ---
+        verdicts = [None] * total
+        confidences = [0.0] * total
+        red_flags = [False] * total
+        sources = [''] * total
+
+        skip_indices = set()
+        hard_count = 0
+        collectible_count = 0
+        empty_count = 0
+
+        for i, (t, d, thumb, log) in enumerate(
+            zip(titles, descs, thumbs, logistics)
+        ):
             pickup_only_in_desc = bool(
                 d and _PICKUP_ONLY_AUDIT_RE.search(d)
             )
@@ -287,143 +546,185 @@ class Phase2Scraper:
                 not is_hard and bool(classify_for_pricecharting(t))
             )
             if is_hard:
-                cleaned_texts.append("")
-                skip_flags.append(True)
-                hard_flags.append(True)
-                collectible_flags.append(False)
+                verdicts[i] = "Unshippable (HARD logistics)"
+                confidences[i] = 100.0
+                red_flags[i] = True
+                sources[i] = "skip_hard"
+                skip_indices.add(i)
+                hard_count += 1
             elif is_collectible:
-                cleaned_texts.append("")
-                skip_flags.append(True)
-                hard_flags.append(False)
-                collectible_flags.append(True)
-            elif not d or len(d.strip()) < 10:
-                cleaned_texts.append("")
-                skip_flags.append(True)
-                hard_flags.append(False)
-                collectible_flags.append(False)
+                # Collectibles pass straight through to comps; the AI's
+                # risk labels don't apply when condition is encoded as a
+                # grade in the title (PSA/BGS, sealed games, etc.)
+                verdicts[i] = "Skipped (collectible)"
+                confidences[i] = 0.0
+                red_flags[i] = False
+                sources[i] = "skip_collectible"
+                skip_indices.add(i)
+                collectible_count += 1
+            elif (not d or len(d.strip()) < 10) and not thumb:
+                # Nothing to work with — no description, no image
+                verdicts[i] = "Unknown"
+                confidences[i] = 0.0
+                red_flags[i] = False
+                sources[i] = "skip_empty"
+                skip_indices.add(i)
+                empty_count += 1
+
+        # --- Step 3: keyword pass on remaining lots ---
+        keyword_hits = 0
+        text_pending = []   # [(i, clean_desc), ...]
+        image_pending = []  # [(i, thumbnail_url), ...]
+        for i in range(total):
+            if i in skip_indices:
+                continue
+            d = descs[i]
+            kw_result = _classify_by_keyword(d)
+            if kw_result is not None:
+                verdicts[i] = kw_result["verdict"]
+                confidences[i] = kw_result["confidence"]
+                red_flags[i] = kw_result["red_flag"]
+                sources[i] = kw_result["source"]
+                keyword_hits += 1
+                continue
+            # Fallthrough: route to AI tier based on description length.
+            clean_desc = re.sub(r'<[^<]+?>', ' ', d).strip() if d else ''
+            clean_desc = re.sub(r'\s+', ' ', clean_desc)
+            if len(clean_desc) >= self._MIN_DESC_FOR_TEXT_API:
+                text_pending.append((i, clean_desc))
+            elif thumbs[i]:
+                image_pending.append((i, thumbs[i]))
             else:
-                cleaned_texts.append(re.sub(r'<[^<]+?>', ' ', d)[:1000])
-                skip_flags.append(False)
-                hard_flags.append(False)
-                collectible_flags.append(False)
+                # Short description AND no image — can't classify
+                verdicts[i] = "Unknown"
+                confidences[i] = 0.0
+                red_flags[i] = False
+                sources[i] = "no_signal"
 
-        # Default verdict for skipped rows. HARD vs collectible vs short-
-        # description each get distinct labels so the UI can separate them.
-        def _initial_verdict(h: bool, c: bool) -> str:
-            if h:
-                return "Unshippable (HARD logistics)"
-            if c:
-                return "Skipped (collectible)"
-            return "Unknown"
+        # --- Step 4: parallel API calls (text + image, same worker pool) ---
+        api_total = len(text_pending) + len(image_pending)
+        api_done = 0
+        # Skipped + keyword-classified lots are already done — count them
+        # toward the progress total so the bar reaches 100% naturally.
+        progress_offset = total - api_total
 
-        verdicts: list = [
-            _initial_verdict(h, c)
-            for h, c in zip(hard_flags, collectible_flags)
-        ]
-        # Confidence is 100% for HARD (we matched a regex) and 0% for the
-        # rest — the collectible bypass isn't a confidence judgment, just
-        # an opt-out from a model that doesn't apply.
-        confidences: list = [100.0 if h else 0.0 for h in hard_flags]
-        # Only HARD rows are red-flagged by default. Collectibles pass
-        # straight through to the comps pipeline (PriceCharting handles
-        # the pricing for them anyway).
-        red_flags: list = [bool(h) for h in hard_flags]
-
-        # Positions to actually classify
-        live_idx = [i for i, s in enumerate(skip_flags) if not s]
-        live_n = len(live_idx)
-
-        red_flag_labels = {
-            "broken, damaged, or for parts",
-            "untested or unknown condition",
-        }
-
-        # --- Step 3: batched classification ---
-        processed = 0
-        for start in range(0, live_n, batch_size):
-            chunk = live_idx[start:start + batch_size]
-            texts = [cleaned_texts[i] for i in chunk]
-
-            try:
-                results = self.classifier(
-                    texts, self.risk_labels, batch_size=batch_size,
-                )
-                # Pipeline returns a single dict if given a single string, a
-                # list of dicts if given a list — we always give a list here.
-                if isinstance(results, dict):
-                    results = [results]
-            except Exception:
-                # Fall back to per-item on failure so one bad row doesn't
-                # torch the whole audit
-                results = []
-                for t in texts:
-                    try:
-                        results.append(self.classifier(t, self.risk_labels))
-                    except Exception:
-                        results.append({"labels": ["Unknown"], "scores": [0.0]})
-
-            for pos, result in zip(chunk, results):
-                top_label = result['labels'][0]
-                top_score = result['scores'][0]
-                verdicts[pos] = top_label
-                confidences[pos] = round(top_score * 100, 1)
-                red_flags[pos] = top_label in red_flag_labels
-
-            processed += len(chunk)
+        def _emit_progress():
             if progress_callback:
-                # Report against total rows (including skipped) so the bar
-                # reaches 100% — add skipped rows that fell before this
-                # batch's position.
-                current_total = processed + sum(
-                    1 for i in range(total)
-                    if skip_flags[i] and i <= (chunk[-1] if chunk else 0)
-                )
-                progress_callback(min(current_total, total), total)
+                progress_callback(progress_offset + api_done, total)
 
-            # Live callback fires AFTER each classification batch with a
-            # partial DataFrame so the caller can stream results into the
-            # UI without waiting for the entire audit to finish. We
-            # rebuild a fresh df copy each batch (cheap for ≤10K rows).
+        def _build_partial_df():
+            out = df.copy()
+            out['enriched_title'] = enriched_titles
+            out['verdict'] = verdicts
+            out['confidence'] = confidences
+            out['red_flag'] = red_flags
+            out['audit_source'] = sources
+            return out
+
+        def _emit_live():
             if live_callback:
                 try:
-                    partial_df = df.copy()
-                    partial_df['enriched_title'] = enriched_titles
-                    partial_df['verdict'] = verdicts
-                    partial_df['confidence'] = confidences
-                    partial_df['red_flag'] = red_flags
-                    live_callback(processed, live_n, partial_df)
+                    live_callback(
+                        progress_offset + api_done,
+                        total,
+                        _build_partial_df(),
+                    )
                 except Exception:
-                    pass  # Live updates are best-effort
+                    pass
 
-        # Ensure final progress hit 100%
+        _emit_progress()
+        _emit_live()
+
+        if api_total > 0 and self.client is not None:
+            max_workers = max(1, int(batch_size or 8))
+            with ThreadPoolExecutor(max_workers=max_workers) as ex:
+                futures = {}
+                for i, clean in text_pending:
+                    fut = ex.submit(self._classify_by_text_api, clean)
+                    futures[fut] = ('text', i)
+                for i, thumb in image_pending:
+                    fut = ex.submit(self._classify_by_image_api, thumb)
+                    futures[fut] = ('image', i)
+
+                last_live = time.time()
+                for fut in as_completed(futures):
+                    kind, i = futures[fut]
+                    try:
+                        result = fut.result()
+                    except Exception:
+                        result = None
+                    if result is None:
+                        # API failed — don't punish the lot, mark Unknown
+                        # so it still flows through to comps.
+                        verdicts[i] = "Unknown"
+                        confidences[i] = 0.0
+                        red_flags[i] = False
+                        sources[i] = f"{kind}_api_failed"
+                    else:
+                        verdicts[i] = result["verdict"]
+                        confidences[i] = result["confidence"]
+                        red_flags[i] = result["red_flag"]
+                        sources[i] = result["source"]
+                    api_done += 1
+                    _emit_progress()
+                    # Throttle live updates to ~600ms so the UI isn't
+                    # rebuilding the partial df 8x/sec under load.
+                    now = time.time()
+                    if (now - last_live) > 0.6 or api_done == api_total:
+                        last_live = now
+                        _emit_live()
+        elif api_total > 0:
+            # No API key configured — mark everything pending as Unknown
+            # so the audit completes without crashing. The UI surfaces
+            # this via the diagnostic counts so the user knows to add
+            # their key.
+            for i, _ in text_pending + image_pending:
+                verdicts[i] = "Unknown"
+                confidences[i] = 0.0
+                red_flags[i] = False
+                sources[i] = "no_api_key"
+                api_done += 1
+            _emit_progress()
+            _emit_live()
+
         if progress_callback:
             progress_callback(total, total)
 
-        df = df.copy()
-        df['enriched_title'] = enriched_titles
-        df['verdict'] = verdicts
-        df['confidence'] = confidences
-        df['red_flag'] = red_flags
+        # --- Step 5: build result df + diagnostics ---
+        out = _build_partial_df()
 
-        # Upgrade logistics_ease to HARD for anything we re-flagged here so
-        # the comps filters, results-table styling, and cache-on-save all
-        # agree. Only promote (never demote) so Phase 1's EASY stays EASY.
-        if 'logistics_ease' in df.columns:
-            newly_hard = [
-                h and (log != 'HARD')
-                for h, log in zip(hard_flags, logistics)
+        # Promote logistics_ease to HARD for rows we re-flagged via the
+        # description regex, so comps filtering / cache / styling agree.
+        if 'logistics_ease' in out.columns:
+            newly_hard_mask = [
+                s == 'skip_hard' and log != 'HARD'
+                for s, log in zip(sources, logistics)
             ]
-            if any(newly_hard):
-                df.loc[newly_hard, 'logistics_ease'] = 'HARD'
+            if any(newly_hard_mask):
+                out.loc[newly_hard_mask, 'logistics_ease'] = 'HARD'
 
-        # Stash diagnostics so the UI can report what got pre-filtered.
-        # pandas `.attrs` survives operations that don't explicitly reset it.
-        df.attrs['audit_skipped_hard'] = int(sum(hard_flags))
-        df.attrs['audit_skipped_empty'] = int(
-            sum(1 for s, h in zip(skip_flags, hard_flags) if s and not h)
+        text_api_count = sum(1 for s in sources if s == "text_api")
+        image_api_count = sum(1 for s in sources if s == "image_api")
+        text_api_failed = sum(1 for s in sources if s == "text_api_failed")
+        image_api_failed = sum(1 for s in sources if s == "image_api_failed")
+        no_api_key_count = sum(1 for s in sources if s == "no_api_key")
+        no_signal_count = sum(1 for s in sources if s == "no_signal")
+
+        out.attrs['audit_skipped_hard'] = hard_count
+        out.attrs['audit_skipped_collectible'] = collectible_count
+        out.attrs['audit_skipped_empty'] = empty_count
+        out.attrs['audit_keyword_hits'] = keyword_hits
+        out.attrs['audit_text_api_calls'] = text_api_count
+        out.attrs['audit_image_api_calls'] = image_api_count
+        out.attrs['audit_text_api_failed'] = text_api_failed
+        out.attrs['audit_image_api_failed'] = image_api_failed
+        out.attrs['audit_no_api_key'] = no_api_key_count
+        out.attrs['audit_no_signal'] = no_signal_count
+        out.attrs['audit_classified'] = (
+            keyword_hits + text_api_count + image_api_count
         )
-        df.attrs['audit_classified'] = int(live_n)
-        df.attrs['audit_newly_hard_from_desc'] = int(
-            sum(1 for h, log in zip(hard_flags, logistics) if h and log != 'HARD')
+        out.attrs['audit_newly_hard_from_desc'] = sum(
+            1 for s, log in zip(sources, logistics)
+            if s == 'skip_hard' and log != 'HARD'
         )
-        return df
+        return out

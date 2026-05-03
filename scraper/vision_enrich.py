@@ -1,23 +1,30 @@
-"""Zero-cost image enrichment using eBay's Browse image_search API.
+"""Two-tier image enrichment.
 
-Workflow:
-  1. Download the HiBid thumbnail (Referer header required by hibid CDN).
-  2. POST to https://api.ebay.com/buy/browse/v1/item_summary/search_by_image
-     with the image base64-encoded.
-  3. Inspect the returned listings. If the top results share coherent
-     product words (e.g. all contain "Nintendo Switch"), build a new
-     enriched_title from the most common n-grams. Otherwise, leave the
-     lot alone — a bad image match is worse than no match.
+Workflow per lot:
+  1. **eBay tier** (free, fast — preferred):
+     - Download the HiBid thumbnail (Referer header required by hibid CDN).
+     - POST to eBay's Browse `search_by_image` endpoint.
+     - If the top results share coherent product words (e.g. all contain
+       "Nintendo Switch"), build a new title from the most common n-grams.
+  2. **Claude vision fallback** (~$0.001/lot):
+     - Triggers ONLY when the eBay tier didn't produce a confident match
+       (no items returned, or build_enriched_title declined to match).
+     - Asks Claude Haiku to identify brand/model/product from the image.
+     - Output is structured JSON enforced by the API's output_config schema.
 
 Why this design:
-  - No paid API, no local model — just two HTTP calls per lot.
-  - Gated: we only call this on lots the user has decided are worth
-    analyzing (EASY logistics, not a red flag, bid above some floor).
+  - eBay is free and tied to the actual marketplace catalog — when it
+    works, it produces titles that match real eBay listings exactly.
+  - Claude vision generalizes better when eBay returns nothing (obscure
+    items, single high-quality photos) — covers the long tail.
+  - Gated: we only call either tier on lots the user has decided are
+    worth analyzing (EASY logistics, not a red flag, bid above floor).
   - Cached per lot_id so re-scanning an auction is free.
 """
 from __future__ import annotations
 
 import base64
+import json
 import re
 import statistics
 from collections import Counter
@@ -40,16 +47,78 @@ _STOP = {
 }
 
 
+# --- Claude vision tier ---
+# Output schema enforced server-side; Claude's response is guaranteed to
+# parse into this shape, so no defensive json handling needed.
+_CLAUDE_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "title": {
+            "type": "string",
+            "description": "eBay-searchable product title under 80 characters.",
+        },
+        "confident": {
+            "type": "boolean",
+            "description": (
+                "true only when brand AND model/specific product type are "
+                "identifiable. false for blurry, mixed-lot, or ambiguous photos."
+            ),
+        },
+        "reason": {
+            "type": "string",
+            "description": "Brief justification under 80 characters.",
+        },
+    },
+    "required": ["title", "confident", "reason"],
+    "additionalProperties": False,
+}
+
+_CLAUDE_SYSTEM_PROMPT = """You identify products from auction-listing photos so they can be searched on eBay's marketplace. Given an image, produce the most specific eBay-searchable title you can.
+
+Title format:
+- Lead with brand if visible/recognizable: "Sony", "Nintendo", "Pyrex", etc.
+- Include model name/number if printed/visible
+- Include year if printed (common on coins, comics, books)
+- End with the product type: "console", "skillet", "watch", etc.
+- Under 80 characters total
+- No marketing fluff ("brand new!", "RARE!!"), no condition language ("mint", "broken")
+
+Confidence rules:
+- "confident": true → you can identify the brand AND model/specific product type from the image
+- "confident": false → image is blurry, shows multiple unrelated items in a bundled lot, or you're guessing the identity
+
+Bundled lots — a tray of mixed jewelry, a box of random tools, an estate-sale grouping — should be marked "confident": false. They cannot be searched as a single product.
+
+Examples:
+- Photo of a Nintendo Switch console in original box → {"title": "Nintendo Switch Console Gray Joy-Con HAC-001", "confident": true, "reason": "switch console clearly visible with model number"}
+- Blurry photo of an unidentifiable hardcover book → {"title": "Vintage hardcover book", "confident": false, "reason": "title and author not legible"}
+- Clear photo of a single 1922 silver dollar → {"title": "1922 Peace Silver Dollar", "confident": true, "reason": "date and denomination visible on coin"}
+- Tray of mixed costume jewelry → {"title": "Costume jewelry lot", "confident": false, "reason": "multiple unrelated items, not a single product"}"""
+
+
 class EbayImageEnricher:
-    """Turn an auction photo into an eBay-searchable title via image_search."""
+    """Turn an auction photo into an eBay-searchable title.
+
+    Two-tier flow:
+      1. eBay `search_by_image` — free, fast, preferred when results agree.
+      2. Claude Haiku vision (optional fallback) — runs only when eBay
+         doesn't produce a confident match and an Anthropic key is wired
+         up via the `anthropic_api_key` constructor arg.
+    """
 
     def __init__(self, app_id: str, cert_id: str,
-                 hibid_user_agent: str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"):
+                 hibid_user_agent: str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+                 anthropic_api_key: Optional[str] = None,
+                 anthropic_model: str = "claude-haiku-4-5"):
         self.app_id = app_id
         self.cert_id = cert_id
         self.hibid_user_agent = hibid_user_agent
         self._token: Optional[str] = None
         self._client = httpx.Client(timeout=30.0)
+        # Claude vision config — fallback tier. None disables the fallback.
+        self.anthropic_api_key = anthropic_api_key or None
+        self.anthropic_model = anthropic_model
+        self._anthropic_client = None  # lazy
 
     # ------------------------------------------------------------------ auth
     def _get_token(self) -> str:
@@ -203,17 +272,114 @@ class EbayImageEnricher:
 
         return base, confidence, coherent
 
+    # ----------------------------------------------------- claude vision tier
+    @property
+    def anthropic_client(self):
+        """Lazy-init the Anthropic client. Returns None if no key configured."""
+        if self._anthropic_client is None and self.anthropic_api_key:
+            try:
+                import anthropic
+                self._anthropic_client = anthropic.Anthropic(
+                    api_key=self.anthropic_api_key
+                )
+            except ImportError:
+                return None
+        return self._anthropic_client
+
+    @staticmethod
+    def _detect_media_type(url: str) -> str:
+        """Best-effort media-type guess from a URL extension."""
+        url_low = (url or "").lower().split("?")[0]
+        if url_low.endswith(".png"):
+            return "image/png"
+        if url_low.endswith(".gif"):
+            return "image/gif"
+        if url_low.endswith(".webp"):
+            return "image/webp"
+        # Default for HiBid CDN — most thumbnails are JPEG.
+        return "image/jpeg"
+
+    def _claude_identify(self, image_bytes: bytes,
+                         thumbnail_url: str = "") -> Optional[Dict]:
+        """Ask Claude vision to identify the product in a thumbnail.
+
+        Takes already-downloaded image bytes (HiBid's CDN needs a Referer
+        header that Anthropic's server-side fetcher won't send, so we
+        upload the bytes via base64 instead of passing the URL). Returns
+        a dict on success: {title, confidence (0.0-1.0), reason}, or
+        None on any failure (no client, network error, parse error).
+        """
+        if not self.anthropic_client or not image_bytes:
+            return None
+        try:
+            b64 = base64.standard_b64encode(image_bytes).decode("ascii")
+            response = self.anthropic_client.messages.create(
+                model=self.anthropic_model,
+                max_tokens=300,
+                system=_CLAUDE_SYSTEM_PROMPT,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": self._detect_media_type(thumbnail_url),
+                                "data": b64,
+                            },
+                        },
+                        {
+                            "type": "text",
+                            "text": (
+                                "Identify this product for an eBay search. "
+                                "Return JSON per the schema."
+                            ),
+                        },
+                    ],
+                }],
+                output_config={
+                    "format": {
+                        "type": "json_schema",
+                        "schema": _CLAUDE_OUTPUT_SCHEMA,
+                    }
+                },
+            )
+            text = next(
+                (b.text for b in response.content if b.type == "text"), ""
+            )
+            data = json.loads(text)
+            title = (data.get("title") or "").strip()
+            if not title:
+                return None
+            # Trim to 80 chars on a word boundary.
+            if len(title) > 80:
+                title = title[:80].rsplit(" ", 1)[0]
+            return {
+                "title": title,
+                # Map Claude's boolean confident → 0.85 (clears the 0.5
+                # promotion threshold) or 0.3 (below it). The exact
+                # number doesn't matter beyond passing/failing the bar.
+                "confidence": 0.85 if data.get("confident") else 0.3,
+                "reason": (data.get("reason") or "")[:120],
+            }
+        except Exception:
+            return None
+
     # ------------------------------------------------------------ public API
     def enrich_one(self, thumbnail_url: str,
                    original_title: str = "") -> Dict:
         """Try to enrich a single lot's title from its thumbnail image.
 
+        Tier 1: eBay search_by_image. Tier 2: Claude vision (only if eBay
+        didn't produce a confident match AND an Anthropic key is wired up).
+
         Returns a dict with:
-          img_enriched_title : Optional[str]   — None when we can't identify
+          img_enriched_title : Optional[str]   — None when neither tier identified the lot
           img_confidence     : float           — 0.0 to 1.0
-          img_comp_count     : int             — coherent hits found
-          img_top_match      : Optional[str]   — raw title of the best hit
-          img_top_price      : Optional[float] — price of the best hit (if any)
+          img_comp_count     : int             — coherent eBay hits, or 99 sentinel for Claude
+          img_top_match      : Optional[str]   — raw title of the best eBay hit
+          img_top_price      : Optional[float] — price of the best eBay hit
+          img_source         : Optional[str]   — 'ebay' or 'claude' (which tier matched)
           img_error          : Optional[str]   — error message, if any
         """
         result = {
@@ -222,39 +388,73 @@ class EbayImageEnricher:
             "img_comp_count": 0,
             "img_top_match": None,
             "img_top_price": None,
+            "img_source": None,
             "img_error": None,
         }
         if not thumbnail_url:
             result["img_error"] = "no_thumbnail"
             return result
+
+        ebay_failed_reason: Optional[str] = None
+        img: Optional[bytes] = None
         try:
             img = self._download_image(thumbnail_url)
             if not img:
-                result["img_error"] = "image_fetch_failed"
-                return result
+                ebay_failed_reason = "image_fetch_failed"
+            else:
+                items = self._search_by_image(img, limit=8)
+                if not items:
+                    ebay_failed_reason = "no_ebay_matches"
+                else:
+                    top = items[0]
+                    result["img_top_match"] = top.get("title")
+                    try:
+                        result["img_top_price"] = float(
+                            (top.get("price") or {}).get("value") or 0
+                        ) or None
+                    except (ValueError, TypeError):
+                        pass
 
-            items = self._search_by_image(img, limit=8)
-            if not items:
-                result["img_error"] = "no_ebay_matches"
-                return result
-
-            top = items[0]
-            result["img_top_match"] = top.get("title")
-            try:
-                result["img_top_price"] = float(
-                    (top.get("price") or {}).get("value") or 0
-                ) or None
-            except (ValueError, TypeError):
-                pass
-
-            new_title, confidence, coherent = self._build_enriched_title(
-                items, original_title=original_title
-            )
-            result["img_enriched_title"] = new_title
-            result["img_confidence"] = confidence
-            result["img_comp_count"] = coherent
+                    new_title, confidence, coherent = self._build_enriched_title(
+                        items, original_title=original_title
+                    )
+                    if new_title is not None:
+                        result["img_enriched_title"] = new_title
+                        result["img_confidence"] = confidence
+                        result["img_comp_count"] = coherent
+                        result["img_source"] = "ebay"
+                    else:
+                        ebay_failed_reason = "ebay_low_confidence"
         except Exception as e:
-            result["img_error"] = f"{type(e).__name__}: {e}"
+            ebay_failed_reason = f"{type(e).__name__}: {e}"
+
+        # --- Claude vision fallback ---
+        # Triggers only when eBay didn't produce a confident match AND we
+        # successfully downloaded the image. We pass the bytes (not the
+        # URL) because Anthropic's server-side fetcher can't reach
+        # HiBid's CDN — HiBid requires a Referer header.
+        if (
+            result["img_enriched_title"] is None
+            and self.anthropic_client is not None
+            and img is not None
+        ):
+            claude = self._claude_identify(img, thumbnail_url=thumbnail_url)
+            if claude is not None:
+                result["img_enriched_title"] = claude["title"]
+                result["img_confidence"] = claude["confidence"]
+                # Sentinel: 99 hits flags this as a Claude match for the
+                # promotion logic. Real eBay match counts top out around 8.
+                result["img_comp_count"] = 99
+                result["img_source"] = "claude"
+                # Surface Claude's reason in img_top_match when eBay had
+                # no top match at all — gives the user a debug breadcrumb.
+                if not result["img_top_match"]:
+                    result["img_top_match"] = f"[Claude] {claude['reason']}"
+            elif ebay_failed_reason:
+                result["img_error"] = f"{ebay_failed_reason}+claude_failed"
+
+        if result["img_enriched_title"] is None and not result["img_error"]:
+            result["img_error"] = ebay_failed_reason or "no_match"
         return result
 
     def batch_enrich(
@@ -285,6 +485,7 @@ class EbayImageEnricher:
             ("img_comp_count", 0),
             ("img_top_match", None),
             ("img_top_price", None),
+            ("img_source", None),
             ("img_error", None),
         ]:
             if col not in df.columns:
@@ -319,6 +520,13 @@ def promote_image_titles(df: pd.DataFrame,
     """Where img_enriched_title is present and confident, promote it to
     `enriched_title`. The original `enriched_title` is kept in
     `enriched_title_pre_image` for traceability.
+
+    Two acceptance paths:
+      - eBay match: `img_source == 'ebay'` AND img_confidence ≥ min_confidence
+        AND img_comp_count ≥ min_hits (need multiple coherent eBay hits).
+      - Claude match: `img_source == 'claude'` AND img_confidence ≥
+        min_confidence (Claude already self-reports confident=true/false,
+        so the hit-count check doesn't apply).
     """
     df = df.copy()
     if "enriched_title" not in df.columns:
@@ -326,11 +534,23 @@ def promote_image_titles(df: pd.DataFrame,
     if "img_enriched_title" not in df.columns:
         return df
 
-    mask = (
-        df["img_enriched_title"].notna()
-        & (df["img_confidence"].fillna(0) >= min_confidence)
-        & (df["img_comp_count"].fillna(0) >= min_hits)
-    )
+    has_title = df["img_enriched_title"].notna()
+    confidence = df["img_confidence"].fillna(0) >= min_confidence
+
+    if "img_source" in df.columns:
+        source = df["img_source"].fillna("")
+        is_ebay = (
+            (source == "ebay")
+            & confidence
+            & (df["img_comp_count"].fillna(0) >= min_hits)
+        )
+        is_claude = (source == "claude") & confidence
+        accept = is_ebay | is_claude
+    else:
+        # Older DataFrames pre-Claude tier — fall back to old check.
+        accept = confidence & (df["img_comp_count"].fillna(0) >= min_hits)
+
+    mask = has_title & accept
     df["enriched_title_pre_image"] = df["enriched_title"]
     df.loc[mask, "enriched_title"] = df.loc[mask, "img_enriched_title"]
     return df
