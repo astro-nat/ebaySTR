@@ -640,18 +640,60 @@ with header_actions_col:
                      "Auctions are also purged as soon as their closing date passes.",
             )
             if cached_list:
-                with st.expander(f"📋 View {len(cached_list)} cached entries", expanded=False):
+                with st.expander(
+                    f"📋 Open a cached auction ({len(cached_list)} entries)",
+                    expanded=False,
+                ):
+                    st.caption(
+                        "Click any entry to re-open its previous analysis "
+                        "without burning a single ScrapingBee credit — the "
+                        "audit + comp results are read straight from disk."
+                    )
                     for entry in cached_list[:25]:
-                        badge = "🟢" if entry['fresh'] else "🔴 stale"
+                        aid = entry.get('auction_id')
+                        auction_name = entry.get('auction_name', '(unknown)')
+                        items = entry.get('items', 0)
+                        fresh = entry.get('fresh', False)
+                        badge = "🟢" if fresh else "🔴"
                         try:
                             cached_at = datetime.fromisoformat(entry['cached_at'])
                             age = datetime.now() - cached_at
-                            age_str = f"{age.days}d ago" if age.days > 0 else f"{int(age.seconds / 3600)}h ago"
+                            age_str = (
+                                f"{age.days}d ago" if age.days > 0
+                                else f"{int(age.seconds / 3600)}h ago"
+                            )
                         except Exception:
                             age_str = "?"
-                        st.caption(f"{badge} **{entry['auction_name']}** — {entry['items']} items · {age_str}")
+                        # One button per cached auction. Loads the
+                        # cached lot DataFrame straight from disk and
+                        # routes through _load_auction_for_analysis,
+                        # which preserves the audit + comp columns
+                        # (no fetch, no comp, no credits).
+                        if st.button(
+                            f"{badge} **{auction_name}** — "
+                            f"{items} items · {age_str}",
+                            key=f"open_cached_{aid}",
+                            use_container_width=True,
+                        ):
+                            payload = _AUCTION_CACHE.load(aid)
+                            if (payload
+                                and isinstance(payload.get('df'), pd.DataFrame)
+                                and not payload['df'].empty):
+                                _load_auction_for_analysis(
+                                    auction_name, payload['df'],
+                                )
+                                st.rerun()
+                            else:
+                                st.error(
+                                    "This cache entry couldn't be loaded "
+                                    "(payload is empty or missing the lot "
+                                    "DataFrame). Try re-running the audit."
+                                )
                     if len(cached_list) > 25:
-                        st.caption(f"...and {len(cached_list) - 25} more")
+                        st.caption(
+                            f"...and {len(cached_list) - 25} more "
+                            "(showing newest 25)."
+                        )
             if st.button("🗑️ Clear all memory", use_container_width=True,
                          help="Delete every cached auction analysis. Use if results feel stale."):
                 removed = _AUCTION_CACHE.clear_all()
