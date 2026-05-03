@@ -706,6 +706,99 @@ if (
 # auction fetch (reuses the same path as the in-page picker's
 # "Analyze" button). Selected auction gets a visual highlight.
 # ================================================================
+# ================================================================
+# AUCTION TRIAGE — pre-comp signals so the user can spend ScrapingBee
+# credits on auctions that are likely to find arbitrage and skip the
+# obvious losers without burning credits to discover that.
+#
+# Two functions:
+#   _estimate_auction_cost(lot_count, sample_payload) -> (pc_pct, credits)
+#   _auction_signal(name, items, closes_dt, last_run_dt) -> (rank, reason)
+#
+# Both run on the existing post-discovery sample data — zero new HTTP.
+# ================================================================
+# Approximate ScrapingBee cost per non-PC-covered lot. Each lot kicks
+# off an eBay-sold scrape (~25 credits) plus a Mercari-sold scrape
+# (~25 credits) plus possibly a per-item STR scrape for cards/games/
+# comics (~25 credits). Average ~50 credits/lot is a reasonable
+# all-in estimate at user volume.
+_CREDITS_PER_NON_PC_LOT = 50
+
+
+def _estimate_auction_cost(lot_count: int, sample_payload):
+    """Return (pc_coverage_pct, est_credits) for a discovered auction.
+
+    pc_coverage is the share of sampled lot titles that route through
+    PriceCharting (TCG/video_game/comic) — those don't burn ScrapingBee
+    credits. sports_card titles classify but bypass PC and route to
+    eBay-sold scraping, so they DO cost.
+
+    With no sample yet, assumes worst case (everything costs).
+    """
+    from scraper.pricecharting import classify_for_pricecharting
+    titles = (sample_payload or {}).get('titles') or []
+    if not titles:
+        return 0.0, int(lot_count * _CREDITS_PER_NON_PC_LOT)
+    pc_hits = sum(
+        1 for t in titles
+        if classify_for_pricecharting(t or '')
+           in ('tcg', 'video_game', 'comic')
+    )
+    pc_coverage = pc_hits / len(titles)
+    est_credits = int(lot_count * (1 - pc_coverage) * _CREDITS_PER_NON_PC_LOT)
+    return pc_coverage, est_credits
+
+
+# Auction-name keywords that signal "avoid" — base products are too
+# commoditized for arbitrage even when prices are accurate.
+_AVOID_KEYWORDS = (
+    'liquidation', 'overstock', 'new returns', 'warehouse',
+    'wholesale', 'pallet', 'truckload', 'amazon return',
+)
+# Name keywords that signal "good" — variety + older inventory means
+# more chance of finding an underpriced item.
+_PREFER_KEYWORDS = (
+    'estate', 'storage', 'collection', 'consignment', 'antique',
+    'vintage',
+)
+
+
+def _auction_signal(name, items, closes_dt, last_run_dt):
+    """Return (rank, reason) where rank is 'good' | 'caution' | 'avoid'.
+
+    Heuristics, ranked first-match-wins:
+      - 'avoid': name matches commoditized-source keywords, lot count
+        > 1500, or closing in <2 hours (comp run wouldn't finish).
+      - 'caution': already analyzed in the last 24h, or outside the
+        100-500 lot sweet spot but otherwise fine.
+      - 'good': in the sweet spot, optionally with a 'prefer' keyword.
+    """
+    nm = (name or '').lower()
+    for kw in _AVOID_KEYWORDS:
+        if kw in nm:
+            return 'avoid', f"Name contains '{kw}' — base prices typically too compressed for arbitrage"
+    if items > 1500:
+        return 'avoid', f"{items:,} lots — too expensive at current credit rates"
+    if closes_dt:
+        secs = (closes_dt - datetime.now()).total_seconds()
+        if 0 < secs < 7200:
+            return 'avoid', f"Closes in {int(secs / 60)} min — comp run wouldn't finish in time"
+    if last_run_dt:
+        age = (datetime.now() - last_run_dt).total_seconds()
+        if age < 86400:
+            return 'caution', f"Already analyzed {int(age / 3600)}h ago — re-running may be redundant"
+    if not (100 <= items <= 500):
+        if items < 100:
+            return 'caution', f"Only {items} lots — small sample, finds may be sparse"
+        # 500 < items <= 1500
+        return 'caution', f"{items:,} lots — moderate cost, worth analyzing if categories look good"
+    # In the 100-500 sweet spot
+    for kw in _PREFER_KEYWORDS:
+        if kw in nm:
+            return 'good', f"Sweet-spot lot count + name suggests '{kw}' (good variety)"
+    return 'good', "Sweet-spot lot count (100-500)"
+
+
 def _render_sidebar_refresh_button():
     """Render the primary Refresh / Discover button at the top of the sidebar.
 
@@ -799,6 +892,7 @@ def _render_sidebar_auction_list():
         sb_sort = st.selectbox(
             "Sort",
             options=[
+                "🎯 Best fit first",
                 "🔢 Most items first",
                 "⏰ Closing soonest",
                 "🔢 Fewest items first",
@@ -806,6 +900,13 @@ def _render_sidebar_auction_list():
             ],
             key="sidebar_picker_sort",
             label_visibility="collapsed",
+        )
+        sb_hide_avoid = st.checkbox(
+            "Hide 🔴 avoid",
+            key="sidebar_hide_avoid",
+            help="Filter out auctions flagged as low-priority: name "
+                 "contains 'liquidation'/'overstock'/'pallet'/etc., lot "
+                 "count > 1500, or closing in <2 hours.",
         )
 
         # Build display rows. Reuse the same parsing/closing-time logic
@@ -848,6 +949,11 @@ def _render_sidebar_auction_list():
                         closing_fmt = date_part
             except (ValueError, TypeError):
                 pass
+            # Cost + signal for triage. Both are pure functions of the
+            # data we already have — zero additional HTTP.
+            pc_pct, est_credits = _estimate_auction_cost(
+                int(c.get('lot_count') or 0), sample_payload,
+            )
             rows.append({
                 'auction_id': aid,
                 'name': c.get('name') or '(unnamed)',
@@ -856,6 +962,8 @@ def _render_sidebar_auction_list():
                 'closes_dt': closes_dt,
                 'summary': summary or '',
                 'source': c.get('source') or '',
+                'pc_pct': pc_pct,
+                'est_credits': est_credits,
             })
 
         # Filter + sort
@@ -864,18 +972,6 @@ def _render_sidebar_auction_list():
                 r for r in rows
                 if sb_search in r['name'].lower() or sb_search in r['summary'].lower()
             ]
-        if not rows:
-            st.caption("_No auctions match the filter._")
-            return
-
-        if sb_sort.startswith("🔢 Most"):
-            rows.sort(key=lambda r: (-r['items'], r['closes_dt'] or datetime.max))
-        elif sb_sort.startswith("🔢 Fewest"):
-            rows.sort(key=lambda r: (r['items'], r['closes_dt'] or datetime.max))
-        elif sb_sort.startswith("⏰ Closing soonest"):
-            rows.sort(key=lambda r: r['closes_dt'] or datetime.max)
-        else:
-            rows.sort(key=lambda r: r['closes_dt'] or datetime.min, reverse=True)
 
         # Determine the currently-loaded auction (for highlighting)
         active_aid = None
@@ -916,19 +1012,82 @@ def _render_sidebar_auction_list():
                 return f"{int(delta.total_seconds() / 3600)}h ago"
             return f"{delta.days}d ago"
 
+        # Compute the triage signal for every row using auction-name
+        # heuristics + lot count + closing time + last-run age.
+        for row in rows:
+            rank, reason = _auction_signal(
+                row['name'], row['items'], row['closes_dt'],
+                last_run_map.get(row['auction_id']),
+            )
+            row['signal_rank'] = rank
+            row['signal_reason'] = reason
+
+        # Apply the "hide avoid" filter after computing signals.
+        if sb_hide_avoid:
+            rows = [r for r in rows if r['signal_rank'] != 'avoid']
+
+        # Sort. "Best fit first" uses the signal as the primary key
+        # (good > caution > avoid), then est_credits ascending, then
+        # closing time. The other sorts are unchanged.
+        if sb_sort.startswith("🎯 Best"):
+            _rank_order = {'good': 0, 'caution': 1, 'avoid': 2}
+            rows.sort(key=lambda r: (
+                _rank_order.get(r['signal_rank'], 3),
+                r['est_credits'],
+                r['closes_dt'] or datetime.max,
+            ))
+        elif sb_sort.startswith("🔢 Most"):
+            rows.sort(key=lambda r: (-r['items'], r['closes_dt'] or datetime.max))
+        elif sb_sort.startswith("🔢 Fewest"):
+            rows.sort(key=lambda r: (r['items'], r['closes_dt'] or datetime.max))
+        elif sb_sort.startswith("⏰ Closing soonest"):
+            rows.sort(key=lambda r: r['closes_dt'] or datetime.max)
+        else:
+            rows.sort(key=lambda r: r['closes_dt'] or datetime.min, reverse=True)
+
+        if not rows:
+            st.caption("_No auctions match the filter._")
+            return
+
+        # Triage icon for the row label. Prefixed before the auction
+        # name so "Best fit" sorting visually surfaces 🟢 rows.
+        _signal_icon = {'good': '🟢', 'caution': '🟡', 'avoid': '🔴'}
+
+        def _format_credits(c: int) -> str:
+            """Compact credit count for the per-row label."""
+            if c == 0:
+                return "free (PC)"
+            if c < 1000:
+                return f"~{c} cr"
+            return f"~{c / 1000:.1f}k cr"
+
         for row in rows:
             aid = row['auction_id']
             is_active = (aid == active_aid)
             last_run_str = _format_last_run(last_run_map.get(aid))
-            # Third line of the label: "🕒 Last analyzed: <when>" only
-            # when we actually have a cache entry. Blank otherwise so
-            # never-run auctions stay quiet.
+            icon = '🟢 ' if is_active else _signal_icon.get(row['signal_rank'], '⚪ ')
+            credits_label = _format_credits(row['est_credits'])
+            pc_label = (
+                f" · {int(round(row['pc_pct'] * 100))}% PC"
+                if row.get('pc_pct') and row['pc_pct'] > 0 else ""
+            )
+            # 🕒 Last analyzed line: only when we have a cache entry.
             footer = f"\n\n🕒 _Last analyzed: {last_run_str}_" if last_run_str else ""
             label = (
-                f"{'🟢 ' if is_active else ''}**{row['name']}**\n\n"
-                f"{row['items']:,} lots · {row['closes_fmt']}"
+                f"{icon}**{row['name']}**\n\n"
+                f"{row['items']:,} lots · {row['closes_fmt']}\n\n"
+                f"💸 {credits_label}{pc_label}"
                 f"{footer}"
             )
+            # Tooltip combines the auction summary with the triage
+            # reason so the user understands why a row is flagged.
+            tip_bits = []
+            if row.get('signal_reason'):
+                tip_bits.append(row['signal_reason'])
+            if row['summary']:
+                tip_bits.append(row['summary'])
+            tooltip = " — ".join(tip_bits)[:300] if tip_bits else None
+
             # Each row uses its own button — clicking dispatches to the
             # single-auction fetch path. We disable while a fetch is
             # already in flight to avoid racing.
@@ -938,7 +1097,7 @@ def _render_sidebar_auction_list():
                 use_container_width=True,
                 disabled=sb_fetch_lots_running,
                 type="primary" if is_active else "secondary",
-                help=row['summary'][:200] if row['summary'] else None,
+                help=tooltip,
             ):
                 # Switching auctions: clear the current analysis state
                 # so the auto-load step in the dispatch picks up the
