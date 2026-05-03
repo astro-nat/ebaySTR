@@ -119,6 +119,13 @@ class GoCollectLookup:
                 params=params or {},
                 timeout=timeout,
             )
+        except (httpx.ReadTimeout, httpx.ConnectTimeout,
+                httpx.RemoteProtocolError, httpx.NetworkError):
+            # Total transport failure (no response at all) — same
+            # treatment as a 5xx: trip the kill switch so we don't
+            # spin through 50 lots × 30s of timeouts.
+            self._quota_exhausted = True
+            return None
         except Exception:
             return None
         if resp.status_code == 429:
@@ -127,6 +134,14 @@ class GoCollectLookup:
         if resp.status_code in (401, 403):
             # Bad key or permission denied — disable for this run so
             # subsequent calls don't repeat the auth failure.
+            self._quota_exhausted = True
+            return None
+        if resp.status_code >= 500:
+            # Origin outage (522 from Cloudflare, 502/503/504 etc.).
+            # Trip the kill switch for the rest of the run so we don't
+            # burn ~30s per lot waiting on a dead service. Each new
+            # GoCollectLookup instance resets, so the next comp run
+            # will retry naturally.
             self._quota_exhausted = True
             return None
         if resp.status_code != 200:
