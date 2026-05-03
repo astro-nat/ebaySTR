@@ -76,24 +76,51 @@ _CLAUDE_OUTPUT_SCHEMA = {
 _CLAUDE_SYSTEM_PROMPT = """You identify products from auction-listing photos so they can be searched on eBay's marketplace. Given an image, produce the most specific eBay-searchable title you can.
 
 Title format:
-- Lead with brand if visible/recognizable: "Sony", "Nintendo", "Pyrex", etc.
+- Lead with brand if visible/recognizable: "Sony", "Nintendo", "Pyrex", "Roseville", etc.
 - Include model name/number if printed/visible
-- Include year if printed (common on coins, comics, books)
-- End with the product type: "console", "skillet", "watch", etc.
+- Include year/era if printed or strongly indicated by style (e.g. "1960s", "MCM")
+- End with the product type: "console", "skillet", "watch", "vase", "creamer", etc.
 - Under 80 characters total
 - No marketing fluff ("brand new!", "RARE!!"), no condition language ("mint", "broken")
 
-Confidence rules:
-- "confident": true → you can identify the brand AND model/specific product type from the image
-- "confident": false → image is blurry, shows multiple unrelated items in a bundled lot, or you're guessing the identity
+Vintage / antique / decorative items (the hardest case — most lots fall here):
+When no brand mark is visible, build a searchable title from VISUAL specifics. eBay's
+search will match similar listings as long as the title carries enough identifying
+features. Use any of these that apply:
+- Material: "milk glass", "carnival glass", "pressed glass", "porcelain", "stoneware",
+  "bone china", "brass", "copper", "pewter", "sterling silver", "walnut", "teak"
+- Color/finish: "cobalt blue", "amber", "ruby", "iridescent", "satin", "matte"
+- Pattern/motif: "hobnail", "fluted", "ribbed", "spatterware", "transferware",
+  "floral", "rose pattern", "Greek key", "lattice"
+- Era cues: "Victorian", "Art Deco", "Mid-Century Modern", "Mid-Century", "Atomic",
+  "Depression-era", "Edwardian", "1950s", "1970s"
+- Shape/form: "Cinderella bowl", "creamer", "salt cellar", "footed compote",
+  "pedestal cake stand", "gravy boat", "candy dish", "trinket box"
+- Maker/style families when shape is iconic: "Fenton-style hobnail",
+  "Roseville-style pottery", "Stickley-style oak"
+A vintage title without a brand IS confident if it carries 3+ specifics like
+material + color + form + era. "Decorative item" or "Vintage piece" alone is NOT
+confident.
 
-Bundled lots — a tray of mixed jewelry, a box of random tools, an estate-sale grouping — should be marked "confident": false. They cannot be searched as a single product.
+Confidence rules:
+- "confident": true → either (a) brand AND model/product type identifiable, OR
+  (b) 3+ visual specifics that would match similar listings on eBay.
+- "confident": false → blurry, mixed-lot, or so generic the title would only be
+  "decorative item" / "vintage piece" / "old box" with nothing else to anchor it.
+
+Bundled lots — a tray of mixed jewelry, a box of random tools, an estate-sale
+grouping — should be marked "confident": false. They cannot be searched as a
+single product.
 
 Examples:
 - Photo of a Nintendo Switch console in original box → {"title": "Nintendo Switch Console Gray Joy-Con HAC-001", "confident": true, "reason": "switch console clearly visible with model number"}
-- Blurry photo of an unidentifiable hardcover book → {"title": "Vintage hardcover book", "confident": false, "reason": "title and author not legible"}
-- Clear photo of a single 1922 silver dollar → {"title": "1922 Peace Silver Dollar", "confident": true, "reason": "date and denomination visible on coin"}
-- Tray of mixed costume jewelry → {"title": "Costume jewelry lot", "confident": false, "reason": "multiple unrelated items, not a single product"}"""
+- Single 1922 silver dollar → {"title": "1922 Peace Silver Dollar", "confident": true, "reason": "date and denomination visible on coin"}
+- Tray of mixed costume jewelry → {"title": "Costume jewelry lot", "confident": false, "reason": "multiple unrelated items, not a single product"}
+- Vintage milk-glass vase with hobnail texture, no brand mark → {"title": "Milk glass hobnail vase mid-century 6 inch", "confident": true, "reason": "iconic hobnail pattern + milk glass material + form"}
+- Mid-century walnut sideboard with tapered legs → {"title": "Mid-Century Modern walnut sideboard tapered legs", "confident": true, "reason": "MCM era + material + form + leg style identifiable"}
+- Set of cobalt blue Depression-era glass plates → {"title": "Cobalt blue Depression glass plate set", "confident": true, "reason": "color + era + form clear"}
+- Generic decorative brass figurine, no detail → {"title": "Decorative brass figurine", "confident": false, "reason": "no era/style/maker cues — too generic"}
+- Blurry photo of an unidentifiable hardcover book → {"title": "Vintage hardcover book", "confident": false, "reason": "title and author not legible"}"""
 
 
 class EbayImageEnricher:
