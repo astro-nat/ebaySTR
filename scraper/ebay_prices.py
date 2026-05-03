@@ -717,7 +717,7 @@ class EbayPriceLookup:
             if progress_callback:
                 progress_callback(i + 1, total)
 
-        return auction_strs
+        return result
 
     def batch_lookup(self, df: pd.DataFrame, progress_callback=None,
                      auction_str_map: Optional[dict] = None,
@@ -777,6 +777,20 @@ class EbayPriceLookup:
         price_results: list = [None] * total
         str_results: list = [(None, None)] * total
 
+        # Per-item STR override mask. STR varies wildly within
+        # card/game/comic categories — Charizard PSA 10 sells in days,
+        # a generic Pokemon common takes months. The category-level
+        # average smears that signal. For rows where the classifier
+        # tags the lot as tcg / sports_card / comic / video_game, we
+        # do per-item STR scrapes regardless of use_auction_str.
+        # Furniture/tools/jewelry rows still use the cheaper
+        # category sampling.
+        from .pricecharting import classify_for_pricecharting
+        needs_per_item_str = [
+            classify_for_pricecharting(titles[i]) is not None
+            for i in range(total)
+        ]
+
         def _work_price(i: int):
             try:
                 return i, self.lookup_price_range(titles[i])
@@ -786,16 +800,24 @@ class EbayPriceLookup:
         def _work_str(i: int):
             try:
                 pct, src = self.lookup_str(titles[i])
+                # Tag the source so the UI distinguishes per-item vs
+                # category-sampled STR.
+                if pct is not None and src and 'sampled' not in src:
+                    src = f"{src} (per-item)"
                 return i, (pct, src)
             except Exception:
                 return i, (None, None)
 
         # Fill STR from the sampled map (no HTTP — cheap pass).
         # The map can be keyed per-auction (back-compat) or per-(auction,category)
-        # (new). __granularity__ tells us which.
+        # (new). __granularity__ tells us which. Rows in the per-item
+        # mask are LEFT at (None, None) here so the parallel-path STR
+        # job below picks them up.
         if use_auction_str:
             granularity = auction_str_map.get("__granularity__", "auction")
             for i in range(total):
+                if needs_per_item_str[i]:
+                    continue  # leave at (None, None) for per-item scrape
                 entry = None
                 if granularity == "category":
                     cat = categories[i].strip() or '(uncategorized)'
@@ -853,19 +875,24 @@ class EbayPriceLookup:
             for i in range(total):
                 _, price_info = _work_price(i)
                 price_results[i] = price_info
-                if not use_auction_str:
+                # Per-item STR scrape when EITHER (a) we don't have an
+                # auction map at all, OR (b) the row was tagged for
+                # per-item even though we have a map.
+                if (not use_auction_str) or needs_per_item_str[i]:
                     _, sr = _work_str(i)
                     str_results[i] = sr
                 completed += 1
                 _emit(completed, titles[i][:70])
                 _fire_live(i, price_info)
         else:
-            # Parallel path — submit all price jobs; interleave STR jobs only
-            # when we don't have a precomputed auction map.
+            # Parallel path — submit all price jobs; interleave STR jobs
+            # for rows that don't have a precomputed map value (either
+            # use_auction_str is False entirely, or the row was tagged
+            # as a card/game/comic that needs per-item STR).
             with ThreadPoolExecutor(max_workers=workers) as ex:
                 futures = {ex.submit(_work_price, i): ('price', i) for i in range(total)}
-                if not use_auction_str:
-                    for i in range(total):
+                for i in range(total):
+                    if (not use_auction_str) or needs_per_item_str[i]:
                         futures[ex.submit(_work_str, i)] = ('str', i)
 
                 for fut in as_completed(futures):
