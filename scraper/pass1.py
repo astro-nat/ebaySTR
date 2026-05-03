@@ -47,8 +47,9 @@ query LotSearch($auctionId: Int!, $pageNumber: Int!) {
         lotNumber
         lead
         description
+        estimate
         category { categoryName }
-        lotState { highBid bidCount status timeLeft }
+        lotState { highBid minBid bidCount status timeLeft }
         pictures { thumbnailLocation hdThumbnailLocation fullSizeLocation }
       }
     }
@@ -166,6 +167,26 @@ class Phase1Scraper:
         """Estimate acquisition cost per item: bid + buyer premium."""
         premium = bid * (self.buyer_premium_pct / 100.0)
         return bid + premium
+
+    @staticmethod
+    def _parse_estimate(raw: str):
+        """Parse HiBid's `estimate` string into (low, high) floats.
+
+        Examples we handle:
+          - "10.00 - 50.00 USD"  → (10.0, 50.0)
+          - "$75"                → (75.0, 75.0)
+          - "100 to 200"         → (100.0, 200.0)
+          - "" / None            → (None, None)
+        """
+        if not raw:
+            return None, None
+        nums = re.findall(r'\d+(?:\.\d+)?', str(raw).replace(',', ''))
+        if not nums:
+            return None, None
+        if len(nums) >= 2:
+            return float(nums[0]), float(nums[1])
+        v = float(nums[0])
+        return v, v
 
     async def _graphql(self, client: httpx.AsyncClient, operation: str, query: str, variables: dict) -> dict:
         payload = {
@@ -354,7 +375,18 @@ class Phase1Scraper:
                 state = lot.get('lotState') or {}
                 logistics = self.classify_logistics(title, category, description)
                 current_bid = state.get('highBid', 0.0) or 0.0
-                total_cost = self.estimate_total_cost(current_bid)
+                # `minBid` is the minimum acceptable next bid. When the lot
+                # has zero bids, current_bid==0 but minBid is still the
+                # auctioneer's starting bid — that's the real acquisition
+                # cost basis, not $0. Pick whichever is higher to handle
+                # both no-bids and active-bidding states.
+                next_bid = state.get('minBid', 0.0) or 0.0
+                effective_bid = max(current_bid, next_bid)
+                total_cost = self.estimate_total_cost(effective_bid)
+
+                # Auctioneer's value range, e.g. "10.00 - 50.00 USD".
+                # Used as a sanity check against eBay/Mercari comp medians.
+                est_low, est_high = self._parse_estimate(lot.get('estimate'))
 
                 lot_id = lot.get('id')
 
@@ -381,8 +413,11 @@ class Phase1Scraper:
                     "lot_link": f"https://hibid.com/lot/{lot_id}",
                     "category": category,
                     "current_bid": current_bid,
+                    "next_bid": round(next_bid, 2),
                     "bid_count": state.get('bidCount', 0) or 0,
                     "est_cost": round(total_cost, 2),
+                    "auctioneer_est_low": est_low,
+                    "auctioneer_est_high": est_high,
                     "status": state.get('status', '') or '',
                     "time_left": state.get('timeLeft', '') or '',
                     "description": description,
