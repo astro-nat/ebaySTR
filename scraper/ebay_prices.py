@@ -26,6 +26,10 @@ class EbayPriceLookup:
         'mercari_attempts': 0,
         'mercari_blocked': 0,
         'mercari_success': 0,
+        # ScrapingBee usage tracking — surface in the UI so the user
+        # knows how many credits a comp run burned.
+        'scrapingbee_calls': 0,
+        'scrapingbee_credits': 0,
     }
 
     @classmethod
@@ -40,7 +44,8 @@ class EbayPriceLookup:
         """Snapshot of the scrape counters since the last reset."""
         return dict(cls._scrape_stats)
 
-    def __init__(self, app_id: str, cert_id: str, pricecharting=None):
+    def __init__(self, app_id: str, cert_id: str, pricecharting=None,
+                 scrapingbee_key: Optional[str] = None):
         """eBay/Mercari price lookup, optionally augmented with PriceCharting.
 
         Args:
@@ -50,10 +55,19 @@ class EbayPriceLookup:
                 PriceCharting lookup BEFORE the eBay/Mercari scrape. PC's
                 aggregated sold data is materially better for these niches.
                 Pass None (or omit) to disable.
+            scrapingbee_key: Optional ScrapingBee API key. When set, the
+                eBay-sold and Mercari-sold scrapes route through their
+                rotating-residential-proxy API (~10 credits each) instead
+                of direct httpx.get. Direct requests get 403'd from most
+                non-residential IPs, so without this key the sold-history
+                pipeline is effectively dead and prices fall through to
+                eBay's Browse-API active listings. None disables proxying
+                — direct request, current behavior preserved.
         """
         self.app_id = app_id
         self.cert_id = cert_id
         self.pricecharting = pricecharting
+        self.scrapingbee_key = scrapingbee_key
         self._token: Optional[str] = None
         # Guard token fetch under parallel workers — avoids redundant OAuth calls
         self._token_lock = threading.Lock()
@@ -171,13 +185,55 @@ class EbayPriceLookup:
         hi = q3 + 1.5 * iqr
         return [p for p in prices if lo <= p <= hi]
 
+    def _proxied_get(self, target_url: str, params: dict, timeout: float = 30):
+        """Route a GET through ScrapingBee when configured, else direct.
+
+        Returns the response object (or None on transport failure).
+        ScrapingBee charges ~10 credits per request with premium proxy
+        (which is what eBay/Mercari require) — that's ~10,000 lookups
+        per 100k-credit Freelance plan. Without a key this falls back
+        to the direct httpx.get path that eBay tends to 403.
+        """
+        if self.scrapingbee_key:
+            # Build the full target URL with its params, then hand it to
+            # ScrapingBee. block_resources=true skips images/css/fonts
+            # — speeds up the response and saves bandwidth on their end.
+            target_with_params = str(httpx.URL(target_url, params=params))
+            sb_params = {
+                "api_key": self.scrapingbee_key,
+                "url": target_with_params,
+                "premium_proxy": "true",   # eBay needs residential IPs
+                "country_code": "us",
+                "block_resources": "true",
+            }
+            try:
+                resp = httpx.get(
+                    "https://app.scrapingbee.com/api/v1/",
+                    params=sb_params,
+                    timeout=timeout,
+                )
+                # Track usage so the UI can show "you spent N credits".
+                # The Spb-cost header reports per-request credit cost.
+                cost = int(resp.headers.get('Spb-cost', 0) or 0)
+                type(self)._scrape_stats['scrapingbee_calls'] += 1
+                type(self)._scrape_stats['scrapingbee_credits'] += cost
+                return resp
+            except Exception:
+                return None
+
+        # No key configured — direct request (gets 403'd on eBay).
+        try:
+            session = self._get_scrape_session()
+            return session.get(target_url, params=params, timeout=timeout)
+        except Exception:
+            return None
+
     def _scrape_ebay_sold_prices(self, query: str, max_prices: int = 30) -> list:
         """Scrape actual sold prices from eBay's sold listings page.
 
         Returns a list of sold prices (float). Empty list if scraping fails.
         """
         type(self)._scrape_stats['ebay_sold_attempts'] += 1
-        session = self._get_scrape_session()
         params = {
             "_nkw": query,
             "LH_Sold": "1",
@@ -185,11 +241,13 @@ class EbayPriceLookup:
             "_ipg": "60",  # 60 results per page
         }
         try:
-            resp = session.get(
+            resp = self._proxied_get(
                 "https://www.ebay.com/sch/i.html",
                 params=params,
-                timeout=15,
+                timeout=30,
             )
+            if resp is None:
+                return []
             # 403 / very-short body = anti-bot block, not "no results".
             # Tracking this separately so the UI can warn the user.
             if resp.status_code in (403, 429) or len(resp.text) < 500:
@@ -249,17 +307,18 @@ class EbayPriceLookup:
         Returns a list of sold prices (float). Empty list if scraping fails.
         """
         type(self)._scrape_stats['mercari_attempts'] += 1
-        session = self._get_scrape_session()
         params = {
             "keyword": query,
             "itemStatuses": "ITEM_STATUS_SOLD_OUT",
         }
         try:
-            resp = session.get(
+            resp = self._proxied_get(
                 "https://www.mercari.com/search/",
                 params=params,
-                timeout=15,
+                timeout=30,
             )
+            if resp is None:
+                return []
             # 403 / 429 = anti-bot block; track separately from "no results".
             if resp.status_code in (403, 429) or len(resp.text) < 500:
                 type(self)._scrape_stats['mercari_blocked'] += 1

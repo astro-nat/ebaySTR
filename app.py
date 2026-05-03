@@ -1935,9 +1935,11 @@ def _run_ebay_comps(results_df):
     cfg = load_config()
     pc_token = (cfg.get("pricecharting") or {}).get("token") or None
     pc_client = PriceChartingLookup(pc_token)
+    sb_key = (cfg.get("scrapingbee") or {}).get("api_key") or None
     ebay = EbayPriceLookup(
         cfg["ebay"]["app_id"], cfg["ebay"]["cert_id"],
         pricecharting=pc_client,
+        scrapingbee_key=sb_key,
     )
 
     total = len(eligible_df)
@@ -2122,9 +2124,11 @@ def _run_ebay_comps_chunk(audit_df, chunk_size: int = 200, on_lot_priced=None):
     from scraper.config_loader import load_config
     cfg = load_config()
     pc_token = (cfg.get("pricecharting") or {}).get("token") or None
+    sb_key = (cfg.get("scrapingbee") or {}).get("api_key") or None
     ebay = EbayPriceLookup(
         cfg["ebay"]["app_id"], cfg["ebay"]["cert_id"],
         pricecharting=PriceChartingLookup(pc_token),
+        scrapingbee_key=sb_key,
     )
 
     label = f"💰 Comping next {len(chunk)} of {total_pending} pending lot(s)…"
@@ -3319,8 +3323,20 @@ if current_auction and not st.session_state.selected_leads.empty:
             ebay_blocked = stats.get('ebay_sold_blocked', 0)
             merc_total = stats.get('mercari_attempts', 0)
             merc_blocked = stats.get('mercari_blocked', 0)
+            sb_calls = stats.get('scrapingbee_calls', 0)
+            sb_credits = stats.get('scrapingbee_credits', 0)
             ebay_block_rate = (ebay_blocked / ebay_total) if ebay_total else 0.0
             merc_block_rate = (merc_blocked / merc_total) if merc_total else 0.0
+
+            # Positive signal: ScrapingBee was used and the eBay sold
+            # path is actually getting through. Show a small caption
+            # so the user can track credit burn against their plan.
+            if sb_calls > 0:
+                st.caption(
+                    f"🐝 ScrapingBee used for {sb_calls} scrape(s) "
+                    f"(~{sb_credits} credits)."
+                )
+
             if (ebay_total >= 3 and ebay_block_rate > 0.5) or \
                (merc_total >= 3 and merc_block_rate > 0.5):
                 bits = []
