@@ -25,13 +25,13 @@ import pandas as pd
 # must come from a fresh Phase 1 fetch.
 CACHED_ANALYSIS_COLS = [
     'enriched_title', 'enriched_title_pre_image',
-    'verdict', 'confidence', 'red_flag',
+    'verdict', 'confidence', 'red_flag', 'audit_source',
     'est_resale', 'price_low', 'price_high', 'comp_count',
-    'ebay_comps', 'mercari_comps',
+    'ebay_comps', 'mercari_comps', 'pricecharting_comps',
     'price_source', 'ebay_str', 'str_source',
     # Image-enrichment columns (from scraper/vision_enrich.py)
     'img_enriched_title', 'img_confidence', 'img_comp_count',
-    'img_top_match', 'img_top_price', 'img_error',
+    'img_top_match', 'img_top_price', 'img_error', 'img_source',
 ]
 
 CACHE_DIR = Path(".cache") / "auctions"
@@ -48,8 +48,17 @@ class AuctionCache:
         return self.cache_dir / f"{auction_id}.pkl"
 
     def save(self, auction_id, auction_name: str, df: pd.DataFrame,
-             closing_date: str = "") -> None:
-        """Persist the analyzed DataFrame for this auction."""
+             closing_date: str = "",
+             green_pct: Optional[float] = None,
+             green_count: Optional[int] = None,
+             total_count: Optional[int] = None) -> None:
+        """Persist the analyzed DataFrame for this auction.
+
+        green_pct / green_count / total_count are computed by the caller
+        at save-time (when the full working df with est_roi is available)
+        and stored alongside the slim df so the sidebar auction list can
+        show "X% green" without rehydrating est_roi against fresh bids.
+        """
         if df is None or df.empty:
             return
         # Keep only what we'll trust on reload + identity columns
@@ -62,6 +71,9 @@ class AuctionCache:
             "cached_at": datetime.now().isoformat(),
             "closing_date": closing_date,
             "df": slim,
+            "green_pct": green_pct,
+            "green_count": green_count,
+            "total_count": total_count,
         }
         with open(self._path(auction_id), "wb") as f:
             pickle.dump(payload, f)
@@ -157,6 +169,9 @@ class AuctionCache:
                     "closing_date": payload.get("closing_date", ""),
                     "items": len(payload.get("df", pd.DataFrame())),
                     "fresh": self.is_fresh(payload, ttl_days=ttl_days),
+                    "green_pct": payload.get("green_pct"),
+                    "green_count": payload.get("green_count"),
+                    "total_count": payload.get("total_count"),
                 })
             except Exception:
                 continue
@@ -193,14 +208,11 @@ def merge_cached_analysis(fresh_df: pd.DataFrame,
     merged = fresh_df.merge(cached_slim, on='lot_id', how='left')
 
     # Recompute est_roi from fresh est_cost (bids may have climbed).
-    # We compute on raw numpy arrays here — earlier attempts using
-    # `pd.to_numeric(...).round()` still produced "Expected numeric dtype,
-    # got object" failures on certain cached payloads (likely Decimal or
-    # nullable-extension internals that survive coercion but break
-    # Series.round). Going via np.array(..., dtype=float) bottoms out at
-    # plain float64 so np.round always works.
-    # cost==0 (no bids yet) gets a 9999% sentinel so the row sorts to
-    # the top of the results table rather than vanishing as None.
+    # Phase 1 now bakes the next_bid floor into est_cost so cost > 0
+    # whenever the auction has a starting bid — no 9999% sentinel
+    # needed. Element-wise float coercion via _to_float_array because
+    # `pd.to_numeric(...).round()` can break on Decimal / nullable
+    # extension dtypes that survive coercion but choke Series.round.
     if 'est_resale' in merged.columns and 'est_cost' in merged.columns:
         merged['est_roi'] = None
         resale = _to_float_array(merged['est_resale'])
@@ -209,11 +221,6 @@ def merge_cached_analysis(fresh_df: pd.DataFrame,
         if mask.any():
             roi = np.round((resale[mask] - cost[mask]) / cost[mask] * 100, 0)
             merged.loc[mask, 'est_roi'] = roi
-        no_bid = ~np.isnan(resale) & (resale > 0) & (
-            np.isnan(cost) | (cost == 0)
-        )
-        if no_bid.any():
-            merged.loc[no_bid, 'est_roi'] = 9999
 
     return merged
 
