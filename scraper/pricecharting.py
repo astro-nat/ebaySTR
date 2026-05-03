@@ -135,6 +135,41 @@ _PC_ANTI_TRIGGERS = [
     "keychain", "lanyard", "enamel pin", "pin set",
     # Stationery
     "notebook", "journal", " sticker",
+    # ----------------------------------------------------------------
+    # Auction-marketing copy for mystery/repack/bulk TCG lots. These
+    # are dropshipped boxes of random cards (often counterfeit or
+    # commons-only) that get flooded onto HiBid with vague titles
+    # like "1 Box Pokemon Cards English – Collector's Edition Booster
+    # Box Rare Pulls Edition." PriceCharting will obligingly match
+    # the loose "pokemon cards" + "booster box" tokens to its priciest
+    # listing (vintage Base Set sealed booster box ~$11k) and
+    # produce nonsense $10k+ estimates with comp_count=1.
+    #
+    # None of these phrases appear in real branded TCG product names —
+    # they're auction-house adjectives ("Surprise Trading," "Multi-
+    # Generation," "Battle-Ready," etc.) designed to sound exciting.
+    # Suppressing them routes the lot to the eBay/sold-listings path
+    # instead, where matching is keyword-based and these vague titles
+    # naturally return zero or low-value comps.
+    # ----------------------------------------------------------------
+    "mystery box", "mystery pack", "mystery lot",
+    "bulk card", "bulk lot", "bulk box",
+    "rare pulls", "rare pull edition",
+    "repack", "re-pack", "re pack",
+    "random pull", "random pack", "random character",
+    "surprise gift", "surprise pack", "surprise trading", "surprise box",
+    "multi-set", "multi set ", "multi-generation", "multi generation",
+    "assorted rarity", "mixed rarity", "assorted lot",
+    "party favor", "value pack", "rare find",
+    "battle-ready", "battle ready",
+    "loaded box", "gift-ready", "gift ready",
+    "fun family", "fun collectible",
+    "shiny & rare", "holographic &",
+    # Bare "Pokemon Cards English" (no specific set / character) is the
+    # tell for these dropship lots. The legit retail products are named
+    # with a set ("Brilliant Stars Booster Box") or character ("Mewtwo
+    # VSTAR ETB"), never with the language code as the headline noun.
+    "pokemon cards english", "pokémon cards english",
 ]
 
 
@@ -291,6 +326,51 @@ class PriceChartingLookup:
             with self._lock:
                 self._cache[cache_key] = None
             return None
+
+        # ----------------------------------------------------------------
+        # Sanity cap for high-dollar PC matches. PC's full-text search
+        # will happily return a vintage sealed Base Set booster box
+        # (~$11k) for any "Pokemon Cards Booster Box" query. Anti-
+        # triggers handle the obvious mystery/repack copy, but we
+        # still want a defensive backstop: if PC returns a price >$500
+        # the title should be specific enough that an obvious set or
+        # character name appears in it. If neither does, the match is
+        # almost certainly a vague-token false positive — bail.
+        # ----------------------------------------------------------------
+        if category == "tcg" and median > 500:
+            specific_tokens = (
+                # Pokemon set / era names
+                "base set", "jungle", "fossil", "team rocket",
+                "neo genesis", "neo discovery", "neo destiny",
+                "expedition", "aquapolis", "skyridge",
+                "ruby", "sapphire", "emerald", "fire red", "leaf green",
+                "diamond", "pearl", "platinum", "heartgold", "soulsilver",
+                "black & white", "black and white", "plasma", "legendary",
+                "xy", "x & y", "evolutions", "generations", "shining",
+                "sun & moon", "sun and moon", "burning shadows",
+                "guardians rising", "ultra prism", "lost thunder",
+                "cosmic eclipse", "hidden fates",
+                "sword & shield", "sword and shield", "rebel clash",
+                "darkness ablaze", "vivid voltage", "battle styles",
+                "chilling reign", "evolving skies", "fusion strike",
+                "brilliant stars", "astral radiance", "lost origin",
+                "silver tempest", "crown zenith",
+                "scarlet", "violet", "paldea", "obsidian flames",
+                "151", "paradox rift", "temporal forces",
+                # Iconic characters that justify a high price
+                "charizard", "pikachu", "mewtwo", "lugia", "rayquaza",
+                "gengar", "blastoise", "venusaur", "umbreon", "espeon",
+                "eevee", "mew ", "celebi", "groudon", "kyogre",
+                # Other TCG anchors
+                "mtg", "magic the gathering", "alpha", "beta",
+                "yu-gi-oh", "yugioh", "blue-eyes", "dark magician",
+                "one piece", "lorcana",
+            )
+            tl = title.lower()
+            if not any(tok in tl for tok in specific_tokens):
+                with self._lock:
+                    self._cache[cache_key] = None
+                return None
 
         low = box_only or (loose and round(loose * 0.7, 2)) or median
         high = new or cib or median
