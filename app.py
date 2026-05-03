@@ -767,6 +767,60 @@ if (
 _CREDITS_PER_NON_PC_LOT = 50
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def _fetch_scrapingbee_usage(api_key: str) -> dict:
+    """Hit ScrapingBee's /usage endpoint to get current credits.
+
+    Cached 5 minutes so we don't ping it on every Streamlit rerun.
+    Returns {} on any failure (no key, network error, 401, etc.) —
+    callers handle the empty-dict case gracefully.
+    """
+    if not api_key:
+        return {}
+    try:
+        import httpx
+        r = httpx.get(
+            "https://app.scrapingbee.com/api/v1/usage",
+            params={"api_key": api_key}, timeout=8,
+        )
+        if r.status_code == 200:
+            return r.json() or {}
+    except Exception:
+        pass
+    return {}
+
+
+def _estimate_comp_cost_for_audit(audit_df) -> tuple:
+    """Return (eligible_count, est_credits, pc_pct) for the lots the
+    next comp run would actually process.
+
+    Eligibility: not red-flagged AND est_resale is currently null
+    (un-comped). PC-covered lots cost 0 credits; everything else
+    burns ~50 credits (eBay sold + Mercari sold).
+    """
+    from scraper.pricecharting import classify_for_pricecharting
+    if not isinstance(audit_df, pd.DataFrame) or audit_df.empty:
+        return 0, 0, 0.0
+    not_red = ~audit_df.get('red_flag', pd.Series(False, index=audit_df.index)).fillna(False).astype(bool)
+    not_done = (
+        audit_df['est_resale'].isna()
+        if 'est_resale' in audit_df.columns
+        else pd.Series(True, index=audit_df.index)
+    )
+    eligible = audit_df[not_red & not_done]
+    if eligible.empty:
+        return 0, 0, 0.0
+    title_col = 'enriched_title' if 'enriched_title' in eligible.columns else 'title'
+    titles = eligible[title_col].fillna('').astype(str).tolist()
+    pc_hits = sum(
+        1 for t in titles
+        if classify_for_pricecharting(t) in ('tcg', 'video_game', 'comic')
+    )
+    pc_pct = pc_hits / max(len(titles), 1)
+    est_credits = int(len(titles) * (1 - pc_pct) * _CREDITS_PER_NON_PC_LOT)
+    return len(titles), est_credits, pc_pct
+
+
 def _estimate_auction_cost(lot_count: int, sample_payload):
     """Return (pc_coverage_pct, est_credits) for a discovered auction.
 
@@ -1588,6 +1642,10 @@ def _load_auction_for_analysis(auction_name, auction_df):
     st.session_state.pop('_comps_has_more', None)
     st.session_state.pop('_comps_auction_str_map', None)
     st.session_state.pop('_comps_stats', None)
+    # Force the credit-spend confirmation to fire again for this auction.
+    # Each auction gets its own explicit confirmation before the comp
+    # run burns ScrapingBee credits.
+    st.session_state.pop('_comps_credit_confirmed', None)
     # Reset all "in-progress" flags. These get set by their respective
     # buttons and cleared in `finally` blocks inside the analysis view —
     # but if the user refreshed mid-run, the analysis branch never
@@ -3467,14 +3525,154 @@ if current_auction and not st.session_state.selected_leads.empty:
             st.session_state.img_enrich_running = True
             st.rerun()
         elif has_audit and not has_comps_data and 'comps_first' not in auto_attempts:
-            auto_attempts.add('comps_first')
-            st.session_state.comps_running = True
-            st.rerun()
+            # Credit-spend confirmation gate. Don't auto-fire the
+            # first comps run until the user has explicitly confirmed
+            # the credit cost for THIS auction. The flag is per-auction
+            # (cleared by _load_auction_for_analysis on every new
+            # auction load) so each one needs its own confirmation.
+            if st.session_state.get('_comps_credit_confirmed', False):
+                auto_attempts.add('comps_first')
+                st.session_state.comps_running = True
+                st.rerun()
+            # else: fall through; the confirmation gate below renders
         elif has_audit and has_comps_data and has_more_chunks:
             # Auto-continue chunks. _comps_has_more flips False when we
             # genuinely run out, so this self-terminates.
             st.session_state.comps_running = True
             st.rerun()
+
+    # ================================================================
+    # CREDIT-SPEND CONFIRMATION GATE
+    # The auto-pipeline used to fire comps automatically after the
+    # audit completed — burning 5–25k ScrapingBee credits without any
+    # explicit user action. The user asked for a "Are you sure? This
+    # spends X credits out of Y available" interstitial before any
+    # such spend.
+    #
+    # Render conditions: audit is done, comps haven't run yet, and the
+    # per-auction confirmation flag isn't set. The user clicks
+    # "Confirm and run comps" -> _comps_credit_confirmed flips True ->
+    # the auto-pipeline above re-fires comps on the next rerun.
+    # ================================================================
+    needs_credit_confirmation = (
+        has_audit
+        and not has_comps_data
+        and not audit_running
+        and not comps_running
+        and not img_enrich_running
+        and not st.session_state.get('_comps_credit_confirmed', False)
+    )
+    if needs_credit_confirmation:
+        ar_for_estimate = st.session_state.get('audit_results')
+        eligible_count, est_credits, pc_pct = _estimate_comp_cost_for_audit(
+            ar_for_estimate
+        )
+
+        # Live ScrapingBee usage. Cached 5 min so we don't ping it
+        # every rerun. Empty dict on any failure (no key, network).
+        from scraper.config_loader import load_config as _cfg_load
+        try:
+            _cfg = _cfg_load()
+            _sb_key = (_cfg.get("scrapingbee") or {}).get("api_key") or ""
+        except Exception:
+            _sb_key = ""
+        usage = _fetch_scrapingbee_usage(_sb_key) if _sb_key else {}
+        used = int(usage.get('used_api_credit') or 0)
+        cap = int(usage.get('max_api_credit') or 0)
+        remaining = max(cap - used, 0) if cap else None
+
+        # Card layout — three metrics + the confirm button.
+        st.markdown("---")
+        st.markdown("### 💸 Confirm credit spend")
+        m1, m2, m3 = st.columns(3)
+        with m1:
+            st.metric(
+                "Eligible lots",
+                f"{eligible_count:,}",
+                help="Non-red-flagged lots that need pricing.",
+            )
+        with m2:
+            cost_str = (
+                "free (all PC)" if est_credits == 0
+                else f"~{est_credits:,}"
+            )
+            delta = (
+                f"{int(round(pc_pct * 100))}% PC-covered"
+                if pc_pct > 0 else None
+            )
+            st.metric(
+                "Estimated cost",
+                cost_str, delta=delta, delta_color="off",
+            )
+        with m3:
+            if cap:
+                st.metric(
+                    "ScrapingBee budget",
+                    f"{remaining:,} left",
+                    delta=f"of {cap:,} this month",
+                    delta_color="off",
+                )
+            else:
+                st.metric("ScrapingBee budget", "no key set")
+
+        # Affordability check — if the estimate exceeds what's left,
+        # warn the user explicitly instead of letting them click
+        # through into a quota-exhausted run.
+        affordable = (
+            cap == 0 or est_credits == 0
+            or (remaining is not None and est_credits <= remaining)
+        )
+        if not affordable:
+            st.error(
+                f"⚠️ Estimated cost (**~{est_credits:,}**) exceeds "
+                f"remaining budget (**{remaining:,}**). The run will "
+                "stall partway through when ScrapingBee returns 401. "
+                "Skip this auction or upgrade your plan."
+            )
+        elif est_credits > 0 and cap and remaining is not None:
+            pct_of_budget = est_credits / cap * 100
+            if pct_of_budget > 10:
+                st.warning(
+                    f"This run will spend **{pct_of_budget:.0f}%** of "
+                    f"your monthly budget. Consider whether the auction "
+                    "is worth that share."
+                )
+
+        st.caption(
+            "Cost = ~50 credits per non-PC-covered lot (eBay sold + "
+            "Mercari sold). PriceCharting and GoCollect lookups are "
+            "free; only the ScrapingBee-routed scrapes consume credits."
+        )
+
+        cb1, cb2 = st.columns([1, 1])
+        with cb1:
+            if st.button(
+                f"✅ Confirm and run comps (~{est_credits:,} credits)",
+                type="primary", use_container_width=True,
+                disabled=not affordable or eligible_count == 0,
+                key="confirm_comp_credits",
+            ):
+                st.session_state._comps_credit_confirmed = True
+                st.rerun()
+        with cb2:
+            if st.button(
+                "🚫 Skip — view audit results only",
+                use_container_width=True,
+                key="skip_comp_credits",
+                help="Bail on the comp run for this auction. The audit "
+                     "results render below; you can still hit the "
+                     "🔄 Re-run comps button later if you change your "
+                     "mind.",
+            ):
+                # Mark "skipped" by adding to auto_attempts so the
+                # auto-pipeline doesn't re-trigger, but DON'T set the
+                # confirmed flag — manual re-run still requires
+                # confirmation.
+                auto_attempts.add('comps_first')
+                st.rerun()
+
+        st.markdown("---")
+        st.stop()  # Don't render results panel until confirmed
 
     # ================================================================
     # PIPELINE-ACTIVE GATE
@@ -4098,6 +4296,10 @@ if current_auction and not st.session_state.selected_leads.empty:
                 st.session_state.pop('_auto_pipeline_attempts', None)
                 st.session_state.pop('_comps_has_more', None)
                 st.session_state.pop('_comps_auction_str_map', None)
+                # Manual re-run = explicit confirmation. Set the credit
+                # gate's flag to True directly instead of forcing the
+                # user to confirm a second time.
+                st.session_state._comps_credit_confirmed = True
                 st.session_state.comps_running = True
                 st.rerun()
 
