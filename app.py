@@ -533,6 +533,62 @@ def _extract_auction_id(auction_df: pd.DataFrame):
         return None
 
 
+def _load_auction_for_analysis(auction_name, auction_df):
+    """Replace the current analysis target with the given auction's items.
+
+    If a fresh cached analysis exists for this auction, overlay its audit
+    verdicts and price comps onto the fresh Phase 1 data so the user sees
+    results immediately (with current bids, recomputed ROI).
+
+    Hoisted up here so the Memory popover (rendered near the top of the
+    script) can call it when the user clicks a cached-auction button —
+    Streamlit executes top-to-bottom, so the function has to exist before
+    the click handler runs.
+    """
+    st.session_state.selected_leads = auction_df.copy()
+    st.session_state.current_auction = auction_name
+    st.session_state.audit_results = {}
+    # Fresh auction → reset chunked-comps state so the first comps click
+    # starts a new run instead of trying to continue from the previous one.
+    st.session_state.pop('_comps_has_more', None)
+    st.session_state.pop('_comps_auction_str_map', None)
+    st.session_state.pop('_comps_stats', None)
+    # Force the credit-spend confirmation to fire again for this auction.
+    # Each auction gets its own explicit confirmation before the comp
+    # run burns ScrapingBee credits.
+    st.session_state.pop('_comps_credit_confirmed', None)
+    # Reset all "in-progress" flags. These get set by their respective
+    # buttons and cleared in `finally` blocks inside the analysis view —
+    # but if the user refreshed mid-run, the analysis branch never
+    # executed the finally, so the flags stay True and disable the
+    # buttons on the new auction. Belt-and-suspenders reset here.
+    st.session_state.audit_running = False
+    st.session_state.comps_running = False
+    st.session_state.img_enrich_running = False
+    # Reset the auto-pipeline tracker so a new auction starts fresh
+    # (audit auto-fires, then first comp chunk auto-fires). Failed
+    # attempts on the previous auction don't poison this one.
+    st.session_state.pop('_auto_pipeline_attempts', None)
+
+    # Consult disk cache, keyed by auction_id (pulled from auction_link or a
+    # dedicated column if present)
+    auction_id = _extract_auction_id(auction_df)
+    if auction_id is None:
+        return
+
+    payload = _AUCTION_CACHE.load(auction_id)
+    if not payload:
+        return
+    if not _AUCTION_CACHE.is_fresh(payload, ttl_days=st.session_state.cache_ttl_days):
+        return
+
+    merged = merge_cached_analysis(auction_df, payload)
+    # Only treat as full audit_results if it actually has verdicts
+    if 'verdict' in merged.columns and merged['verdict'].notna().any():
+        st.session_state.selected_leads = merged
+        st.session_state.audit_results = merged
+
+
 # --- MAIN DASHBOARD UI ---
 # Compact top bar: title on the left, settings popovers + Refresh button
 # on the right. Replaces the old left sidebar — settings are tucked behind
@@ -664,30 +720,37 @@ with header_actions_col:
                             )
                         except Exception:
                             age_str = "?"
-                        # One button per cached auction. Loads the
-                        # cached lot DataFrame straight from disk and
-                        # routes through _load_auction_for_analysis,
-                        # which preserves the audit + comp columns
-                        # (no fetch, no comp, no credits).
+                        # One button per cached auction. The cache only
+                        # stores the slim analysis columns (title /
+                        # current_bid / thumbnail are deliberately
+                        # excluded so they always come from a fresh
+                        # Phase 1 fetch), so we route through the same
+                        # single-auction fetch_lots path the header
+                        # Refresh button uses: queue the fetch, let it
+                        # populate phase1_leads, and the auto-load step
+                        # at the top of the dispatch picks it up and
+                        # merges the cached audit + comp columns onto
+                        # the fresh lots via _load_auction_for_analysis.
+                        # Costs zero ScrapingBee credits — Phase 1 is
+                        # free HiBid GraphQL.
                         if st.button(
                             f"{badge} **{auction_name}** — "
                             f"{items} items · {age_str}",
                             key=f"open_cached_{aid}",
                             use_container_width=True,
                         ):
-                            payload = _AUCTION_CACHE.load(aid)
-                            if (payload
-                                and isinstance(payload.get('df'), pd.DataFrame)
-                                and not payload['df'].empty):
-                                _load_auction_for_analysis(
-                                    auction_name, payload['df'],
-                                )
+                            if aid is not None:
+                                st.session_state._selected_auction_ids = [aid]
+                                st.session_state.current_auction = None
+                                st.session_state.selected_leads = pd.DataFrame()
+                                st.session_state.phase1_leads = pd.DataFrame()
+                                st.session_state.fetch_lots_running = True
                                 st.rerun()
                             else:
                                 st.error(
-                                    "This cache entry couldn't be loaded "
-                                    "(payload is empty or missing the lot "
-                                    "DataFrame). Try re-running the audit."
+                                    "This cache entry has no auction_id, "
+                                    "so we can't refetch its lots. Try "
+                                    "re-running the audit."
                                 )
                     if len(cached_list) > 25:
                         st.caption(
@@ -1006,6 +1069,13 @@ def _render_sidebar_auction_list():
                  "contains 'liquidation'/'overstock'/'pallet'/etc., lot "
                  "count > 1500, or closing in <2 hours.",
         )
+        sb_hide_local_pickup = st.checkbox(
+            "Hide 📦 local pickup",
+            key="sidebar_hide_local_pickup",
+            help="Filter out auctions whose source is Local Pickup — "
+                 "these require physically driving to the auction "
+                 "house to retrieve items. Uncheck to include them.",
+        )
 
         # Build display rows. Reuse the same parsing/closing-time logic
         # the in-page picker uses, kept lightweight.
@@ -1080,11 +1150,14 @@ def _render_sidebar_auction_list():
         sb_fetch_lots_running = st.session_state.get('fetch_lots_running', False)
 
         # Build a {auction_id: cached_at_datetime} map for the "last
-        # analyzed" labels. Single list_all() call, then we look up by
-        # id in the loop. Pass a generous TTL so stale entries still
-        # surface a timestamp — the user wants to see "12 days ago" on
-        # a stale auction, not nothing.
+        # analyzed" labels + a {auction_id: (green_pct, green_count,
+        # total_count)} map so cached auctions can show their hit rate.
+        # Single list_all() call, then we look up by id in the loop.
+        # Pass a generous TTL so stale entries still surface a timestamp
+        # — the user wants to see "12 days ago" on a stale auction, not
+        # nothing.
         last_run_map = {}
+        green_map = {}
         try:
             for entry in _AUCTION_CACHE.list_all(ttl_days=365):
                 ts_raw = entry.get('cached_at') or ''
@@ -1094,6 +1167,13 @@ def _render_sidebar_auction_list():
                     )
                 except (ValueError, TypeError):
                     pass
+                gp = entry.get('green_pct')
+                if gp is not None:
+                    green_map[entry.get('auction_id')] = (
+                        gp,
+                        entry.get('green_count'),
+                        entry.get('total_count'),
+                    )
         except Exception:
             pass  # Cache read failure shouldn't break the picker
 
@@ -1123,6 +1203,14 @@ def _render_sidebar_auction_list():
         # Apply the "hide avoid" filter after computing signals.
         if sb_hide_avoid:
             rows = [r for r in rows if r['signal_rank'] != 'avoid']
+        # Hide local-pickup-only auctions when the toggle is on. Compare
+        # against the source string ('Local Pickup' / 'Ship') populated
+        # in pass1.py.
+        if sb_hide_local_pickup:
+            rows = [
+                r for r in rows
+                if (r.get('source') or '').strip().lower() != 'local pickup'
+            ]
 
         # Sort. "Best fit first" uses the signal as the primary key
         # (good > caution > avoid), then est_credits ascending, then
@@ -1183,11 +1271,33 @@ def _render_sidebar_auction_list():
                 f" · {int(round(row['pc_pct'] * 100))}% PC"
                 if row.get('pc_pct') and row['pc_pct'] > 0 else ""
             )
-            # 🕒 Last analyzed line: only when we have a cache entry.
-            footer = f"\n\n🕒 _Last analyzed: {last_run_str}_" if last_run_str else ""
+            # 🕒 Last analyzed line + 🟢 green-hit rate (from when the
+            # cache was saved — uses the user's then-current ROI/STR
+            # targets). Only shown when we actually have a cache entry.
+            footer = ""
+            if last_run_str:
+                green_bits = ""
+                green_entry = green_map.get(aid)
+                if green_entry is not None:
+                    gp, gc, tc = green_entry
+                    if gp is not None and tc:
+                        green_bits = f" · 🟢 **{gp:g}%** ({gc}/{tc})"
+                    elif gp is not None:
+                        green_bits = f" · 🟢 **{gp:g}%**"
+                footer = f"\n\n🕒 _Last analyzed: {last_run_str}_{green_bits}"
+            # Shipping-source badge: 📦 for local pickup (driving
+            # required), 🚚 for ship. Visible even when the filter is
+            # off so the user can spot pickup-only auctions at a glance.
+            _src = (row.get('source') or '').strip().lower()
+            if _src == 'local pickup':
+                source_badge = " · 📦 pickup"
+            elif _src == 'ship':
+                source_badge = " · 🚚 ships"
+            else:
+                source_badge = ""
             label = (
                 f"{icon}**{row['name']}**\n\n"
-                f"{row['items']:,} lots · {row['closes_fmt']}\n\n"
+                f"{row['items']:,} lots · {row['closes_fmt']}{source_badge}\n\n"
                 f"💸 {credits_label}{pc_label}"
                 f"{footer}"
             )
@@ -1627,60 +1737,60 @@ DISCOVERY_COL_ORDER = ["title", "current_bid", "est_cost", "bid_count",
                        "time_left", "lot_link", "category", "logistics_ease"]
 
 
-def _load_auction_for_analysis(auction_name, auction_df):
-    """Replace the current analysis target with the given auction's items.
+# `_extract_auction_id` and `_load_auction_for_analysis` were both
+# hoisted near the top of the file so the Memory popover (cached-auction
+# buttons) and the header refresh button can call them. Their original
+# definition sites were here.
 
-    If a fresh cached analysis exists for this auction, overlay its audit
-    verdicts and price comps onto the fresh Phase 1 data so the user sees
-    results immediately (with current bids, recomputed ROI).
+
+def _compute_green_stats(ar: pd.DataFrame):
+    """Compute (green_pct, green_count, total_count) from an analyzed df.
+
+    Mirrors the meets_both logic in _render_results_table: a row is green
+    when est_roi ≥ (target_roi-1)*100 AND ebay_str ≥ target_str. When STR
+    data is missing for the entire auction, falls back to ROI-only.
+
+    Uses the user's current target settings from session_state (or the
+    widget defaults of 3.0× ROI / 70% STR) so the sidebar count matches
+    what they'd see on opening the analysis.
+
+    Total = comp-able lots only (not red-flagged, not HARD logistics, has
+    est_resale). That's the universe the green % is meaningful against —
+    rows we can't comp shouldn't deflate the percentage.
     """
-    st.session_state.selected_leads = auction_df.copy()
-    st.session_state.current_auction = auction_name
-    st.session_state.audit_results = {}
-    # Fresh auction → reset chunked-comps state so the first comps click
-    # starts a new run instead of trying to continue from the previous one.
-    st.session_state.pop('_comps_has_more', None)
-    st.session_state.pop('_comps_auction_str_map', None)
-    st.session_state.pop('_comps_stats', None)
-    # Force the credit-spend confirmation to fire again for this auction.
-    # Each auction gets its own explicit confirmation before the comp
-    # run burns ScrapingBee credits.
-    st.session_state.pop('_comps_credit_confirmed', None)
-    # Reset all "in-progress" flags. These get set by their respective
-    # buttons and cleared in `finally` blocks inside the analysis view —
-    # but if the user refreshed mid-run, the analysis branch never
-    # executed the finally, so the flags stay True and disable the
-    # buttons on the new auction. Belt-and-suspenders reset here.
-    st.session_state.audit_running = False
-    st.session_state.comps_running = False
-    st.session_state.img_enrich_running = False
-    # Reset the auto-pipeline tracker so a new auction starts fresh
-    # (audit auto-fires, then first comp chunk auto-fires). Failed
-    # attempts on the previous auction don't poison this one.
-    st.session_state.pop('_auto_pipeline_attempts', None)
+    if ar is None or not isinstance(ar, pd.DataFrame) or ar.empty:
+        return None, None, None
+    if 'est_roi' not in ar.columns:
+        return None, None, None
 
-    # Consult disk cache, keyed by auction_id (pulled from auction_link or a
-    # dedicated column if present)
-    auction_id = _extract_auction_id(auction_df)
-    if auction_id is None:
-        return
+    target_roi = float(st.session_state.get('target_roi_live', 3.0) or 3.0)
+    target_str = float(st.session_state.get('target_str_live', 70.0) or 70.0)
+    roi_threshold = (target_roi - 1) * 100
 
-    payload = _AUCTION_CACHE.load(auction_id)
-    if not payload:
-        return
-    if not _AUCTION_CACHE.is_fresh(payload, ttl_days=st.session_state.cache_ttl_days):
-        return
+    # Comp-able universe: shippable, not red-flagged, has a price.
+    eligible = (
+        ~ar.get('red_flag', pd.Series(False, index=ar.index)).fillna(False).astype(bool)
+        & (ar.get('logistics_ease', pd.Series('', index=ar.index)) != 'HARD')
+        & ar.get('est_resale', pd.Series(pd.NA, index=ar.index)).notna()
+    )
+    total = int(eligible.sum())
+    if total == 0:
+        return 0.0, 0, 0
 
-    merged = merge_cached_analysis(auction_df, payload)
-    # Only treat as full audit_results if it actually has verdicts
-    if 'verdict' in merged.columns and merged['verdict'].notna().any():
-        st.session_state.selected_leads = merged
-        st.session_state.audit_results = merged
+    roi_num = pd.to_numeric(ar['est_roi'], errors='coerce')
+    meets_roi = roi_num.notna() & (roi_num >= roi_threshold)
 
+    if 'ebay_str' in ar.columns and ar['ebay_str'].notna().any():
+        str_num = pd.to_numeric(ar['ebay_str'], errors='coerce')
+        meets_str = str_num.notna() & (str_num >= target_str)
+        meets_both = meets_roi & meets_str
+    else:
+        # No STR data anywhere → ROI-only, matching the live-table fallback
+        meets_both = meets_roi
 
-# `_extract_auction_id` was hoisted near the top of the file so the
-# header refresh button could call it. Kept the original definition site
-# blank to preserve line numbers; the function is the same.
+    green = int((meets_both & eligible).sum())
+    pct = round((green / total) * 100, 1) if total else 0.0
+    return pct, green, total
 
 
 def _save_current_auction_to_cache():
@@ -1695,8 +1805,14 @@ def _save_current_auction_to_cache():
     closing_date = ""
     if 'closing_date' in ar.columns and not ar.empty:
         closing_date = str(ar['closing_date'].iloc[0])
+    green_pct, green_count, total_count = _compute_green_stats(ar)
     try:
-        _AUCTION_CACHE.save(auction_id, auction_name, ar, closing_date)
+        _AUCTION_CACHE.save(
+            auction_id, auction_name, ar, closing_date,
+            green_pct=green_pct,
+            green_count=green_count,
+            total_count=total_count,
+        )
     except Exception as e:
         # Don't crash the app over a cache write failure
         st.warning(f"Could not save analysis to cache: {e}")
@@ -3354,8 +3470,14 @@ current_auction = st.session_state.get('current_auction')
 if current_auction and not st.session_state.selected_leads.empty:
     leads_df = st.session_state.selected_leads
 
-    # Back button + header
-    bc1, bc2 = st.columns([1, 4])
+    # Back button + Refresh-bids button + header.
+    # The Refresh-bids button re-runs Phase 1 for just this auction so the
+    # user gets fresh current_bid / bid_count / time_left without burning
+    # any ScrapingBee credits — _load_auction_for_analysis overlays the
+    # cached audit + comps onto the freshly fetched lots, and the
+    # auto-pipeline + credit gate both no-op because has_audit and
+    # has_comps_data are still True after the merge.
+    bc1, bc2, bc3 = st.columns([1, 1, 3])
     with bc1:
         if st.button("← Back to auctions", use_container_width=True):
             st.session_state.selected_leads = pd.DataFrame()
@@ -3367,6 +3489,32 @@ if current_auction and not st.session_state.selected_leads.empty:
             st.session_state.phase1_leads = pd.DataFrame()
             st.rerun()
     with bc2:
+        _refresh_bids_running = (
+            st.session_state.get('fetch_lots_running', False)
+            or st.session_state.get('discover_running', False)
+        )
+        _refresh_label = (
+            "⏳ Refreshing…" if _refresh_bids_running else "🔁 Refresh bids"
+        )
+        if st.button(
+            _refresh_label,
+            use_container_width=True,
+            disabled=_refresh_bids_running,
+            key="header_refresh_bids_btn",
+            help=(
+                "Re-fetch just this auction's current bids / time-left "
+                "without re-running audit or comps. Spends 0 ScrapingBee "
+                "credits — cached analysis is preserved."
+            ),
+        ):
+            aid = _extract_auction_id(leads_df)
+            if aid is not None:
+                st.session_state._selected_auction_ids = [aid]
+                st.session_state.current_auction = None
+                st.session_state.selected_leads = pd.DataFrame()
+                st.session_state.fetch_lots_running = True
+                st.rerun()
+    with bc3:
         # Make the auction name itself a clickable link to the HiBid
         # auction page. Replaces the per-row 'Auction' column we used
         # to render in the results table — the auction is the same
