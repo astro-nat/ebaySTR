@@ -559,7 +559,7 @@ with header_title_col:
     st.markdown("## 🛰️ Auction Intelligence Dashboard")
 
 with header_actions_col:
-    pop_sourcing, pop_memory, btn_refresh = st.columns([1, 1, 1])
+    pop_sourcing, pop_memory = st.columns(2)
 
     with pop_sourcing:
         with st.popover("📍 Sourcing", use_container_width=True):
@@ -615,61 +615,9 @@ with header_actions_col:
                 st.success(f"Cleared {removed} cached auction(s).")
                 st.rerun()
 
-    with btn_refresh:
-        if discover_running:
-            refresh_label = "⏳ Discovering…"
-        elif fetch_lots_running:
-            refresh_label = "⏳ Refreshing…"
-        elif _in_analysis_view:
-            # Drilled into an auction → button re-fetches just this one.
-            refresh_label = "🔄 Refresh auction"
-        elif _restored_at:
-            refresh_label = "🔄 Refresh"
-        else:
-            refresh_label = "🔍 Discover"
-
-        refresh_help = (
-            "Re-fetch lots for the auction you're currently viewing. "
-            "Pulls fresh bids; cached audit + comp results are preserved."
-            if _in_analysis_view
-            else "Re-fetch the open-auction list with the current Sourcing "
-                 "settings. Successful runs are cached for 24h and "
-                 "auto-restored on reload."
-        )
-
-        if st.button(
-            refresh_label,
-            type="primary",
-            use_container_width=True,
-            disabled=any_running,
-            key="discover_btn",
-            help=refresh_help,
-        ):
-            if _in_analysis_view:
-                # Single-auction refresh path. Pull the auction_id off
-                # the loaded analysis, queue a fetch_lots run for just
-                # that ID, and clear the analysis-view state so the
-                # auto-load step at the top of the dispatch picks the
-                # freshly fetched data back up (with cached audit + comps
-                # merged on top via _load_auction_for_analysis).
-                aid = _extract_auction_id(st.session_state.selected_leads)
-                if aid is not None:
-                    st.session_state._selected_auction_ids = [aid]
-                    st.session_state.current_auction = None
-                    st.session_state.selected_leads = pd.DataFrame()
-                    st.session_state.fetch_lots_running = True
-                    st.rerun()
-                # If we somehow can't extract the auction_id, fall
-                # through to a full discovery as a safe default.
-            st.session_state._sourcing_cfg = {
-                "zip": user_zip,
-                "radius": radius,
-                "include_nationwide": include_nationwide,
-                "closing_days": closing_days,
-                "category_filter": category_filter,
-            }
-            st.session_state.discover_running = True
-            st.rerun()
+    # The Refresh / Discover button moved to the top of the sidebar
+    # auction list (see _render_sidebar_refresh_button below) so it's
+    # adjacent to the list it refreshes.
 
 # Auto-discover on first page load when there's no cached discovery to
 # show — saves the user a click. The flag prevents re-triggering across
@@ -698,16 +646,84 @@ if (
 # auction fetch (reuses the same path as the in-page picker's
 # "Analyze" button). Selected auction gets a visual highlight.
 # ================================================================
+def _render_sidebar_refresh_button():
+    """Render the primary Refresh / Discover button at the top of the sidebar.
+
+    Behavior is context-aware:
+      - In an analysis view → 🔄 Refresh auction (re-fetches just the
+        currently loaded auction's lots, preserves cached audit/comps).
+      - With cached discovery present → 🔄 Refresh (re-runs full discovery).
+      - Empty state → 🔍 Discover (kicks off the first discovery).
+    """
+    if discover_running:
+        refresh_label = "⏳ Discovering…"
+    elif fetch_lots_running:
+        refresh_label = "⏳ Refreshing…"
+    elif _in_analysis_view:
+        refresh_label = "🔄 Refresh auction"
+    elif _restored_at:
+        refresh_label = "🔄 Refresh"
+    else:
+        refresh_label = "🔍 Discover"
+
+    refresh_help = (
+        "Re-fetch lots for the auction you're currently viewing. "
+        "Pulls fresh bids; cached audit + comp results are preserved."
+        if _in_analysis_view
+        else "Re-fetch the open-auction list with the current Sourcing "
+             "settings. Successful runs are cached for 24h and "
+             "auto-restored on reload."
+    )
+
+    if st.button(
+        refresh_label,
+        type="primary",
+        use_container_width=True,
+        disabled=any_running,
+        key="discover_btn",
+        help=refresh_help,
+    ):
+        if _in_analysis_view:
+            # Single-auction refresh path. Pull the auction_id off the
+            # loaded analysis, queue a fetch_lots run for just that ID,
+            # and clear the analysis-view state so the auto-load step at
+            # the top of the dispatch picks the freshly fetched data back
+            # up (with cached audit + comps merged on top via
+            # _load_auction_for_analysis).
+            aid = _extract_auction_id(st.session_state.selected_leads)
+            if aid is not None:
+                st.session_state._selected_auction_ids = [aid]
+                st.session_state.current_auction = None
+                st.session_state.selected_leads = pd.DataFrame()
+                st.session_state.fetch_lots_running = True
+                st.rerun()
+            # If we somehow can't extract the auction_id, fall through
+            # to a full discovery as a safe default.
+        st.session_state._sourcing_cfg = {
+            "zip": user_zip,
+            "radius": radius,
+            "include_nationwide": include_nationwide,
+            "closing_days": closing_days,
+            "category_filter": category_filter,
+        }
+        st.session_state.discover_running = True
+        st.rerun()
+
+
 def _render_sidebar_auction_list():
     candidates = st.session_state.get('auction_candidates') or []
     cat_samples = st.session_state.get('category_samples', {}) or {}
 
     with st.sidebar:
+        # Refresh button lives at the very top of the sidebar so it's
+        # always reachable without scrolling, regardless of how long
+        # the auction list grows.
+        _render_sidebar_refresh_button()
         st.markdown("### 📋 Auctions")
         if not candidates:
             st.caption(
-                "Nothing discovered yet. Click **🔍 Discover** in the "
-                "header to fetch the open-auction list."
+                "Nothing discovered yet. Click **🔍 Discover** above "
+                "to fetch the open-auction list."
             )
             return
 
