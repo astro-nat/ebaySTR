@@ -3479,14 +3479,28 @@ if current_auction and not st.session_state.selected_leads.empty:
                 use_container_width=True,
                 disabled=audit_running or comps_running or img_enrich_running,
                 key="run_comps_btn",
-                help="Manual override — comps normally auto-fire after the "
-                     "audit completes, and chunks auto-continue until done. "
-                     "Click this to re-run from scratch on the current "
-                     "filters.",
+                help="Wipe every existing comp value on this auction and "
+                     "re-comp from scratch with the current filters. Use "
+                     "after upgrading the classifier or fixing a bad rule "
+                     "— stale est_resale rows would otherwise be skipped "
+                     "by the 'pending lots' gate.",
             ):
-                # Manual click — clear the auto-pipeline tracker so the
-                # forced re-run isn't blocked by the "already attempted"
-                # guard, and reset the chunked state so we start fresh.
+                # Clear all comp data so the chunked runner sees every
+                # non-red-flagged row as 'pending' again. Without this
+                # the est_resale.isna() & ~red_flag gate inside
+                # _run_ebay_comps_chunk would skip every row that already
+                # has a stale value.
+                ar_current = st.session_state.audit_results
+                if isinstance(ar_current, pd.DataFrame):
+                    for col in (*_COMP_COLUMNS, 'est_roi', 'max_bid'):
+                        if col in ar_current.columns:
+                            ar_current[col] = None
+                    st.session_state.audit_results = ar_current
+                    _save_current_auction_to_cache()
+                # Reset the chunk-pipeline tracker so the forced re-run
+                # isn't blocked by the 'already attempted' guard, and the
+                # cached STR map is dropped so we re-sample for the new
+                # comp pass.
                 st.session_state.pop('_auto_pipeline_attempts', None)
                 st.session_state.pop('_comps_has_more', None)
                 st.session_state.pop('_comps_auction_str_map', None)
