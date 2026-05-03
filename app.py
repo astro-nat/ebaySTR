@@ -873,12 +873,49 @@ def _render_sidebar_auction_list():
 
         sb_fetch_lots_running = st.session_state.get('fetch_lots_running', False)
 
+        # Build a {auction_id: cached_at_datetime} map for the "last
+        # analyzed" labels. Single list_all() call, then we look up by
+        # id in the loop. Pass a generous TTL so stale entries still
+        # surface a timestamp — the user wants to see "12 days ago" on
+        # a stale auction, not nothing.
+        last_run_map = {}
+        try:
+            for entry in _AUCTION_CACHE.list_all(ttl_days=365):
+                ts_raw = entry.get('cached_at') or ''
+                try:
+                    last_run_map[entry.get('auction_id')] = (
+                        datetime.fromisoformat(ts_raw) if ts_raw else None
+                    )
+                except (ValueError, TypeError):
+                    pass
+        except Exception:
+            pass  # Cache read failure shouldn't break the picker
+
+        def _format_last_run(when):
+            """Compact relative timestamp for the per-row label."""
+            if when is None:
+                return ""
+            delta = datetime.now() - when
+            if delta.total_seconds() < 60:
+                return "just now"
+            if delta.total_seconds() < 3600:
+                return f"{int(delta.total_seconds() / 60)}m ago"
+            if delta.total_seconds() < 86400:
+                return f"{int(delta.total_seconds() / 3600)}h ago"
+            return f"{delta.days}d ago"
+
         for row in rows:
             aid = row['auction_id']
             is_active = (aid == active_aid)
+            last_run_str = _format_last_run(last_run_map.get(aid))
+            # Third line of the label: "🕒 Last analyzed: <when>" only
+            # when we actually have a cache entry. Blank otherwise so
+            # never-run auctions stay quiet.
+            footer = f"\n\n🕒 _Last analyzed: {last_run_str}_" if last_run_str else ""
             label = (
                 f"{'🟢 ' if is_active else ''}**{row['name']}**\n\n"
                 f"{row['items']:,} lots · {row['closes_fmt']}"
+                f"{footer}"
             )
             # Each row uses its own button — clicking dispatches to the
             # single-auction fetch path. We disable while a fetch is
