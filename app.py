@@ -2463,7 +2463,21 @@ def _render_results_table(results_df):
     display_cols = []
     if 'thumbnail_url' in filtered_df.columns:
         display_cols.append('thumbnail_url')
-    display_cols += [title_col, 'lot_link', 'auction_link', 'category', 'current_bid']
+    display_cols.append(title_col)
+    # When we're displaying enriched titles AND any row's enriched value
+    # actually differs from the HiBid original, expose the original title
+    # too so the user can see what was changed.
+    show_original = (
+        title_col == 'enriched_title'
+        and 'title' in filtered_df.columns
+        and (
+            filtered_df['title'].fillna('').astype(str)
+            != filtered_df['enriched_title'].fillna('').astype(str)
+        ).any()
+    )
+    if show_original:
+        display_cols.append('title')
+    display_cols += ['lot_link', 'auction_link', 'category', 'current_bid']
     if 'next_bid' in filtered_df.columns:
         display_cols.append('next_bid')
     display_cols.append('est_cost')
@@ -2474,6 +2488,15 @@ def _render_results_table(results_df):
             width="small",
         ),
         "enriched_title": st.column_config.TextColumn("Title (Enriched)"),
+        "title": st.column_config.TextColumn(
+            "Original Title",
+            width="medium",
+            help="The HiBid lot title before enrichment. Step 1 (audit) "
+                 "and Step 1.5 (image match) can rewrite the title with "
+                 "brand / model / year details pulled from the "
+                 "description or matching eBay listings — this column "
+                 "preserves what the lot actually said on HiBid.",
+        ),
         "lot_link": st.column_config.LinkColumn("Item", display_text="Open"),
         "auction_link": st.column_config.LinkColumn("Auction", display_text="Open"),
         "current_bid": st.column_config.NumberColumn("Current Bid", format="$%.2f"),
