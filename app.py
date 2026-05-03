@@ -3328,6 +3328,30 @@ if current_auction and not st.session_state.selected_leads.empty:
             ebay_block_rate = (ebay_blocked / ebay_total) if ebay_total else 0.0
             merc_block_rate = (merc_blocked / merc_total) if merc_total else 0.0
 
+            # ScrapingBee-specific errors get top billing — a quota or
+            # auth failure means the proxy isn't even reaching eBay,
+            # so the lower-level "scraper blocked" message would be
+            # misleading.
+            sb_quota = stats.get('scrapingbee_quota_fail', 0)
+            sb_auth = stats.get('scrapingbee_auth_fail', 0)
+            if sb_quota > 0:
+                st.error(
+                    f"💸 **ScrapingBee plan is exhausted** — "
+                    f"{sb_quota} request(s) returned 'Monthly API "
+                    "calls limit reached'. eBay/Mercari sold scraping "
+                    "is dead until your plan resets or you upgrade. "
+                    "Visit https://app.scrapingbee.com/account/usage "
+                    "to check your quota or upgrade to the Freelance "
+                    "tier ($49/mo for 100k credits)."
+                )
+            elif sb_auth > 0:
+                st.error(
+                    f"🔑 **ScrapingBee auth failed** on {sb_auth} "
+                    "request(s) — your `scrapingbee.api_key` in "
+                    "config.json is likely wrong. Re-copy the key "
+                    "from https://app.scrapingbee.com/account."
+                )
+
             # Positive signal: ScrapingBee was used and the eBay sold
             # path is actually getting through. Show a small caption
             # so the user can track credit burn against their plan.

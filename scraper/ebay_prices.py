@@ -30,6 +30,11 @@ class EbayPriceLookup:
         # knows how many credits a comp run burned.
         'scrapingbee_calls': 0,
         'scrapingbee_credits': 0,
+        # Quota / auth failures — counted separately so the UI can
+        # show a specific "your ScrapingBee plan is exhausted"
+        # message instead of the generic "scraper blocked" warning.
+        'scrapingbee_auth_fail': 0,
+        'scrapingbee_quota_fail': 0,
     }
 
     @classmethod
@@ -217,6 +222,16 @@ class EbayPriceLookup:
                 cost = int(resp.headers.get('Spb-cost', 0) or 0)
                 type(self)._scrape_stats['scrapingbee_calls'] += 1
                 type(self)._scrape_stats['scrapingbee_credits'] += cost
+                # Detect ScrapingBee-side failures separately from
+                # downstream eBay/Mercari blocks so the UI can show a
+                # targeted error: 401 = bad key OR plan exhausted; 402
+                # is sometimes used for billing failures.
+                if resp.status_code in (401, 402):
+                    body_lower = (resp.text or '').lower()[:200]
+                    if 'limit reached' in body_lower or 'quota' in body_lower:
+                        type(self)._scrape_stats['scrapingbee_quota_fail'] += 1
+                    else:
+                        type(self)._scrape_stats['scrapingbee_auth_fail'] += 1
                 return resp
             except Exception:
                 return None
