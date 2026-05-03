@@ -554,6 +554,54 @@ _in_analysis_view = (
     and not st.session_state.selected_leads.empty
 )
 
+# Auto-collapse the sidebar when the user starts working an auction.
+# Streamlit doesn't expose a programmatic "collapse sidebar" call, so
+# we inject a one-shot JS click on the sidebar's built-in collapse
+# button. Detected via the in-analysis transition (was-not, is-now)
+# so it only fires on the rerun where the user picked an auction;
+# manual reopens via the hamburger stay sticky.
+_was_in_analysis = st.session_state.get('_was_in_analysis', False)
+_just_entered_analysis = _in_analysis_view and not _was_in_analysis
+st.session_state._was_in_analysis = _in_analysis_view
+
+if _just_entered_analysis:
+    components.html(
+        """
+        <script>
+        (function() {
+            // Streamlit's components iframe lives on the same origin so
+            // window.parent.document is reachable. The collapse button's
+            // testid varies slightly between Streamlit versions; try a
+            // few candidates and stop at the first hit.
+            const tryCollapse = () => {
+                const doc = window.parent && window.parent.document;
+                if (!doc) return false;
+                const candidates = [
+                    '[data-testid="stSidebarCollapseButton"]',
+                    '[data-testid="baseButton-headerNoPadding"]',
+                    '[data-testid="stSidebarCollapsedControl"]',
+                    'button[kind="headerNoPadding"]',
+                ];
+                for (const sel of candidates) {
+                    const btn = doc.querySelector(sel);
+                    if (btn) { btn.click(); return true; }
+                }
+                return false;
+            };
+            // First-attempt fast path, then retry briefly while the
+            // Streamlit DOM finishes mounting.
+            if (!tryCollapse()) {
+                let tries = 0;
+                const t = setInterval(() => {
+                    if (tryCollapse() || ++tries > 15) clearInterval(t);
+                }, 80);
+            }
+        })();
+        </script>
+        """,
+        height=0,
+    )
+
 header_title_col, header_actions_col = st.columns([3, 2])
 with header_title_col:
     st.markdown("## 🛰️ Auction Intelligence Dashboard")
