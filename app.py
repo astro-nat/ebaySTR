@@ -2816,6 +2816,10 @@ def _render_results_table(results_df):
     # Lead with the lot thumbnail when we have one — Streamlit's ImageColumn
     # renders the URL inline so the user can scan visually before reading.
     display_cols = []
+    # Lot link goes FIRST and is pinned to the left so it's always
+    # reachable without scrolling — that's the most-clicked control.
+    if 'lot_link' in filtered_df.columns:
+        display_cols.append('lot_link')
     if 'thumbnail_url' in filtered_df.columns:
         display_cols.append('thumbnail_url')
     display_cols.append(title_col)
@@ -2832,7 +2836,9 @@ def _render_results_table(results_df):
     )
     if show_original:
         display_cols.append('title')
-    display_cols += ['lot_link', 'auction_link', 'category', 'current_bid']
+    # auction_link removed from per-row display — we surface a single
+    # auction-name link at the top of the analysis view instead.
+    display_cols += ['category', 'current_bid']
     if 'next_bid' in filtered_df.columns:
         display_cols.append('next_bid')
     display_cols.append('est_cost')
@@ -2852,7 +2858,13 @@ def _render_results_table(results_df):
                  "description or matching eBay listings — this column "
                  "preserves what the lot actually said on HiBid.",
         ),
-        "lot_link": st.column_config.LinkColumn("Item", display_text="Open"),
+        "lot_link": st.column_config.LinkColumn(
+            "🔗",
+            display_text="Open",
+            width="small",
+            pinned=True,  # always visible during horizontal scroll
+            help="Open this lot on HiBid in a new tab.",
+        ),
         "auction_link": st.column_config.LinkColumn("Auction", display_text="Open"),
         "current_bid": st.column_config.NumberColumn("Current Bid", format="$%.2f"),
         "next_bid": st.column_config.NumberColumn(
@@ -3255,7 +3267,28 @@ if current_auction and not st.session_state.selected_leads.empty:
             st.session_state.phase1_leads = pd.DataFrame()
             st.rerun()
     with bc2:
-        st.subheader(f"🔬 {current_auction}")
+        # Make the auction name itself a clickable link to the HiBid
+        # auction page. Replaces the per-row 'Auction' column we used
+        # to render in the results table — the auction is the same
+        # for every row, so one link at the top is plenty.
+        _auction_url = None
+        if 'auction_link' in leads_df.columns and not leads_df.empty:
+            link_val = leads_df['auction_link'].dropna().head(1)
+            if not link_val.empty:
+                _auction_url = str(link_val.iloc[0]).strip() or None
+        if _auction_url:
+            # Render as an h3 with the auction name as a clickable link
+            # that opens the HiBid auction page in a new tab. target=_blank
+            # is the natural choice — clicking shouldn't navigate away
+            # from the analysis view.
+            st.markdown(
+                f"### 🔬 <a href='{_auction_url}' target='_blank' "
+                f"rel='noopener'>{current_auction}</a>  "
+                f"<span style='font-size:0.7em;opacity:0.6'>↗</span>",
+                unsafe_allow_html=True,
+            )
+        else:
+            st.subheader(f"🔬 {current_auction}")
         caption_bits = [f"{len(leads_df)} items loaded"]
 
         # If the current analysis came from cache, indicate that + when.
