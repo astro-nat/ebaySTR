@@ -12,6 +12,34 @@ from typing import Optional
 
 
 class EbayPriceLookup:
+    # Class-level scrape stats. Updated by _scrape_ebay_sold_prices and
+    # _scrape_mercari_sold_prices on every call. Read by the UI after a
+    # comp run finishes so the user can see when the scraper is being
+    # blocked (eBay returns HTTP 403 for almost every request from a
+    # non-residential IP). Without this, the silent fall-through to the
+    # eBay-Browse-API "active listings" path looks like normal data when
+    # in fact the entire sold-history pipeline is dead.
+    _scrape_stats = {
+        'ebay_sold_attempts': 0,
+        'ebay_sold_blocked': 0,
+        'ebay_sold_success': 0,
+        'mercari_attempts': 0,
+        'mercari_blocked': 0,
+        'mercari_success': 0,
+    }
+
+    @classmethod
+    def reset_scrape_stats(cls):
+        """Zero every counter — call before each new comp run so the UI
+        warning reflects the current run's failure rate, not lifetime."""
+        for k in cls._scrape_stats:
+            cls._scrape_stats[k] = 0
+
+    @classmethod
+    def get_scrape_stats(cls) -> dict:
+        """Snapshot of the scrape counters since the last reset."""
+        return dict(cls._scrape_stats)
+
     def __init__(self, app_id: str, cert_id: str, pricecharting=None):
         """eBay/Mercari price lookup, optionally augmented with PriceCharting.
 
@@ -148,6 +176,7 @@ class EbayPriceLookup:
 
         Returns a list of sold prices (float). Empty list if scraping fails.
         """
+        type(self)._scrape_stats['ebay_sold_attempts'] += 1
         session = self._get_scrape_session()
         params = {
             "_nkw": query,
@@ -161,6 +190,11 @@ class EbayPriceLookup:
                 params=params,
                 timeout=15,
             )
+            # 403 / very-short body = anti-bot block, not "no results".
+            # Tracking this separately so the UI can warn the user.
+            if resp.status_code in (403, 429) or len(resp.text) < 500:
+                type(self)._scrape_stats['ebay_sold_blocked'] += 1
+                return []
             if resp.status_code != 200 or len(resp.text) < 1000:
                 return []
 
@@ -199,6 +233,8 @@ class EbayPriceLookup:
 
             # First result is often the "Shop on eBay" placeholder — skip if wildly inconsistent
             # Actually, placeholder has no price, so list naturally excludes it.
+            if prices:
+                type(self)._scrape_stats['ebay_sold_success'] += 1
             return prices
         except Exception:
             return []
@@ -212,6 +248,7 @@ class EbayPriceLookup:
 
         Returns a list of sold prices (float). Empty list if scraping fails.
         """
+        type(self)._scrape_stats['mercari_attempts'] += 1
         session = self._get_scrape_session()
         params = {
             "keyword": query,
@@ -223,6 +260,10 @@ class EbayPriceLookup:
                 params=params,
                 timeout=15,
             )
+            # 403 / 429 = anti-bot block; track separately from "no results".
+            if resp.status_code in (403, 429) or len(resp.text) < 500:
+                type(self)._scrape_stats['mercari_blocked'] += 1
+                return []
             if resp.status_code != 200 or len(resp.text) < 1000:
                 return []
 
@@ -258,6 +299,8 @@ class EbayPriceLookup:
                     if len(prices) >= max_prices:
                         break
 
+            if prices:
+                type(self)._scrape_stats['mercari_success'] += 1
             return prices[:max_prices]
         except Exception:
             return []

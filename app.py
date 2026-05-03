@@ -3193,9 +3193,13 @@ if current_auction and not st.session_state.selected_leads.empty:
         )
         try:
             # First chunk on a fresh auction? Reset the cached STR map so
-            # we re-sample for the new auction.
+            # we re-sample for the new auction. Also reset the scrape-
+            # stats counters so the "scraper blocked" warning below
+            # reflects this run only, not lifetime.
             if not any_comped:
                 st.session_state.pop('_comps_auction_str_map', None)
+                from scraper.ebay_prices import EbayPriceLookup
+                EbayPriceLookup.reset_scrape_stats()
 
             # Two streams of updates per lot:
             #   - Per-lot ticker (no throttle): a one-line summary that
@@ -3302,6 +3306,50 @@ if current_auction and not st.session_state.selected_leads.empty:
             stats_total['has_more'] = False
         finally:
             st.session_state.comps_running = False
+
+        # Surface scraper-blocked status. Both eBay sold and Mercari
+        # silently fall through to "active eBay listings" when their
+        # anti-bot trips a 403 — the user otherwise sees no signal that
+        # their entire sold-history pipeline is dead and every priced
+        # row in the table came from an untrustworthy active fallback.
+        try:
+            from scraper.ebay_prices import EbayPriceLookup
+            stats = EbayPriceLookup.get_scrape_stats()
+            ebay_total = stats.get('ebay_sold_attempts', 0)
+            ebay_blocked = stats.get('ebay_sold_blocked', 0)
+            merc_total = stats.get('mercari_attempts', 0)
+            merc_blocked = stats.get('mercari_blocked', 0)
+            ebay_block_rate = (ebay_blocked / ebay_total) if ebay_total else 0.0
+            merc_block_rate = (merc_blocked / merc_total) if merc_total else 0.0
+            if (ebay_total >= 3 and ebay_block_rate > 0.5) or \
+               (merc_total >= 3 and merc_block_rate > 0.5):
+                bits = []
+                if ebay_block_rate > 0.5:
+                    bits.append(
+                        f"**eBay sold** blocked on {ebay_blocked}/{ebay_total} "
+                        f"requests ({int(ebay_block_rate * 100)}%)"
+                    )
+                if merc_block_rate > 0.5:
+                    bits.append(
+                        f"**Mercari sold** blocked on {merc_blocked}/{merc_total} "
+                        f"requests ({int(merc_block_rate * 100)}%)"
+                    )
+                st.error(
+                    "🚫 **Sold-listing scrapers are being blocked** — "
+                    + "; ".join(bits) + ". "
+                    "Most prices in this run came from eBay's **active** "
+                    "listings (asking-prices) instead of real sold "
+                    "history, which is much less reliable. The Conf "
+                    "column will rate active-source rows in the 25–50% "
+                    "range so they stand out. Long-term fix: apply for "
+                    "eBay's Marketplace Insights API (free, gated) — "
+                    "uses the same OAuth as your existing Browse API "
+                    "key. See https://developer.ebay.com/api-docs/buy/"
+                    "marketplace-insights/static/overview.html"
+                )
+        except Exception:
+            pass  # Stats reporting is best-effort
+
         st.rerun()
 
     # ================================================================
