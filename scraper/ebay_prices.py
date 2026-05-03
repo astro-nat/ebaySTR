@@ -144,7 +144,11 @@ class EbayPriceLookup:
         # are usually marketplace qualifiers, not product features
         clean = re.sub(r'\([^)]{1,25}\)', '', clean)
         # Collapse punctuation into whitespace so eBay's tokenizer works
-        clean = re.sub(r'[,;:/\\|]+', ' ', clean)
+        # Strip dashes too — eBay's search engine interprets " - " (space-
+        # dash-space) as the NOT operator. Titles like "Phantom Lady 17 -
+        # CGC 4.0" become "Phantom Lady 17 NOT CGC NOT 4.0", excluding
+        # exactly the graded copies the user wants. Replace with spaces.
+        clean = re.sub(r'[,;:/\\|\-]+', ' ', clean)
         # Normalize whitespace
         clean = re.sub(r'\s+', ' ', clean).strip(' .,-')
         # Truncate to max_words for better search. Drop trailing stopwords
