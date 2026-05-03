@@ -893,6 +893,8 @@ def _render_sidebar_auction_list():
             "Sort",
             options=[
                 "🎯 Best fit first",
+                "💸 Highest PC % first",
+                "💸 Lowest credit cost first",
                 "🔢 Most items first",
                 "⏰ Closing soonest",
                 "🔢 Fewest items first",
@@ -1033,6 +1035,20 @@ def _render_sidebar_auction_list():
             _rank_order = {'good': 0, 'caution': 1, 'avoid': 2}
             rows.sort(key=lambda r: (
                 _rank_order.get(r['signal_rank'], 3),
+                r['est_credits'],
+                r['closes_dt'] or datetime.max,
+            ))
+        elif sb_sort.startswith("💸 Highest PC"):
+            # Higher PC % = cheaper to comp. Tiebreak by closing soonest
+            # so finds with same coverage but ending sooner float up.
+            rows.sort(key=lambda r: (
+                -(r.get('pc_pct') or 0),
+                r['closes_dt'] or datetime.max,
+            ))
+        elif sb_sort.startswith("💸 Lowest credit"):
+            # Cheapest absolute spend — useful when budget is tight and
+            # you want to rip through several small auctions cheaply.
+            rows.sort(key=lambda r: (
                 r['est_credits'],
                 r['closes_dt'] or datetime.max,
             ))
