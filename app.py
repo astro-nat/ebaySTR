@@ -2526,30 +2526,56 @@ def _render_results_table(results_df):
             display_cols += ['ebay_comps']
             col_config["ebay_comps"] = st.column_config.NumberColumn("eBay Comps", format="%d")
 
-            # Low-confidence flag: with fewer than 4 sold comps, the IQR
-            # outlier filter in ebay_prices._filter_outliers can't run, so a
-            # single pricey listing can drag the median resale way up.
-            # PriceCharting hits are pre-aggregated \u2014 never low-confidence.
+            # Low-confidence flag \u2014 fires on three independent signals
+            # that the est_resale shouldn't be trusted at face value:
+            #   1. Fewer than 3 total comps AND not a PriceCharting hit.
+            #      A single eBay/Mercari sold listing can be the wrong
+            #      product or a fluke, and IQR outlier filtering needs
+            #      \u22654 data points. PriceCharting is excluded because
+            #      its "comp_count = 1" means one matched product (with
+            #      many underlying transactions aggregated server-side),
+            #      not a single listing.
+            #   2. price_source contains 'active' \u2014 pricer fell through
+            #      to eBay active listings because no sold history
+            #      existed. Active asks have NO outlier protection and
+            #      one bundle listing can blow the median up.
+            #   3. price_source contains 'thin' \u2014 explicit marker the
+            #      pricer set when it could only assemble 1\u20132 sold comps.
             filtered_df = filtered_df.copy()
-            pc_hits = (
+            comp_count_int = (
+                filtered_df['comp_count'].fillna(0).astype(int)
+                if 'comp_count' in filtered_df.columns
+                else pd.Series(0, index=filtered_df.index)
+            )
+            pc_hit = (
                 filtered_df['pricecharting_comps'].fillna(0).astype(int).gt(0)
                 if 'pricecharting_comps' in filtered_df.columns
-                else False
+                else pd.Series(False, index=filtered_df.index)
+            )
+            price_src = (
+                filtered_df['price_source'].fillna('').astype(str).str.lower()
+                if 'price_source' in filtered_df.columns
+                else pd.Series('', index=filtered_df.index)
             )
             filtered_df['low_comp_confidence'] = (
-                filtered_df['ebay_comps'].fillna(0).astype(int).lt(4)
-                & filtered_df['est_resale'].notna()
-                & ~pc_hits
+                filtered_df['est_resale'].notna()
+                & (
+                    (comp_count_int.lt(3) & ~pc_hit)
+                    | price_src.str.contains('active', regex=False)
+                    | price_src.str.contains('thin', regex=False)
+                )
             )
             display_cols += ['low_comp_confidence']
             col_config["low_comp_confidence"] = st.column_config.CheckboxColumn(
                 "Low Conf.",
                 help=(
-                    "Checked when fewer than 4 eBay sold comps were found "
-                    "(and the lot didn't get a PriceCharting hit). The "
-                    "outlier filter needs \u22654 data points, so with 1\u20133 "
-                    "comps the est_resale can be skewed by a single "
-                    "high-priced listing."
+                    "Checked when the est_resale is built on shaky data: "
+                    "fewer than 3 sold-listing comps from eBay/Mercari "
+                    "(PriceCharting hits aren't penalized — their single "
+                    "match aggregates many transactions server-side), or "
+                    "the pricer fell back to eBay active listings, or "
+                    "it explicitly flagged itself as 'thin comps'. Treat "
+                    "checked rows as rough estimates."
                 ),
             )
         if 'mercari_comps' in filtered_df.columns:
