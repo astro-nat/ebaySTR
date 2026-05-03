@@ -36,7 +36,7 @@ _PC_TRIGGERS = [
         "xbox", "xbox 360", "xbox one", "xbox series",
         "gamecube", "game cube",
         "nintendo switch", " switch lite ", " switch oled ",
-        "nintendo wii", " wii u ", "wii u",
+        "nintendo wii", " wii u ",
         "nintendo ds", " 3ds ", " 2ds ",
         "game boy", "gameboy", "gba ",
         "sega genesis", "sega saturn", "sega cd", "sega dreamcast",
@@ -46,6 +46,13 @@ _PC_TRIGGERS = [
         " rom cartridge", "game cartridge",
     ]),
     # ---- TCGs / trading cards ----
+    # IMPORTANT: only include keywords that DO NOT also appear in the
+    # vocabulary of unrelated antiques / tools / advertising. We previously
+    # had `" auto "`, `"/auto"`, and `" rookie "` here — those false-matched
+    # an estate auction's "Auto Body Spoon & Tool", "Western Auto Supply"
+    # oil cans, and "RC Car Toy" lots into PriceCharting trading-card
+    # records, producing $11 oil cans and $0.66 motor-oil cans. The fix:
+    # only accept card-specific terms.
     ("trading_card", [
         # TCGs
         "pokemon", "pokémon", "pokemon card",
@@ -62,12 +69,15 @@ _PC_TRIGGERS = [
         # Grading callouts (any grade — these are unique to graded cards)
         " psa ", " bgs ", " sgc ", " cgc ",
         "psa 10", "psa 9", "bgs graded", "psa graded", "cgc graded",
-        # Rookie card markers — "rookie" alone is too broad ("rookie
-        # season", "rookie of the year") so anchor it tighter
-        "rookie card", " rc ", " rookie ",
-        # Generic card-collecting markers
-        "card #", " card #", "/auto", " auto ", " autograph ",
-        " refractor ", " parallel ",
+        # Rookie card markers — "rookie card" only (the word "rookie"
+        # alone matches "rookie season", "rookie of the year", and the
+        # bare " rc " token matches RC cars / RC boats / RC trucks).
+        "rookie card",
+        # Card-specific markers — "autograph" only (not " auto " which
+        # matches Auto Body / Western Auto / Auto Parts / Automotive)
+        "card #", " autograph ", " refractor ",
+        # "/auto" was here — removed because it false-matches text like
+        # "12/automotive" or filenames like "/auto.jpg" in scraped data.
     ]),
     # ---- Comics ----
     ("comic", [
