@@ -2418,6 +2418,83 @@ def _render_red_flag_editor(ar_full):
             st.rerun()
 
 
+def _compute_resale_confidence(row):
+    """Score est_resale credibility on a 0-100 scale.
+
+    Three independent signals get a 0-1 score and are then weighted:
+      - Source quality (50% weight): sold > active. eBay+Mercari sold
+        is ideal; PriceCharting is good when its product match is
+        right (we can't verify that here); 'thin comps' is the
+        pricer's own self-flag for 1-2 sold listings; 'active'
+        fallback has no outlier protection at all.
+      - Sample size (30% weight): more comps = more robust median.
+        PriceCharting's single match counts as ~5-comp because their
+        pricing is server-side aggregated across many transactions.
+      - Spread tightness (20% weight): wider (high-low)/median ratio
+        signals outlier listings dragging the median around.
+
+    Returns None when est_resale is missing.
+    """
+    median = row.get('est_resale')
+    if median is None or pd.isna(median):
+        return None
+    src = str(row.get('price_source') or '').lower()
+    comp_count = int(row.get('comp_count') or 0)
+    pc_comps = int(row.get('pricecharting_comps') or 0)
+    low = row.get('price_low')
+    high = row.get('price_high')
+    low = low if pd.notna(low) else median
+    high = high if pd.notna(high) else median
+
+    # Source quality (0-1)
+    if 'sold' in src and 'thin' not in src:
+        source_score = 1.0 if 'ebay+mercari' in src else 0.9
+    elif pc_comps > 0 or 'pricecharting' in src:
+        source_score = 0.75
+    elif 'thin' in src:
+        source_score = 0.4
+    elif 'active' in src:
+        source_score = 0.25
+    else:
+        source_score = 0.5
+
+    # Sample size (0-1)
+    if pc_comps > 0:
+        sample_score = 0.85
+    elif comp_count >= 5:
+        sample_score = 1.0
+    elif comp_count >= 4:
+        sample_score = 0.9
+    elif comp_count >= 3:
+        sample_score = 0.75
+    elif comp_count >= 2:
+        sample_score = 0.55
+    elif comp_count >= 1:
+        sample_score = 0.35
+    else:
+        sample_score = 0.0
+
+    # Spread tightness (0-1)
+    if median and median > 0:
+        spread_ratio = (high - low) / median
+        if spread_ratio <= 0.1:
+            spread_score = 1.0
+        elif spread_ratio <= 0.25:
+            spread_score = 0.9
+        elif spread_ratio <= 0.5:
+            spread_score = 0.75
+        elif spread_ratio <= 1.0:
+            spread_score = 0.55
+        else:
+            spread_score = 0.35
+    else:
+        spread_score = 0.7
+
+    return int(round((source_score * 0.5
+                      + sample_score * 0.3
+                      + spread_score * 0.2) * 100))
+
+
 def _render_results_table(results_df):
     """Render the results table with live ROI/STR threshold highlighting.
 
@@ -2563,56 +2640,31 @@ def _render_results_table(results_df):
             display_cols += ['ebay_comps']
             col_config["ebay_comps"] = st.column_config.NumberColumn("eBay Comps", format="%d")
 
-            # Low-confidence flag \u2014 fires on three independent signals
-            # that the est_resale shouldn't be trusted at face value:
-            #   1. Fewer than 3 total comps AND not a PriceCharting hit.
-            #      A single eBay/Mercari sold listing can be the wrong
-            #      product or a fluke, and IQR outlier filtering needs
-            #      \u22654 data points. PriceCharting is excluded because
-            #      its "comp_count = 1" means one matched product (with
-            #      many underlying transactions aggregated server-side),
-            #      not a single listing.
-            #   2. price_source contains 'active' \u2014 pricer fell through
-            #      to eBay active listings because no sold history
-            #      existed. Active asks have NO outlier protection and
-            #      one bundle listing can blow the median up.
-            #   3. price_source contains 'thin' \u2014 explicit marker the
-            #      pricer set when it could only assemble 1\u20132 sold comps.
+            # Numerical resale-confidence score (0-100). Replaces the
+            # earlier binary low_comp_confidence flag with a richer
+            # signal — see _compute_resale_confidence() for the formula
+            # (source quality 50%, sample size 30%, spread tightness
+            # 20%). Display as a ProgressColumn so the bar visualizes
+            # the score at a glance.
             filtered_df = filtered_df.copy()
-            comp_count_int = (
-                filtered_df['comp_count'].fillna(0).astype(int)
-                if 'comp_count' in filtered_df.columns
-                else pd.Series(0, index=filtered_df.index)
+            filtered_df['resale_confidence'] = filtered_df.apply(
+                _compute_resale_confidence, axis=1,
             )
-            pc_hit = (
-                filtered_df['pricecharting_comps'].fillna(0).astype(int).gt(0)
-                if 'pricecharting_comps' in filtered_df.columns
-                else pd.Series(False, index=filtered_df.index)
-            )
-            price_src = (
-                filtered_df['price_source'].fillna('').astype(str).str.lower()
-                if 'price_source' in filtered_df.columns
-                else pd.Series('', index=filtered_df.index)
-            )
-            filtered_df['low_comp_confidence'] = (
-                filtered_df['est_resale'].notna()
-                & (
-                    (comp_count_int.lt(3) & ~pc_hit)
-                    | price_src.str.contains('active', regex=False)
-                    | price_src.str.contains('thin', regex=False)
-                )
-            )
-            display_cols += ['low_comp_confidence']
-            col_config["low_comp_confidence"] = st.column_config.CheckboxColumn(
-                "Low Conf.",
+            display_cols += ['resale_confidence']
+            col_config["resale_confidence"] = st.column_config.ProgressColumn(
+                "Conf.",
+                min_value=0,
+                max_value=100,
+                format="%d%%",
                 help=(
-                    "Checked when the est_resale is built on shaky data: "
-                    "fewer than 3 sold-listing comps from eBay/Mercari "
-                    "(PriceCharting hits aren't penalized — their single "
-                    "match aggregates many transactions server-side), or "
-                    "the pricer fell back to eBay active listings, or "
-                    "it explicitly flagged itself as 'thin comps'. Treat "
-                    "checked rows as rough estimates."
+                    "Trust score for est_resale on a 0-100 scale. "
+                    "Combines source quality (50% weight: eBay/Mercari "
+                    "sold > PriceCharting > active fallback), sample "
+                    "size (30%; PC's single match counts ~5-comp since "
+                    "it's server-aggregated), and spread tightness "
+                    "(20%; wider (high-low)/median means outliers). "
+                    "Rough thresholds: >=80 high, 50-79 medium, <50 "
+                    "rough estimate at best."
                 ),
             )
         if 'mercari_comps' in filtered_df.columns:
