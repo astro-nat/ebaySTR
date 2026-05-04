@@ -1794,19 +1794,22 @@ def _render_sidebar_auction_list():
         )
         sb_hide_avoid = st.checkbox(
             "Hide 🔴 avoid",
+            value=True,
             key="sidebar_hide_avoid",
             help="Filter out auctions flagged as low-priority: name "
                  "contains 'liquidation'/'overstock'/'pallet'/etc., "
                  ">30% of sample titles use dropship/AI template "
                  "language ('Uncommon Vintage', 'Hook Discover'), "
-                 "lot count > 1500, or closing in <2 hours.",
+                 "lot count > 1500, or closing in <2 hours. "
+                 "Default ON.",
         )
         sb_hide_local_pickup = st.checkbox(
             "Hide 📦 ALL local pickup",
+            value=True,
             key="sidebar_hide_local_pickup",
             help="Filter out every Local Pickup auction, even ones "
-                 "within your sourcing radius. Off by default — leave "
-                 "off to keep nearby pickups visible.",
+                 "within your sourcing radius. Default ON — uncheck "
+                 "to keep nearby pickups visible.",
         )
         sb_hide_remote_pickup = st.checkbox(
             "Hide 📦 remote pickup-only (outside radius)",
@@ -1822,16 +1825,16 @@ def _render_sidebar_auction_list():
         )
         sb_only_bolo = st.checkbox(
             f"🎯 Only BOLO matches ({_BOLO_MATCHER.brand_count} brands)",
+            value=True,
             key="sidebar_only_bolo",
             disabled=not _BOLO_MATCHER.loaded,
             help="Show only auctions with at least one lot matching the "
-                 "brand BOLO list. Loads two files: "
-                 "data/clothing_brand_bolo.json and "
-                 "data/household_parts_bolo.json. For cached auctions "
-                 "the count comes from a full scan; for uncached "
-                 "auctions we scan the auction name + sample lot "
-                 "titles, so it's a hint, not a guarantee. Replace the "
-                 "JSON files quarterly to refresh the lists.",
+                 "brand BOLO list. For cached auctions the count comes "
+                 "from a full scan; for uncached auctions we scan the "
+                 "auction name + sample lot titles, so it's a hint, "
+                 "not a guarantee. Default ON — uncheck to see every "
+                 "discovered auction. Replace the JSON files quarterly "
+                 "to refresh the lists.",
         )
 
         # Scan-all-for-BOLO button placeholder — the actual button is

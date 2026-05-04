@@ -79,6 +79,7 @@ DEFAULT_BOLO_PATHS: List[Path] = [
     Path("data") / "auto_parts_bolo.json",
     Path("data") / "lightweight_collectibles_bolo.json",
     Path("data") / "estate_collectibles_bolo.json",
+    Path("data") / "nostalgia_collectibles_bolo.json",
     # Precious-metals loads LAST so brand-specific entries (Tiffany,
     # Cartier, Native American jewelry) take precedence — those have
     # higher resale ceilings than the generic precious-metal floor.
@@ -147,6 +148,61 @@ _HARD_SKIP_PATTERNS: List[str] = [
 _BRAND_ALIASES: Dict[str, List[str]] = {
     # JSON header → list of literal phrases to match in the haystack
     "Loungefly":                              ["loungefly"],
+    # Nostalgia collectibles — late-90s through 2010s items with
+    # sustained millennial-collector resale. Aliases are narrow
+    # because we want the era markers ("Pleasant Company",
+    # "Bluebird", "Coleco", "Tiger Electronics") doing the
+    # disambiguation against modern reissues.
+    "Webkinz":                                ["webkinz", "ganz webkinz"],
+    "Neopets collectibles":                   ["neopets"],
+    "Tamagotchi (vintage P1/P2)":             ["tamagotchi"],
+    "Original Furby (1998-2000)":             [
+        # Bare "furby" hits modern Hasbro reissues too — narrow
+        # to vintage-context aliases via models[] in the JSON.
+        # Brand alias kept narrow.
+        "tiger electronics", "vintage furby",
+        "original furby", "furby babies", "furby baby",
+    ],
+    "Polly Pocket (Bluebird era)":            [
+        "bluebird polly pocket", "polly pocket bluebird",
+        "bluebird toys",
+        # Bare "polly pocket" matches the modern Mattel reissues
+        # too — disqualifier list rejects Mattel/post-1998 cases.
+    ],
+    "Vintage Cabbage Patch Coleco":           [
+        "coleco cabbage patch", "cabbage patch coleco",
+        "xavier roberts", "original appalachian artworks",
+        "oaa cabbage patch",
+    ],
+    "American Girl Pleasant Company":         [
+        "pleasant company",
+        # "american girl" alone matches modern Mattel-era too —
+        # we only fire on the Pleasant-Company-stamped era via
+        # the explicit alias.
+    ],
+    "Pokemon TCG (vintage 1st Edition)":      [
+        "pokemon 1st edition", "pokemon first edition",
+        "pokemon 1st ed", "wotc pokemon",
+        "wizards of the coast pokemon",
+        "pokemon base set", "pokemon shadowless",
+        "pokemon neo genesis", "pokemon neo discovery",
+        "pokemon neo revelation", "pokemon neo destiny",
+    ],
+    "Yu-Gi-Oh TCG (vintage 1st Edition)":     [
+        "yu-gi-oh 1st edition", "yu-gi-oh first edition",
+        "yu-gi-oh 1st ed", "yugioh 1st edition",
+        "yugioh first edition", "yugioh 1st ed",
+        "yugioh lob", "legend of blue-eyes",
+    ],
+    "Vintage Beanie Babies (errors + apex)":  [
+        # Bare "beanie baby" fires too aggressively on commodity
+        # plush — narrow to error-and-apex compound aliases. The
+        # model list inside the JSON catches the specific named
+        # premium variants (Princess Diana, Peace, etc.).
+        "1st gen beanie baby", "first gen beanie baby",
+        "beanie baby pvc pellets", "beanie baby tag error",
+        "princess diana beanie",
+    ],
     # Musical instruments — narrow brand aliases. Pass 2f handles
     # implicit matches via model-name + instrument-context words.
     "Premium harmonicas":                     [
