@@ -1,0 +1,326 @@
+{
+  "schema_version": "1.0",
+  "domain": "watch_accessories",
+  "last_updated": "2026-05-04",
+  "summary": "High-end watch accessories — boxes, papers, certificates, bracelets, winders. Empty Rolex/Omega/Patek boxes alone trade $100-2000+; vintage papers with matching serial numbers add 30-50% to a watch sale. Auction listings often DON'T mention the brand explicitly — they say 'Submariner box', 'Speedmaster papers', 'Daytona bracelet', etc. We catch BOTH explicit-brand AND implicit-model listings via Pass 2c in the matcher (similar to Loungefly's Pass 2b for character backpacks). Sweet spot: $20-200 buy → $100-1500 resale on vintage Rolex/Omega/Patek/AP accessories.",
+  "field_workflow": [
+    "Boxes: photograph maker stamping inside lid + outer leather/wood grain detail",
+    "Boxes: serial number on inner card MUST match accompanying watch (if sold together)",
+    "Papers: ink should be ORIGINAL pen, not photocopied — hold to light to verify watermark",
+    "Bracelets: end-link reference number stamped on the spring-bar end (e.g., 580 / 593 for Rolex Oyster)",
+    "Bracelets: clasp stamping identifies generation + production year",
+    "Hangtags: original price tag on string + factory anti-tamper seal still attached = premium",
+    "Winders: brand-OEM (Rolex / Patek) >> third-party (Wolf, Heiden) by 5-10x",
+    "Counterfeit RISK: boxes are extensively faked — verify font kerning, leather grain, magnetic-clasp pull strength against authenticated examples"
+  ],
+  "skip_list": [
+    "Generic wooden watch box (storage display, not OEM)",
+    "Watch box organizer (multi-watch storage)",
+    "Aftermarket display case",
+    "Casio / Timex / Seiko box (commodity tier)",
+    "Kids watch box / toy watch",
+    "Watch box for 6 watches / 12 watches (display)",
+    "Replica box / fake / counterfeit",
+    "Generic NATO / silicone strap"
+  ],
+  "brands": [
+    {
+      "brand": "Rolex accessories",
+      "category": "watch_accessory",
+      "tier": 1,
+      "models": [
+        "Rolex box", "Rolex papers", "Rolex certificate",
+        "Rolex booklet", "Rolex warranty card",
+        "Rolex hangtag", "Rolex hang tag", "Rolex swing tag",
+        "Rolex bracelet", "Rolex Oyster bracelet",
+        "Rolex Jubilee bracelet", "Rolex President bracelet",
+        "Rolex Pearlmaster bracelet",
+        "Rolex case", "Rolex outer box", "Rolex inner box",
+        "Rolex winder", "Rolex display",
+        "Rolex bezel", "Rolex crown",
+        "Rolex pouch", "Rolex green pouch",
+        "Rolex tools", "Rolex case opener",
+        "Rolex spring bar tool",
+
+        "Submariner box", "Submariner papers", "Submariner bracelet",
+        "Daytona box", "Daytona papers", "Daytona bracelet",
+        "GMT box", "GMT-Master box", "GMT papers",
+        "GMT bracelet", "GMT-Master bracelet",
+        "Datejust box", "Datejust papers", "Datejust bracelet",
+        "Day-Date box", "Day-Date papers", "Day-Date bracelet",
+        "Day Date bracelet", "Day Date box",
+        "Explorer box", "Explorer papers",
+        "Sea-Dweller box", "Sea Dweller box",
+        "Yacht-Master box", "Yacht Master box",
+        "Milgauss box", "Milgauss papers",
+        "Air-King box", "Air King box",
+        "Sky-Dweller box",
+        "Oyster Perpetual box",
+
+        "Tudor box", "Tudor papers",
+        "Tudor Black Bay box", "Tudor Pelagos box",
+        "Tudor Heritage box"
+      ],
+      "era_markers": [
+        "Rolex green leatherette outer box (2000+ era) vs red/wood (vintage)",
+        "Inner box with green velvet pillow + serial card slot",
+        "Vintage 'coffin' box (1960s-70s) — wooden, white-velvet interior, premium",
+        "Reference number stamped on inner box + matching warranty card",
+        "Hologram-coated warranty card (1995-2007 transition era)",
+        "Wallet-style papers with ink-stamped retailer + date",
+        "Bracelet end-links: 580 (Submariner), 593 (Datejust), 455B (President)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Vintage Rolex coffin box (1960s-70s)", "low": 400, "high": 2000},
+        {"item": "Modern Rolex box + papers complete", "low": 200, "high": 700},
+        {"item": "Modern Rolex box only (no papers)", "low": 100, "high": 350},
+        {"item": "Rolex Oyster bracelet vintage Submariner", "low": 400, "high": 1500},
+        {"item": "Rolex Jubilee bracelet vintage Datejust", "low": 280, "high": 900},
+        {"item": "Rolex warranty card with matching serial", "low": 80, "high": 280},
+        {"item": "Rolex hangtag original", "low": 60, "high": 200},
+        {"item": "Rolex green pouch / pochette", "low": 25, "high": 80},
+        {"item": "Tudor box + papers", "low": 80, "high": 250}
+      ],
+      "target_buy_usd": {"low": 5, "high": 100},
+      "platform_primary": "eBay",
+      "platform_secondary": "Chrono24",
+      "comp_query_template": "rolex {item} vintage",
+      "ship_class": "small_box",
+      "notes": "IMPORTANT: Rolex accessories alone trade for serious money — don't dismiss an empty Rolex box. Vintage 'coffin' boxes (1960s-70s wooden) are the apex at $400-2000. Modern green-leatherette boxes still pull $100-350 on their own. Bracelets with correct end-link references for the watch model are the highest-margin accessory ($300-1500). Auction listings frequently say 'Submariner box' / 'Daytona papers' WITHOUT 'Rolex' — Pass 2c in the matcher catches these. Counterfeit risk is HIGH on boxes specifically; verify kerning + leather grain + magnetic clasp pull against authenticated examples.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Omega accessories",
+      "category": "watch_accessory",
+      "tier": 1,
+      "models": [
+        "Omega box", "Omega papers", "Omega certificate",
+        "Omega booklet", "Omega warranty card",
+        "Omega bracelet", "Omega leather strap",
+        "Omega winder", "Omega pouch",
+        "Omega hangtag", "Omega hang tag",
+        "Omega outer box", "Omega inner box",
+        "Omega Master Chronometer card",
+        "Omega tools",
+
+        "Speedmaster box", "Speedmaster papers", "Speedmaster bracelet",
+        "Moonwatch box", "Moonwatch papers",
+        "Seamaster box", "Seamaster papers", "Seamaster bracelet",
+        "Planet Ocean box", "Planet Ocean papers",
+        "Aqua Terra box",
+        "Constellation box", "Constellation papers",
+        "De Ville box", "De Ville papers",
+        "Railmaster box"
+      ],
+      "era_markers": [
+        "Red Omega outer box with sliding cardboard sleeve (modern)",
+        "Vintage wood-grain Omega box (1960s-70s) — premium",
+        "Inside lid stamped with Omega logo + reference number",
+        "Master Chronometer certification card (post-2015 only)",
+        "Original chronograph slide-rule bezel guide booklet (Speedmaster)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Vintage Omega wood-grain box (1960s-70s)", "low": 200, "high": 800},
+        {"item": "Modern Omega box + papers complete", "low": 130, "high": 380},
+        {"item": "Omega box only", "low": 60, "high": 180},
+        {"item": "Speedmaster vintage bracelet 1450/1039", "low": 280, "high": 900},
+        {"item": "Omega Seamaster bracelet vintage", "low": 200, "high": 600},
+        {"item": "Omega warranty card matching serial", "low": 50, "high": 180},
+        {"item": "Speedmaster instruction booklet vintage", "low": 60, "high": 200}
+      ],
+      "target_buy_usd": {"low": 4, "high": 80},
+      "platform_primary": "eBay",
+      "platform_secondary": "Chrono24",
+      "comp_query_template": "omega {item}",
+      "ship_class": "small_box",
+      "notes": "Omega accessories second only to Rolex in collector demand. Speedmaster 'Moonwatch' bracelets (1450/1039 references) are the most-faked accessory in the watch world — verify rivet construction and end-link stamping. Vintage wood-grain Omega boxes (pre-1990) hold premium. Master Chronometer certificate card (post-2015 only) adds 10-15% to a sale.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Patek Philippe accessories",
+      "category": "watch_accessory",
+      "tier": 1,
+      "models": [
+        "Patek Philippe box", "Patek Philippe papers",
+        "Patek Philippe certificate", "Patek Philippe booklet",
+        "Patek Philippe bracelet", "Patek Philippe winder",
+        "Patek box", "Patek papers", "Patek certificate",
+        "Patek warranty card", "Patek pouch",
+        "Patek Philippe hangtag", "Patek hang tag",
+        "Patek Philippe seal", "Patek seal",
+
+        "Nautilus box", "Nautilus papers", "Nautilus bracelet",
+        "Aquanaut box", "Aquanaut papers", "Aquanaut bracelet",
+        "Calatrava box", "Calatrava papers",
+        "Grand Complications box",
+        "Perpetual Calendar box",
+        "World Time box"
+      ],
+      "era_markers": [
+        "Brown leather Patek Philippe outer box with gold embossed crest",
+        "Wooden inner box with velvet pillow + matching serial card",
+        "Patek Philippe Seal certification (post-2009 replacing Geneva Seal)",
+        "Geneva Seal hallmark on vintage paperwork (pre-2009)",
+        "Origin certificate with retailer ink stamp + production date"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Patek Philippe complete box + papers Nautilus", "low": 800, "high": 3500},
+        {"item": "Patek Philippe box only modern", "low": 280, "high": 900},
+        {"item": "Patek Philippe certificate + papers only", "low": 200, "high": 700},
+        {"item": "Nautilus bracelet 5711/1A vintage", "low": 1500, "high": 6000},
+        {"item": "Aquanaut rubber strap original 5167", "low": 280, "high": 700},
+        {"item": "Patek hangtag with serial", "low": 130, "high": 380}
+      ],
+      "target_buy_usd": {"low": 10, "high": 200},
+      "platform_primary": "eBay",
+      "platform_secondary": "Chrono24",
+      "comp_query_template": "patek philippe {item}",
+      "ship_class": "small_box",
+      "notes": "Patek Philippe accessories are the apex of watch collecting — even an empty Nautilus box has cleared $1500+ at auction. The Patek Philippe Seal (post-2009) replaced the Geneva Seal as the certification mark on paperwork. Counterfeit risk is EXTREME at this tier; only buy from known-authentic sources or with provenance.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Audemars Piguet accessories",
+      "category": "watch_accessory",
+      "tier": 1,
+      "models": [
+        "Audemars Piguet box", "Audemars Piguet papers",
+        "Audemars Piguet certificate", "Audemars Piguet warranty",
+        "AP box", "AP papers",
+        "Audemars Piguet bracelet", "Audemars Piguet winder",
+        "Audemars Piguet pouch", "Audemars Piguet booklet",
+
+        "Royal Oak box", "Royal Oak papers", "Royal Oak bracelet",
+        "Royal Oak Offshore box", "Royal Oak Offshore papers",
+        "Royal Oak Offshore bracelet",
+        "Code 11.59 box",
+        "Jules Audemars box"
+      ],
+      "era_markers": [
+        "Black-on-black AP outer box with embossed Royal Oak motif",
+        "White-velvet inner pillow with AP-stamped backing",
+        "Origin certificate with retailer ink + matching reference number",
+        "Royal Oak integrated bracelet end-links: tapered links specific to model"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Royal Oak full box + papers set", "low": 700, "high": 2500},
+        {"item": "AP box only modern", "low": 280, "high": 800},
+        {"item": "Royal Oak bracelet 15202 / 15400 / 15500", "low": 1200, "high": 5000},
+        {"item": "AP papers only with serial match", "low": 200, "high": 700}
+      ],
+      "target_buy_usd": {"low": 10, "high": 180},
+      "platform_primary": "eBay",
+      "platform_secondary": "Chrono24",
+      "comp_query_template": "audemars piguet {item}",
+      "ship_class": "small_box",
+      "notes": "Royal Oak integrated bracelets command extreme premium because they're impossible to retrofit cleanly to anything but the matching reference. Counterfeit risk EXTREME — only buy with verified provenance.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Cartier accessories",
+      "category": "watch_accessory",
+      "tier": 2,
+      "models": [
+        "Cartier box", "Cartier papers", "Cartier certificate",
+        "Cartier warranty card", "Cartier booklet",
+        "Cartier bracelet", "Cartier deployant",
+        "Cartier pouch", "Cartier hangtag",
+        "Cartier red box", "Cartier outer box",
+
+        "Santos box", "Santos papers", "Santos bracelet",
+        "Tank box", "Tank papers", "Tank bracelet",
+        "Tank Francaise box", "Tank Americaine box",
+        "Tank Louis Cartier box",
+        "Ballon Bleu box", "Ballon Bleu papers",
+        "Pasha box", "Pasha papers",
+        "Roadster box",
+        "Drive de Cartier box"
+      ],
+      "era_markers": [
+        "Cartier red outer box with gold embossed signature",
+        "Cream / off-white inner box with red velvet lining",
+        "Cartier International warranty card (multilingual)",
+        "Bracelet articulated links — Santos (square) vs Tank (flat) vs Pasha (round)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Cartier complete box + papers", "low": 200, "high": 600},
+        {"item": "Cartier box only modern", "low": 80, "high": 250},
+        {"item": "Santos bracelet steel original", "low": 280, "high": 900},
+        {"item": "Tank bracelet leather original", "low": 80, "high": 250},
+        {"item": "Cartier warranty card with serial", "low": 50, "high": 180}
+      ],
+      "target_buy_usd": {"low": 5, "high": 80},
+      "platform_primary": "eBay",
+      "platform_secondary": "Chrono24",
+      "comp_query_template": "cartier watch {item}",
+      "ship_class": "small_box",
+      "notes": "Cartier accessories trade at lower premiums than Rolex/Omega/Patek but still solid resale. Santos bracelets in steel are the highest-margin Cartier accessory.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Other Swiss luxury accessories",
+      "category": "watch_accessory",
+      "tier": 2,
+      "models": [
+        "Vacheron Constantin box", "Vacheron Constantin papers",
+        "Vacheron box", "Vacheron papers",
+        "Breitling box", "Breitling papers", "Breitling bracelet",
+        "Breitling Navitimer box", "Breitling Superocean box",
+        "Breitling Chronomat box",
+        "IWC box", "IWC papers", "IWC certificate",
+        "IWC Portuguese box", "IWC Pilot box",
+        "IWC Portofino box", "IWC Aquatimer box",
+        "Panerai box", "Panerai papers", "Panerai certificate",
+        "Panerai Luminor box", "Panerai Radiomir box",
+        "Jaeger-LeCoultre box", "Jaeger-LeCoultre papers",
+        "JLC box", "JLC papers",
+        "Reverso box", "Reverso papers",
+        "Master Compressor box",
+        "TAG Heuer box", "TAG Heuer papers",
+        "Heuer vintage box", "Heuer papers",
+        "Carrera box", "Carrera papers",
+        "Monaco box", "Monaco papers",
+        "Autavia box",
+        "Zenith box", "Zenith papers",
+        "El Primero box",
+        "Defy box",
+        "Grand Seiko box", "Grand Seiko papers",
+        "Grand Seiko certificate",
+        "Hublot box", "Hublot papers",
+        "Big Bang box", "Classic Fusion box",
+        "Bell & Ross box", "Bell Ross box",
+        "Tissot Heritage box"
+      ],
+      "era_markers": [
+        "Brand-specific outer box construction (varies by maker)",
+        "Inside-lid stamping should match warranty/certificate paperwork",
+        "Manufacture-d'origine seal on certificates (Swiss watch industry standard)",
+        "Reference number on box matches caseback engraving"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Vacheron Constantin complete box + papers", "low": 400, "high": 1500},
+        {"item": "Breitling complete box + papers", "low": 130, "high": 380},
+        {"item": "IWC complete box + papers", "low": 200, "high": 600},
+        {"item": "Panerai box + papers", "low": 200, "high": 500},
+        {"item": "Jaeger-LeCoultre Reverso box", "low": 200, "high": 600},
+        {"item": "TAG Heuer modern box + papers", "low": 80, "high": 250},
+        {"item": "Vintage Heuer box (1970s)", "low": 200, "high": 700},
+        {"item": "Grand Seiko complete box + papers", "low": 130, "high": 380},
+        {"item": "Hublot Big Bang box", "low": 130, "high": 380}
+      ],
+      "target_buy_usd": {"low": 5, "high": 100},
+      "platform_primary": "eBay",
+      "platform_secondary": "Chrono24",
+      "comp_query_template": "{brand} watch {item}",
+      "ship_class": "small_box",
+      "notes": "Second-tier Swiss luxury (Vacheron, Breitling, IWC, Panerai, JLC, TAG, Zenith, Grand Seiko, Hublot, Bell & Ross). Vacheron Constantin rivals Patek in accessory pricing. Vintage Heuer (pre-1985 TAG merger) is its own collector category — premium over modern TAG Heuer. Grand Seiko is the Japanese luxury entry; rising market 2024-26.",
+      "condition_critical": true
+    }
+  ],
+  "platform_notes": {
+    "eBay": "Dominant marketplace for watch accessories. Filter sold-listings hard — asking prices are commonly 2-3x what items actually clear at.",
+    "Chrono24": "Primary buyer-side comp benchmark for full watch sales. Use to verify what an accessory ADDS to a paired watch sale ($X with box/papers vs $Y without).",
+    "WatchUSeek / r/Watches": "Community sanity-check for serial-number authenticity questions. Don't sell here — use as the verification step before listing on eBay.",
+    "Bob's Watches / Crown & Caliber": "Pre-owned dealers — they don't pay accessory premiums (they buy the watch + take the box for free). Resale path only if you have the matching watch."
+  }
+}

@@ -584,6 +584,15 @@ if 'img_enrich_min_bid' not in st.session_state:
 if 'comps_max_lots' not in st.session_state:
     # 0 = no cap
     st.session_state.comps_max_lots = 0
+
+# Skip comps for lots whose next-bid floor exceeds this dollar
+# threshold. Lots already bid up that high have squeezed margins
+# and rarely repay the comp spend; skipping them is a cheap
+# spend-saver. 0 = no cap (comp everything that survives the
+# other filters). Default $100 — bid-up lots above this clear
+# the bargain-finder lane and shouldn't be the auto-target.
+if 'comps_skip_above_bid' not in st.session_state:
+    st.session_state.comps_skip_above_bid = 100.0
 if 'comps_exclude_hard' not in st.session_state:
     st.session_state.comps_exclude_hard = True
 if 'comps_only_img_promoted' not in st.session_state:
@@ -667,6 +676,14 @@ if 'discover_running' not in st.session_state:
 
 if 'fetch_lots_running' not in st.session_state:
     st.session_state.fetch_lots_running = False
+
+# Phase 1b — background auction-content sampling. Set by the
+# discovery work block immediately after the candidate list is
+# fetched + saved to session state. The picker can render with
+# the candidate list while this background phase fills in the
+# per-auction "What's in this auction" previews + BOLO hints.
+if '_sampling_pending' not in st.session_state:
+    st.session_state._sampling_pending = False
 
 if 'known_categories' not in st.session_state:
     # Common HiBid lot categories as a starter set. Grown over time from any
@@ -838,14 +855,78 @@ fetch_lots_running = st.session_state.get('fetch_lots_running', False)
 _audit_running = st.session_state.get('audit_running', False)
 _comps_running = st.session_state.get('comps_running', False)
 _img_enrich_running = st.session_state.get('img_enrich_running', False)
+_sampling_pending = st.session_state.get('_sampling_pending', False)
 
-# First-page-open detection: if there's no cached discovery on disk AND
-# auto-discover hasn't been triggered yet, we're about to fire one
-# (handled further down in the flow). Treat that pending state as if
-# discovery were already running so the sticky banner + sidebar empty-
-# state reflect "Loading auctions…" on the very first render — without
-# this the user sees an empty UI for ~50-200ms before the auto-rerun
-# kicks in and the banner appears.
+# --- WATCHDOG: detect wedged "running" flags ---
+# A network hang or unhandled exception can leave a *_running flag
+# set forever — the user sees a sticky "loading" banner with no way
+# out. Stamp the start time when each flag flips True; render a
+# manual reset button if too much wall-clock has elapsed without
+# the flag clearing. Thresholds chosen to be well above the slowest
+# expected path: discovery 60s, fetch 600s (10min for huge scans).
+_now = datetime.now()
+_running_start_keys = {
+    'discover_running': ('_discover_started_at', 60),
+    'fetch_lots_running': ('_fetch_started_at', 600),
+    '_sampling_pending': ('_sampling_started_at', 300),
+}
+for flag_key, (ts_key, max_seconds) in _running_start_keys.items():
+    if st.session_state.get(flag_key):
+        if not st.session_state.get(ts_key):
+            st.session_state[ts_key] = _now
+    else:
+        st.session_state.pop(ts_key, None)
+
+
+def _is_wedged(flag_key, max_seconds):
+    ts = st.session_state.get(_running_start_keys[flag_key][0])
+    if not ts:
+        return False
+    return (datetime.now() - ts).total_seconds() > max_seconds
+
+
+_wedged_phase = None
+for k, (_, secs) in _running_start_keys.items():
+    if _is_wedged(k, secs):
+        _wedged_phase = k
+        break
+
+if _wedged_phase:
+    elapsed = (
+        _now - st.session_state[_running_start_keys[_wedged_phase][0]]
+    ).total_seconds()
+    st.error(
+        f"⚠️ **Stuck for {int(elapsed)}s** in `{_wedged_phase}`. "
+        "Most likely a hung HiBid request that didn't honor the 15s "
+        "timeout, or an unhandled exception. Click the reset button "
+        "below to clear the wedged state and try again."
+    )
+    if st.button(
+        "🔄 Reset wedged state and retry",
+        type="primary",
+        key="reset_wedged_state",
+    ):
+        # Clear ALL running flags + their timestamps so the next
+        # rerun lands cleanly. Don't clear cached candidates / leads
+        # — those are still useful.
+        for k in list(_running_start_keys.keys()):
+            st.session_state[k] = False
+        for _, (ts_k, _) in _running_start_keys.items():
+            st.session_state.pop(ts_k, None)
+        st.session_state.pop('_auto_discover_triggered', None)
+        st.rerun()
+    st.stop()
+
+# First-page-open detection: when no cached discovery exists AND
+# auto-discover hasn't been triggered yet, we want the banner +
+# sidebar loading card visible IMMEDIATELY (not after a 50-200ms
+# rerun gap). We do this by flipping the real session-state flag
+# and stopping the script — Streamlit picks up the flag on the next
+# rerun and runs the actual discovery. Previously this code set a
+# LOCAL discover_running=True for banner purposes only, which had
+# a nasty side effect: any_running became True, which made the
+# downstream auto-discover trigger refuse to fire, leaving the user
+# stuck on "Loading auctions…" forever with no actual work running.
 _first_open_pending_discover = (
     not st.session_state.get('_auto_discover_triggered', False)
     and not st.session_state.get('auction_candidates')
@@ -853,12 +934,9 @@ _first_open_pending_discover = (
     and not discover_running
     and not fetch_lots_running
 )
-if _first_open_pending_discover:
-    discover_running = True  # Show the banner now; the actual rerun
-                             # at line ~1247 fires the real fetch.
 
 any_running = (
-    discover_running or fetch_lots_running
+    discover_running or fetch_lots_running or _sampling_pending
     or _audit_running or _comps_running or _img_enrich_running
 )
 _restored_at = st.session_state.get('_discovery_restored_from')
@@ -954,12 +1032,19 @@ if any_running or _scan_kickoff:
                 _phase_detail = (
                     "No cached discovery found, so we're pulling the full "
                     "open-auction list now. This runs once per session "
-                    "(~10–20s). The list will populate the sidebar as soon "
+                    "(~5–10s). The list will populate the sidebar as soon "
                     "as it lands."
                 )
             else:
                 _phase_label = "🔍 Phase 1 of 5: Discovering open auctions on HiBid"
                 _phase_detail = "Querying nationwide + local listings, filtering by closing date…"
+        elif _sampling_pending:
+            _phase_label = "🔍 Phase 1b: Loading content previews in background"
+            _phase_detail = (
+                "The auction list is already usable — go ahead and "
+                "scan or click an auction. This step just fills in "
+                "the per-auction preview column + BOLO hints."
+            )
         elif fetch_lots_running:
             _scan_all = st.session_state.get('_bolo_scan_all_pending', False)
             if _scan_all:
@@ -1873,11 +1958,38 @@ def _render_sidebar_auction_list():
         # Pass a generous TTL so stale entries still surface a timestamp
         # — the user wants to see "12 days ago" on a stale auction, not
         # nothing.
+        #
+        # PERFORMANCE: list_all() unpickles every cached auction file
+        # (~50-200KB each). With 30+ cached auctions that's ~5MB of
+        # pickle parsing on every render. Memoize per-session keyed on
+        # the cache-dir's directory mtime — rebuild only when a new
+        # auction is cached or one is purged. Fast path is a dict
+        # lookup.
+        _cache_dir_mtime = 0
+        try:
+            _cache_dir_mtime = _AUCTION_CACHE.cache_dir.stat().st_mtime
+        except (OSError, AttributeError):
+            pass
+        _cache_list_memo = st.session_state.get('_auction_cache_list_memo')
+        if (
+            _cache_list_memo is None
+            or _cache_list_memo.get('mtime') != _cache_dir_mtime
+        ):
+            try:
+                _entries = list(_AUCTION_CACHE.list_all(ttl_days=365))
+            except Exception:
+                _entries = []
+            st.session_state._auction_cache_list_memo = {
+                'mtime': _cache_dir_mtime,
+                'entries': _entries,
+            }
+            _cache_list_memo = st.session_state._auction_cache_list_memo
+
         last_run_map = {}
         green_map = {}
         bolo_cached_map = {}
         try:
-            for entry in _AUCTION_CACHE.list_all(ttl_days=365):
+            for entry in _cache_list_memo['entries']:
                 ts_raw = entry.get('cached_at') or ''
                 try:
                     last_run_map[entry.get('auction_id')] = (
@@ -1906,28 +2018,58 @@ def _render_sidebar_auction_list():
         #     Lululemon / Patagonia / etc. inside" as a heads-up.
         # The flag distinguishes the two so the UI can label hints
         # differently from full scans (badge color/wording).
+        #
+        # PERFORMANCE: this used to recompute every render — at 200
+        # auctions × 50 sample titles × ~200 BOLO patterns that's ~2M
+        # regex calls per render, making every search keystroke /
+        # sort change feel laggy. Now we memoize per
+        # (auction_id, samples_fingerprint, matcher_mtime). The cache
+        # invalidates automatically when the BOLO files change (mtime)
+        # or when fresh samples land for an auction (fingerprint).
         bolo_hint_map = {}  # aid -> (count, is_full_scan)
+
         if _BOLO_MATCHER.loaded:
+            # Per-session memo, keyed on a tuple that captures every
+            # input that could change the result.
+            memo = st.session_state.setdefault('_bolo_hint_memo', {})
+            # Mtime fingerprint = the matcher's loaded-files combined
+            # mtime. Stored on the matcher as `_mtimes` (dict). When
+            # the user edits a JSON file, the mtime changes and the
+            # cache is naturally invalidated.
+            try:
+                matcher_fp = tuple(sorted(_BOLO_MATCHER._mtimes.items()))
+            except (AttributeError, TypeError):
+                matcher_fp = None
             for c in candidates:
                 aid_local = c['auction_id']
                 cached_count = bolo_cached_map.get(aid_local)
                 if cached_count is not None:
                     bolo_hint_map[aid_local] = (int(cached_count), True)
                     continue
-                # Fallback: scan auction name + sample titles.
+                raw = cat_samples.get(aid_local) or {}
+                titles = raw.get('titles') if isinstance(raw, dict) else []
+                titles_capped = tuple((titles or [])[:50])
+                # Memo key: auction_id + samples + matcher mtime
+                memo_key = (aid_local, c.get('name') or '',
+                            titles_capped, matcher_fp)
+                cached = memo.get(memo_key)
+                if cached is not None:
+                    if cached > 0:
+                        bolo_hint_map[aid_local] = (cached, False)
+                    continue
+                # Cold: compute hits.
                 hits = 0
                 seen = set()
                 if _BOLO_MATCHER.match(c.get('name') or '', None):
                     hits += 1
                     seen.add('__name__')
-                raw = cat_samples.get(aid_local) or {}
-                titles = raw.get('titles') if isinstance(raw, dict) else []
-                for t in (titles or [])[:50]:  # cap to first 50 sample titles
+                for t in titles_capped:
                     if t in seen:
                         continue
                     if _BOLO_MATCHER.match(t, None):
                         hits += 1
                         seen.add(t)
+                memo[memo_key] = hits
                 if hits:
                     bolo_hint_map[aid_local] = (hits, False)
 
@@ -2359,59 +2501,45 @@ if st.session_state.get('discover_running'):
             st.session_state.selected_leads = pd.DataFrame()
             st.session_state.current_auction = None
 
-            # Auto-sample lot previews for every candidate so the picker's
-            # "What's in this auction" column is populated without the user
-            # having to click a second button. Cheap (one GraphQL call per
-            # auction, batched 15-wide).
-            cat_samples_map: dict = {}
-            if candidates:
-                st.write(f"Previewing lots for **{len(candidates)}** auctions…")
-                sample_progress = st.progress(0, text="Sampling 0/…")
-
-                def _auto_sample_prog(current, total, label=""):
-                    pct = current / total if total > 0 else 1.0
-                    sample_progress.progress(
-                        min(pct, 1.0), text=label or f"{current}/{total}",
-                    )
-
-                try:
-                    cat_samples_map = run_async(
-                        scraper.sample_categories_batch(
-                            candidates, sample_size=20,
-                            progress_callback=_auto_sample_prog,
-                        )
-                    )
-                except Exception:
-                    # Sampling is a nice-to-have; never fail the whole
-                    # discovery just because a preview call blew up.
-                    cat_samples_map = {}
-                sample_progress.empty()
-                st.session_state.category_samples = cat_samples_map
-
+            # STREAMED DISCOVERY: stop here, render the auction list
+            # immediately, then continue sampling per-auction in the
+            # background phase below. The previous flow blocked the
+            # entire discovery on the slow per-auction sample step
+            # (~25-30s for 200 auctions); now the list is usable in
+            # ~5-10s and samples trickle in without blocking the user.
             if candidates:
                 discover_result_msg = (
                     f"✅ Found {len(candidates)} candidate auction(s). "
-                    "Pick which to deep-scan below."
+                    "Loading content previews in the background…"
                 )
                 status_box.update(
-                    label=f"✅ Found {len(candidates)} auctions",
+                    label=(
+                        f"✅ Found {len(candidates)} auctions — "
+                        f"samples loading in background"
+                    ),
                     state="complete", expanded=False,
                 )
-                # Persist so the next page load / tab refresh restores
-                # this list automatically (24h TTL).
+                # Persist the candidate list now (without samples) so
+                # the next page load / tab refresh restores it. The
+                # samples will be added to the same cache file on the
+                # background sampling pass below.
                 _save_cached_discovery(
                     candidates,
                     st.session_state.get('_sourcing_cfg', {}),
-                    cat_samples_map,
+                    {},  # samples filled in by Phase 1b
                 )
-                # Fresh run supersedes any restored-from-disk marker.
                 st.session_state.pop('_discovery_restored_from', None)
+                # Flag the next render to continue with sample
+                # batching. The auction list renders immediately
+                # because discover_running is about to flip False.
+                st.session_state._sampling_pending = True
             else:
                 discover_result_msg = "⚠️ No auctions matched your filters."
                 status_box.update(
                     label="⚠️ No matching auctions",
                     state="error", expanded=True,
                 )
+                st.session_state._sampling_pending = False
         except Exception as e:
             import traceback
             discover_error = f"{type(e).__name__}: {e}"
@@ -2427,6 +2555,95 @@ if st.session_state.get('discover_running'):
         "msg": discover_result_msg,
     }
     st.rerun()
+
+
+# ================================================================
+# WORK BLOCK: Phase 1b — background auction-content sampling
+# ================================================================
+# Streamed discovery splits the slow part (sample lot titles per
+# auction) out of the discovery work block above. The candidate
+# list renders immediately after Phase 1a completes; this block
+# fires on the next render and fills in the samples without
+# blocking the user. The picker tolerates empty samples (the
+# "What's in this auction" column is just blank for unsampled
+# rows) so the user can already start scanning / filtering.
+if st.session_state.get('_sampling_pending'):
+    _keep_screen_awake()
+    candidates = st.session_state.get('auction_candidates', []) or []
+    if not candidates:
+        st.session_state._sampling_pending = False
+    else:
+        cfg = st.session_state.get('_sourcing_cfg', {})
+        scraper = Phase1Scraper(config_path="config.json")
+        scraper.zip_code = cfg.get("zip", "")
+        scraper.radius = cfg.get("radius", 20)
+        scraper.include_nationwide = cfg.get("include_nationwide", True)
+
+        with st.status(
+            f"🔍 Phase 1b: Loading content previews for "
+            f"{len(candidates)} auctions in the background…",
+            expanded=True,
+        ) as sample_status_box:
+            st.write(
+                "The auction list above is already usable — this step "
+                "fills in the **'What's in this auction'** preview "
+                "column + BOLO hints. Click an auction or run "
+                "**🎯 Scan all** anytime; you don't have to wait."
+            )
+            sample_progress = st.progress(
+                0, text=f"Sampling 0/{len(candidates)}…"
+            )
+
+            def _bg_sample_prog(current, total, label=""):
+                pct = current / total if total > 0 else 1.0
+                sample_progress.progress(
+                    min(pct, 1.0),
+                    text=label or f"Sampled {current}/{total}",
+                )
+
+            cat_samples_map: dict = {}
+            try:
+                cat_samples_map = run_async(
+                    scraper.sample_categories_batch(
+                        candidates,
+                        sample_size=8,    # was 20 — 60% smaller payload
+                        batch_size=30,    # was 15 — 2x concurrency
+                        progress_callback=_bg_sample_prog,
+                    )
+                )
+            except Exception:
+                # Sampling is a nice-to-have — never stall the picker
+                # because a preview call blew up. Empty dict means the
+                # picker just shows blank previews; user can still
+                # operate normally.
+                cat_samples_map = {}
+            sample_progress.empty()
+
+            st.session_state.category_samples = cat_samples_map
+            # Refresh the persisted cache with the sample data so the
+            # next session restore includes them. The candidate list
+            # was already saved in Phase 1a; this update merges the
+            # samples into the same file.
+            try:
+                _save_cached_discovery(
+                    candidates,
+                    st.session_state.get('_sourcing_cfg', {}),
+                    cat_samples_map,
+                )
+            except Exception:
+                pass
+
+            sampled = len(cat_samples_map)
+            sample_status_box.update(
+                label=(
+                    f"✅ Phase 1b: Loaded previews for "
+                    f"{sampled} of {len(candidates)} auctions"
+                ),
+                state="complete", expanded=False,
+            )
+
+        st.session_state._sampling_pending = False
+        st.rerun()
 
 
 # ================================================================
@@ -3490,6 +3707,34 @@ def _apply_comps_filters(good_df):
             dropped = before - len(df)
             if dropped:
                 reasons.append(f"{dropped} not image-promoted")
+
+    # Skip comps when next-bid floor exceeds the user's threshold.
+    # Lots already bid above $100 (default) have squeezed margins —
+    # the comp spend rarely pays back. Per-user-tunable cap. We
+    # check `next_bid` first (the actual price-floor to bid on the
+    # lot), fall back to `current_bid` if next_bid isn't populated.
+    skip_above = float(
+        st.session_state.get('comps_skip_above_bid', 100.0) or 0
+    )
+    if skip_above > 0:
+        before = len(df)
+        if 'next_bid' in df.columns:
+            bid_col = pd.to_numeric(df['next_bid'], errors='coerce')
+        elif 'current_bid' in df.columns:
+            bid_col = pd.to_numeric(df['current_bid'], errors='coerce')
+        else:
+            bid_col = None
+        if bid_col is not None:
+            # Keep rows where bid floor is at-or-below the cap, OR
+            # the bid is missing entirely (don't filter blindly on
+            # NaN — those rows haven't been priced yet).
+            keep_mask = bid_col.fillna(0) <= skip_above
+            df = df[keep_mask]
+            dropped = before - len(df)
+            if dropped:
+                reasons.append(
+                    f"{dropped} skipped — next-bid > ${skip_above:.0f}"
+                )
 
     # Top-N by bid
     max_lots = int(st.session_state.get('comps_max_lots', 0) or 0)
@@ -5886,7 +6131,7 @@ if current_auction and not st.session_state.selected_leads.empty:
             "🎚️ Spend caps — optional filters before confirming",
             expanded=_is_bolo_saturated,
         ):
-            cap_c1, cap_c2, cap_c3 = st.columns(3)
+            cap_c1, cap_c2 = st.columns(2)
             with cap_c1:
                 _gate_min_bid = st.number_input(
                     "Min bid floor ($)",
@@ -5901,6 +6146,27 @@ if current_auction and not st.session_state.selected_leads.empty:
                          "rarely pays back. Try $5–10.",
                 )
             with cap_c2:
+                # Default to whatever's in session state (initial $100)
+                # so adjusting it persists across reruns. Set to 0 to
+                # disable the cap.
+                _gate_skip_above = st.number_input(
+                    "Skip if next-bid > ($)  (0 = no cap)",
+                    min_value=0.0,
+                    value=float(
+                        st.session_state.get('comps_skip_above_bid', 100.0)
+                    ),
+                    step=10.0, format="%.2f",
+                    key="comps_skip_above_bid",
+                    help="Skip the comp step on lots whose next-bid floor "
+                         "is above this dollar amount. Lots already bid "
+                         "up that high have squeezed margins — the comp "
+                         "spend rarely pays back. Default $100. Lowest "
+                         "spend impact: try $50 if you only want to "
+                         "auto-evaluate true bargain finds.",
+                )
+
+            cap_c3, cap_c4 = st.columns(2)
+            with cap_c3:
                 _gate_top_n = st.number_input(
                     "Cap to top N by bid (0 = no cap)",
                     min_value=0,
@@ -5914,7 +6180,7 @@ if current_auction and not st.session_state.selected_leads.empty:
                          "spend on the highest-value lots first; the "
                          "long tail can be re-run later if needed.",
                 )
-            with cap_c3:
+            with cap_c4:
                 _has_tier_data = (
                     ar_with_bolo is not None
                     and 'bolo_tier' in ar_with_bolo.columns
@@ -5950,6 +6216,30 @@ if current_auction and not st.session_state.selected_leads.empty:
                     _trim_reasons.append(
                         f"{_cut} dropped below ${_gate_min_bid:.2f} bid"
                     )
+
+            # Skip-above-bid filter: drop lots whose next-bid floor is
+            # above the threshold. Mirrors the runtime filter inside
+            # _apply_comps_filters so the metric/button cost reflects
+            # the same trim.
+            if _gate_skip_above > 0:
+                if 'next_bid' in _capped.columns:
+                    _bid_col = pd.to_numeric(
+                        _capped['next_bid'], errors='coerce'
+                    )
+                elif 'current_bid' in _capped.columns:
+                    _bid_col = pd.to_numeric(
+                        _capped['current_bid'], errors='coerce'
+                    )
+                else:
+                    _bid_col = None
+                if _bid_col is not None:
+                    _before = len(_capped)
+                    _capped = _capped[_bid_col.fillna(0) <= _gate_skip_above]
+                    _cut = _before - len(_capped)
+                    if _cut:
+                        _trim_reasons.append(
+                            f"{_cut} skipped — next-bid > ${_gate_skip_above:.0f}"
+                        )
 
             if _gate_tier1_only and ar_with_bolo is not None:
                 _before = len(_capped)

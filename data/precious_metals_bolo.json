@@ -1,0 +1,243 @@
+{
+  "schema_version": "1.0",
+  "domain": "precious_metals",
+  "last_updated": "2026-05-04",
+  "summary": "Items made of precious metals — sterling silver, solid gold (10K-24K), gold-filled, and platinum. The signal is the metal-content marker, not a brand: '.925', 'sterling', '14K gold', '1/20 12K GF', 'platinum'. These items have an intrinsic floor price equal to the melt value of their metal content, often in the $30-300 range for jewelry. Auction listings frequently bury this in title or description ('vintage chain — marked .925'). The matcher catches both explicit metal-content markers AND the abbreviated forms (S925, 14K, GF). CRITICAL: hard negative guards block plated / tone / filled-base impostors — a 'silver-plated bowl' or 'gold-tone necklace' is base-metal commodity, NOT precious metal.",
+  "field_workflow": [
+    "Photograph the maker's mark / metal-content stamp clearly — usually inside ring band, on clasp, or hidden in a jewelry-piece interior",
+    "Sterling: '925' or 'sterling' or '.925' (US standard); '950' (high-grade); '800' (continental European, lower silver content)",
+    "Gold karat: 10K (41.7% gold), 14K (58.3%), 18K (75%), 22K (91.7%), 24K (99.9% pure)",
+    "Gold-filled: '1/20 12K GF' means 12K gold layer = 1/20 (5%) of total weight; valued at ~5-10% of solid gold equivalent",
+    "Gold-plated / RGP / rolled-gold plate: thinner gold layer over base metal, NEAR-ZERO precious-metal value, treat as costume",
+    "Platinum: '950', 'PLAT', 'PT950', '950 PT' — denser than silver, ~20× more valuable than silver per gram",
+    "Acid test if uncertain — drop of nitric acid + observation chart confirms karat (collector tools $20)",
+    "Weight matters: a 30g sterling chain has ~$25 melt floor; a 30g 14K gold chain has ~$1100 melt floor"
+  ],
+  "skip_list": [
+    "Silver-tone (base metal cosmetic finish)",
+    "Silver-plated / silverplate / EPNS (electroplated nickel silver)",
+    "Gold-tone / gold tone (base metal cosmetic finish)",
+    "Gold-plated / gold plate / GP (thin gold layer, near-zero melt value)",
+    "Costume jewelry (commodity base metal)",
+    "Fashion jewelry (mass-market base metal)",
+    "German silver / nickel silver (no actual silver content)",
+    "Mexican silver alpaca (alpaca = nickel-zinc-copper alloy, despite the 'Mexican silver' marketing label)"
+  ],
+  "brands": [
+    {
+      "brand": "Sterling silver",
+      "category": "precious_metal",
+      "tier": 1,
+      "models": [
+        ".925", "925 silver", "925 sterling",
+        "S925", "Ster",
+        "Sterling .925", "Sterling Silver",
+        "Solid sterling", "Solid silver",
+        "STG sterling", "STER 925",
+        "Italy 925", "Mexico 925",
+        "Sterling chain", "Sterling necklace",
+        "Sterling ring", "Sterling bracelet",
+        "Sterling earring", "Sterling pendant",
+        "Sterling charm", "Sterling pin",
+        "Sterling cufflink", "Sterling brooch",
+        "Sterling flatware", "Sterling spoon",
+        "Sterling fork", "Sterling knife",
+        "Sterling tray", "Sterling bowl",
+        "Sterling candlestick", "Sterling tea set",
+        "Sterling overlay", "Sterling repousse",
+        "Mexican sterling silver", "Taxco sterling",
+        "Native American sterling", "Navajo sterling",
+        "Hopi sterling", "Zuni sterling",
+        "Sterling weight"
+      ],
+      "era_markers": [
+        "'.925' or '925' or 'STERLING' stamp on the piece (clasp, inside ring band, base of flatware)",
+        "Maker's mark adjacent to silver-content stamp (Reed & Barton, Tiffany, Gorham, Kirk Stieff)",
+        "'Italy 925' = Italian sterling (premium chains, vermeil)",
+        "'Taxco' = Mexican sterling (signed Taxco pieces command premium)",
+        "Native American sterling: hallmark + tribe name (Navajo, Hopi, Zuni)",
+        "Vintage hand-wrought sterling (pre-1950) holds 30-50% premium over modern factory pieces"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Sterling silver melt value (Aug 2026 spot)", "low": 0.85, "high": 1.10, "_note": "USD per gram"},
+        {"item": "Sterling chain 20g (loose, no maker)", "low": 25, "high": 50},
+        {"item": "Sterling chain 30g vintage Italian", "low": 60, "high": 130},
+        {"item": "Sterling Tiffany / Gucci / Cartier signed piece", "low": 80, "high": 600},
+        {"item": "Native American sterling (signed Navajo / Hopi)", "low": 60, "high": 400},
+        {"item": "Sterling flatware Reed & Barton / Gorham (8-piece place setting)", "low": 200, "high": 700},
+        {"item": "Sterling tea set 4-piece vintage", "low": 400, "high": 1500},
+        {"item": "Mexican Taxco signed sterling brooch", "low": 80, "high": 300}
+      ],
+      "target_buy_usd": {"low": 5, "high": 80},
+      "platform_primary": "eBay",
+      "platform_secondary": "Etsy",
+      "comp_query_template": "sterling silver {item} {weight}",
+      "ship_class": "poly_mailer",
+      "notes": "Sterling silver has an intrinsic melt-value floor (~$0.95/gram in 2026). Above that floor, signed maker pieces (Tiffany / Cartier / Gucci / Reed & Barton / Gorham / Kirk Stieff / Taxco / Native American hallmarks) trade at significant premium. Always weigh the piece — the market sets prices on weight × premium-over-melt. Counterfeit risk is HIGH on signed pieces (especially Tiffany blue-pouch knockoffs); verify hallmarks before paying premium prices.",
+      "condition_critical": false,
+      "_disqualifiers": [
+        "silver tone", "silver-tone",
+        "silver plate", "silver-plate", "silverplate", "silver plated", "silver-plated",
+        "epns", "german silver", "nickel silver",
+        "mexican silver alpaca", "alpaca silver",
+        "rhodium silver", "silver tone metal"
+      ]
+    },
+    {
+      "brand": "Solid gold (10K-24K)",
+      "category": "precious_metal",
+      "tier": 1,
+      "models": [
+        "10K gold", "14K gold", "18K gold", "22K gold", "24K gold",
+        "10kt gold", "14kt gold", "18kt gold", "22kt gold", "24kt gold",
+        "10 K gold", "14 K gold", "18 K gold",
+        "10K solid gold", "14K solid gold", "18K solid gold",
+        "Solid 10K", "Solid 14K", "Solid 18K", "Solid 22K",
+        "10K white gold", "14K white gold", "18K white gold",
+        "10K yellow gold", "14K yellow gold", "18K yellow gold",
+        "10K rose gold", "14K rose gold", "18K rose gold",
+        "9K gold", "9K solid gold",
+        "375 gold", "417 gold", "585 gold", "750 gold", "916 gold",
+        "10K stamp", "14K stamp", "18K stamp",
+        "10K marked", "14K marked", "18K marked",
+        "10K hallmark", "14K hallmark", "18K hallmark",
+        "10K chain", "14K chain", "18K chain",
+        "10K ring", "14K ring", "18K ring",
+        "10K bracelet", "14K bracelet", "18K bracelet",
+        "10K necklace", "14K necklace", "18K necklace",
+        "10K earring", "14K earring", "18K earring",
+        "10K pendant", "14K pendant", "18K pendant",
+        "Italian 14K", "Italian 18K",
+        "Italy 14K", "Italy 18K",
+        "Estate 14K", "Estate 18K",
+        "Vintage 14K", "Vintage 18K"
+      ],
+      "era_markers": [
+        "'10K' / '14K' / '18K' stamp inside ring band or on chain clasp",
+        "European hallmarks: '375' (9K), '417' (10K), '585' (14K), '750' (18K), '916' (22K)",
+        "Makers' mark adjacent to karat stamp (Cartier, Tiffany, Bulgari premium)",
+        "'Italy' stamp on Italian-made gold chains = strong resale signal",
+        "Acid-test confirmation when stamp is illegible / suspicious"
+      ],
+      "comp_ranges_usd": [
+        {"item": "14K gold melt (Aug 2026 spot)", "low": 38, "high": 42, "_note": "USD per gram"},
+        {"item": "18K gold melt (Aug 2026 spot)", "low": 48, "high": 54, "_note": "USD per gram"},
+        {"item": "14K gold chain 5g loose", "low": 130, "high": 220},
+        {"item": "14K gold chain 15g loose", "low": 380, "high": 700},
+        {"item": "18K gold chain 10g vintage Italian", "low": 400, "high": 800},
+        {"item": "14K gold ring with diamond / gemstone", "low": 200, "high": 1500},
+        {"item": "Cartier / Tiffany / Bulgari signed 18K", "low": 600, "high": 6000}
+      ],
+      "target_buy_usd": {"low": 30, "high": 400},
+      "platform_primary": "eBay",
+      "platform_secondary": "PawnAmerica / local jeweler",
+      "comp_query_template": "{karat} gold {item}",
+      "ship_class": "poly_mailer",
+      "notes": "Solid gold's intrinsic melt floor is THE pricing anchor. 14K gold trades at ~$40/gram melt in 2026; 18K at ~$50/gram. NEVER buy below 70% of melt — most pawn shops pay 60-80%, you can flip the difference. Auction lots with verified karat stamps + reasonable weight estimates are the resale apex of estate sales. Signed maker pieces (Cartier, Tiffany, Bulgari) trade 3-10× above melt. Counterfeit alert: stamps can be FAKED on plated pieces; acid-test or XRF before paying premium.",
+      "condition_critical": false,
+      "_disqualifiers": [
+        "gold tone", "gold-tone",
+        "gold plate", "gold-plate", "goldplate", "gold plated", "gold-plated",
+        "gold filled", "gold-filled",
+        "rolled gold", "rolled-gold", "rgp",
+        "vermeil",
+        "hge", "heavy gold electroplate",
+        "gp gold", " gp ",
+        "fashion jewelry", "costume jewelry",
+        "gold tone metal", "gold colored"
+      ]
+    },
+    {
+      "brand": "Gold-filled",
+      "category": "precious_metal",
+      "tier": 2,
+      "models": [
+        "gold filled", "gold-filled",
+        "1/10 12K GF", "1/10 12K G.F.",
+        "1/20 12K GF", "1/20 12K G.F.",
+        "1/20 14K GF", "1/20 14K G.F.",
+        "1/40 14K GF", "1/40 14K G.F.",
+        "12K GF", "14K GF", "12K G.F.", "14K G.F.",
+        "12K gold filled", "14K gold filled",
+        "Gold filled chain", "Gold-filled chain",
+        "Gold filled ring", "Gold-filled ring",
+        "Gold filled bracelet", "Gold-filled bracelet",
+        "Gold filled locket", "Gold-filled locket",
+        "Gold filled pin", "Gold-filled pin",
+        "Gold filled brooch", "Gold-filled brooch",
+        "Gold filled cuff", "Gold-filled cufflinks",
+        "Vintage gold filled", "Vintage gold-filled",
+        "GF chain", "GF locket"
+      ],
+      "era_markers": [
+        "Stamp like '1/20 12K GF' = 1/20 of total weight is 12K gold layer",
+        "'1/10' fractions = thicker gold layer (premium)",
+        "GF stamp paired with karat (12K GF, 14K GF) on inside of jewelry pieces",
+        "Vintage gold-filled (pre-1970) often holds 1/20 12K GF marking — collector tier",
+        "Modern 'gold-filled' jewelry (post-1970) less premium but still valued"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Gold-filled chain 30g vintage", "low": 30, "high": 80},
+        {"item": "Vintage GF locket signed (Krementz, Carl-Art)", "low": 50, "high": 180},
+        {"item": "Gold-filled cufflinks vintage", "low": 30, "high": 100},
+        {"item": "Gold-filled pocket watch chain Albert", "low": 60, "high": 200}
+      ],
+      "target_buy_usd": {"low": 3, "high": 30},
+      "platform_primary": "eBay",
+      "platform_secondary": "Etsy",
+      "comp_query_template": "vintage gold filled {item}",
+      "ship_class": "poly_mailer",
+      "notes": "Gold-filled jewelry has a thick gold layer (typically 5-10% of total weight) bonded to base metal. Valued at ~5-10% of solid-gold equivalent — meaningful resale floor on heavy chains/lockets. Vintage gold-filled (pre-1970) from signed makers (Krementz, Carl-Art, Speidel) commands premium over modern. NOT to be confused with gold-plated / RGP, which is much thinner."
+    },
+    {
+      "brand": "Platinum",
+      "category": "precious_metal",
+      "tier": 1,
+      "models": [
+        "Platinum ring", "Platinum band", "Platinum chain",
+        "Platinum necklace", "Platinum bracelet",
+        "Platinum earring", "Platinum pendant",
+        "Platinum cufflink", "Platinum brooch",
+        "Platinum wedding band", "Platinum engagement ring",
+        "PT950", "PT 950", "950 PT", "950 platinum",
+        "PT900", "PT 900", "900 platinum",
+        "Plat 950", "Plat 900",
+        "Solid platinum", "Pure platinum",
+        "Iridium platinum",
+        "Plat ring", "Plat band"
+      ],
+      "era_markers": [
+        "'PT950' / 'PT900' stamps inside ring band (US standard)",
+        "'950 PLAT' or 'IRIDPLAT' (iridium-platinum alloy, vintage premium)",
+        "Higher density than silver — 21.5g/cm³ vs silver 10.5",
+        "Maker's mark + platinum stamp on premium pieces (Tiffany, Cartier, Harry Winston)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Platinum melt (Aug 2026 spot)", "low": 30, "high": 35, "_note": "USD per gram"},
+        {"item": "Platinum wedding band 5g", "low": 200, "high": 380},
+        {"item": "Platinum engagement ring with stone", "low": 600, "high": 4500},
+        {"item": "Tiffany / Cartier signed platinum", "low": 800, "high": 8000}
+      ],
+      "target_buy_usd": {"low": 60, "high": 600},
+      "platform_primary": "eBay",
+      "platform_secondary": "specialty estate jewelers",
+      "comp_query_template": "platinum {item} pt950",
+      "ship_class": "poly_mailer",
+      "notes": "Platinum is denser and ~25% more valuable per gram than 14K gold. Most platinum jewelry is wedding bands or engagement-ring settings. 'IRIDPLAT' (iridium-platinum alloy) is a vintage premium variant. Verify the PT stamp; counterfeit-platinum (silver pretending) is uncommon but exists.",
+      "condition_critical": false,
+      "_disqualifiers": [
+        "platinum membership", "platinum credit card",
+        "platinum subscription", "platinum tier",
+        "platinum edition", "platinum collection",
+        "platinum hair", "platinum blonde",
+        "platinum record", "platinum album"
+      ]
+    }
+  ],
+  "platform_notes": {
+    "eBay": "Dominant marketplace for precious-metals jewelry. Filter by 'Sold listings' to see real clearing prices. Heavy items (>20g) move via weight × premium pricing.",
+    "Etsy": "Vintage 20+ years old gets 10-20% Etsy lift, especially for signed pieces (Taxco, Krementz, Native American hallmarks).",
+    "Local pawn / refiner": "Melt floor — pays 60-80% of spot. Use as 'never below this price' anchor when bidding.",
+    "Specialty estate jewelers": "Premium buyers for signed maker pieces (Cartier, Tiffany, Bulgari, Van Cleef) — pay 70-90% of retail comp."
+  }
+}

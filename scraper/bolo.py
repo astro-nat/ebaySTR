@@ -73,10 +73,16 @@ DEFAULT_BOLO_PATHS: List[Path] = [
     Path("data") / "apple_products_bolo.json",
     Path("data") / "golf_equipment_bolo.json",
     Path("data") / "audio_watches_bolo.json",
+    Path("data") / "watch_accessories_bolo.json",
+    Path("data") / "musical_instruments_bolo.json",
     Path("data") / "camera_equipment_bolo.json",
     Path("data") / "auto_parts_bolo.json",
     Path("data") / "lightweight_collectibles_bolo.json",
     Path("data") / "estate_collectibles_bolo.json",
+    # Precious-metals loads LAST so brand-specific entries (Tiffany,
+    # Cartier, Native American jewelry) take precedence — those have
+    # higher resale ceilings than the generic precious-metal floor.
+    Path("data") / "precious_metals_bolo.json",
 ]
 # Back-compat single-path constant for callers that import it.
 DEFAULT_BOLO_PATH = DEFAULT_BOLO_PATHS[0]
@@ -141,6 +147,114 @@ _HARD_SKIP_PATTERNS: List[str] = [
 _BRAND_ALIASES: Dict[str, List[str]] = {
     # JSON header → list of literal phrases to match in the haystack
     "Loungefly":                              ["loungefly"],
+    # Musical instruments — narrow brand aliases. Pass 2f handles
+    # implicit matches via model-name + instrument-context words.
+    "Premium harmonicas":                     [
+        "hohner", "lee oskar", "seydel",
+        # "suzuki" is too broad (cars, motorcycles); we rely on
+        # model-context matching for it via Pass 2f.
+    ],
+    "Premium microphones":                    [
+        "shure", "neumann", "sennheiser",
+        # AKG, Royer, Telefunken are audio-only brands — safe to
+        # alias even without context. Bare "akg" risks people's
+        # initials but the model number adjacent disambiguates.
+        "akg", "royer", "telefunken",
+        # "rca" / "coles" / "electro-voice" / "heil" — bare brand
+        # too generic / overlapping (RCA = electronics, EV = trucks),
+        # so model-context matching via Pass 2f handles them.
+    ],
+    "Effects pedals (guitar/bass)":           [
+        "boss pedal", "boss compact",
+        "mxr", "ibanez", "electro-harmonix",
+        "klon centaur", "strymon", "eventide",
+        "empress effects", "chase bliss",
+        "jhs pedals", "earthquaker devices",
+        "walrus audio", "proco rat",
+        # Bare "ibanez" is fine (most contexts are guitar/pedal),
+        # bare "boss" is too generic so we use compound aliases.
+    ],
+    "Sax / clarinet mouthpieces":             [
+        "otto link", "vandoren",
+        "berg larsen", "dukoff", "lawton mouthpiece",
+        "brillhart mouthpiece", "ponzol mouthpiece",
+        # "selmer" / "meyer" too generic — model-context matched.
+    ],
+    "Guitar pickups (standalone)":            [
+        "seymour duncan", "dimarzio", "bill lawrence pickup",
+        "lollar pickup", "tv jones", "fralin pickup",
+        # "EMG" only in audio context, "Gibson" / "Fender" too
+        # broad — model-context matched.
+    ],
+    "Music boxes + cylinder boxes":           [
+        "reuge", "thorens music", "lador",
+        "polyphon", "symphonion",
+        # "sankyo" / "regina" / "stella" too generic; model-context.
+    ],
+    "Drum machines + samplers (small format)": [
+        "teenage engineering", "akai mpc",
+        "elektron model:",
+        # "roland" / "korg" / "boss" / "akai" / "pioneer" all
+        # too generic — model-context matched.
+    ],
+    "DJ cartridges / needles":                [
+        "ortofon concorde",
+        # "shure" already aliased on microphones, "stanton"
+        # / "audio-technica" model-context matched.
+    ],
+    "Premium ukuleles":                       [
+        "kamaka", "koaloha", "kanile'a", "kanilea",
+        "ukulele",
+        # "kala" / "pono" / "martin" too generic; "ukulele"
+        # word in title is the clearest signal.
+    ],
+    # Precious metals — alias keys ARE the metal-content markers
+    # themselves (no brand). Disqualifier guards (silver-tone /
+    # gold-plate / etc.) are applied per-brand in Pass 1 from the
+    # JSON's `_disqualifiers` array. We use specific compound
+    # phrases rather than bare "silver" / "gold" to avoid
+    # false-positive runs on costume jewelry.
+    "Sterling silver":                        [
+        ".925", "925 silver", "925 sterling",
+        "sterling silver", "solid sterling", "solid silver",
+        "s925",
+    ],
+    "Solid gold (10K-24K)":                   [
+        "10k gold", "14k gold", "18k gold", "22k gold", "24k gold",
+        "10kt gold", "14kt gold", "18kt gold", "22kt gold",
+        "10k solid gold", "14k solid gold", "18k solid gold",
+        "solid 14k", "solid 18k", "solid 10k",
+    ],
+    "Gold-filled":                            [
+        "gold filled", "gold-filled",
+        "12k gf", "14k gf", "12k g.f.", "14k g.f.",
+        "1/20 12k gf", "1/20 14k gf", "1/10 12k gf",
+        "12k gold filled", "14k gold filled",
+    ],
+    "Platinum":                               [
+        "pt950", "pt900", "950 platinum", "900 platinum",
+        "platinum ring", "platinum band", "platinum chain",
+        "platinum necklace", "platinum bracelet",
+        "platinum earring", "platinum pendant",
+        "platinum wedding band", "platinum engagement",
+        "iridplat", "iridium platinum", "solid platinum",
+    ],
+    # Watch accessories — luxury-only, brand-name aliases. Implicit
+    # matching (e.g., "Submariner box" without "Rolex" in title) is
+    # handled by the Pass 2c branch in the matcher.
+    "Rolex accessories":                      ["rolex", "tudor"],
+    "Omega accessories":                      ["omega"],
+    "Patek Philippe accessories":             ["patek philippe", "patek"],
+    "Audemars Piguet accessories":            ["audemars piguet", " ap "],
+    "Cartier accessories":                    ["cartier"],
+    "Other Swiss luxury accessories":         [
+        "vacheron constantin", "vacheron",
+        "breitling", "iwc", "panerai",
+        "jaeger-lecoultre", "jaeger lecoultre", "jlc",
+        "tag heuer", "heuer",
+        "zenith", "grand seiko", "hublot",
+        "bell & ross", "bell ross",
+    ],
     "Lululemon":                              ["lululemon"],
     "Alo Yoga":                               ["alo yoga", "alo "],
     "Athleta":                                ["athleta"],
@@ -1476,6 +1590,18 @@ class BoloMatcher:
                 (tier == 3 and category in ("luxury", "luxury_mid", "sneakers"))
                 or canonical == "Polo Ralph Lauren premium sublines"
             )
+            # Per-brand disqualifier list: when any of these phrases
+            # appears in the haystack, the brand alias match is REJECTED.
+            # Used by precious-metals entries to block "silver-plated" /
+            # "gold-tone" / "platinum membership" false positives.
+            # Phrases are case-insensitive substring checks (NOT regex)
+            # for speed and predictable behavior.
+            disqualifier_phrases = entry.get("_disqualifiers") or []
+            disqualifier_phrases = [
+                str(p).lower() for p in disqualifier_phrases
+                if isinstance(p, str) and p
+            ]
+
             brand_meta[canonical] = {
                 "tier": tier,
                 "category": category,
@@ -1487,6 +1613,7 @@ class BoloMatcher:
                 "notes": entry.get("notes") or "",
                 "era_markers": entry.get("era_markers") or [],
                 "auth_required": auth_required,
+                "disqualifier_phrases": disqualifier_phrases,
             }
 
             for ap in alias_pats:
@@ -1580,6 +1707,15 @@ class BoloMatcher:
         for canonical, alias_pat, model_pats in self._brand_patterns:
             if not alias_pat.search(haystack):
                 continue
+            # Per-brand disqualifier check: e.g., precious-metals
+            # entries reject when "silver-plated" / "gold-tone" /
+            # "platinum membership" appears in the haystack — those
+            # are base-metal commodity / unrelated-context lots that
+            # would otherwise false-positive on a metal-content alias.
+            _meta = self._brand_meta.get(canonical) or {}
+            _disqs = _meta.get("disqualifier_phrases") or []
+            if _disqs and any(d in haystack for d in _disqs):
+                continue
             for m_name, m_pat in model_pats:
                 if m_pat.search(haystack):
                     return self._build_match(canonical, m_name, confidence="strong")
@@ -1608,6 +1744,117 @@ class BoloMatcher:
                     continue
                 if m_pat.search(haystack):
                     return self._build_match(canonical, m_name, confidence="model_only")
+
+        # Pass 2e: Precious-metal model-only.
+        # Titles like "Taxco Mexican sterling brooch" or "Sterling
+        # spoon Gorham" don't contain the alias phrase "sterling
+        # silver" / ".925" — they use the bare word "sterling" plus
+        # a jewelry/flatware context. The model list in the JSON
+        # ("Sterling chain", "Taxco sterling", "Sterling spoon",
+        # etc.) covers these compound forms. Fire model-only matching
+        # for precious_metal-category brands so they catch the
+        # implicit cases. Per-brand disqualifier check still applies
+        # so silver-plate / gold-tone / platinum-membership false
+        # positives stay rejected.
+        for canonical, m_name, m_pat in self._model_patterns:
+            _meta = self._brand_meta.get(canonical) or {}
+            if _meta.get("category") != "precious_metal":
+                continue
+            _disqs = _meta.get("disqualifier_phrases") or []
+            if _disqs and any(d in haystack for d in _disqs):
+                continue
+            if m_pat.search(haystack):
+                return self._build_match(
+                    canonical, m_name, confidence="model_only"
+                )
+
+        # Pass 2f: Musical-instrument model-only.
+        # Many titles include the model name without a brand-aliased
+        # phrase — "TR-606 vintage drum machine", "M44-7 cartridge",
+        # "Tube Screamer pedal", "TS-808 vintage". Fire model-only
+        # matching for the musical_instrument category gated on
+        # instrument-context words so a "Roland TR-606" tractor or
+        # something equally weird doesn't false-positive.
+        #
+        # Negative guards: skip lots that are clearly the BIG-format
+        # versions we explicitly excluded (electric guitar, sax body,
+        # full drum kit, amp head). Even if a model word matches
+        # somewhere in the title, those are not what we want.
+        _music_skip = (
+            "electric guitar" in haystack
+            or "acoustic guitar" in haystack
+            or "bass guitar" in haystack
+            or " guitar body" in haystack
+            or " saxophone" in haystack
+            or " trumpet" in haystack
+            or " trombone" in haystack
+            or " drum kit" in haystack
+            or " drum set" in haystack
+            or " amplifier head" in haystack
+            or "amp combo" in haystack
+            or " tuba" in haystack
+            or " french horn" in haystack
+            or " cello" in haystack
+            or " viola" in haystack
+        )
+        if not _music_skip and any(w in haystack for w in (
+            "harmonica", "microphone", " mic ", " mic,", " mic.",
+            "pedal", "stompbox", "stomp box",
+            "mouthpiece", "pickup", "humbucker", " single coil",
+            "music box", "cylinder box",
+            "drum machine", "groovebox", "synthesizer", " synth ",
+            "sampler", "sequencer",
+            "cartridge", "needle", "stylus", "turntable",
+            "ukulele",
+        )):
+            for canonical, m_name, m_pat in self._model_patterns:
+                _meta = self._brand_meta.get(canonical) or {}
+                if _meta.get("category") != "musical_instrument":
+                    continue
+                if m_pat.search(haystack):
+                    return self._build_match(
+                        canonical, m_name, confidence="model_only"
+                    )
+
+        # Pass 2c: Watch-accessory model-only. Auction listings often
+        # describe luxury watch accessories without mentioning the
+        # brand — they just say "Submariner box", "Speedmaster papers",
+        # "Daytona bracelet", "Nautilus papers", etc. The model name
+        # alone is sufficient signal because these names are
+        # essentially trademarks (no other brand makes a "Submariner"
+        # or "Speedmaster"). Gate on accessory-context words
+        # (box / papers / bracelet / certificate / warranty / pouch /
+        # winder / hangtag) so a "Submariner watch" alone doesn't
+        # match (that's the watch itself, which is a different
+        # category — we want the accessory).
+        #
+        # Negative guards: skip generic display boxes / kid's
+        # toys / aftermarket organizers, which are NOT luxury OEM
+        # accessories.
+        _watch_acc_skip = (
+            "watch box organizer" in haystack
+            or "watch box display" in haystack
+            or "watch case organizer" in haystack
+            or "for 6 watches" in haystack
+            or "for 12 watches" in haystack
+            or "for 24 watches" in haystack
+            or "watch box for" in haystack
+            or "kids watch" in haystack
+            or "toy watch" in haystack
+            or "aftermarket box" in haystack
+        )
+        if not _watch_acc_skip and any(w in haystack for w in (
+            " box", " papers", " certificate", " warranty",
+            " bracelet", " pouch", " winder", " hangtag",
+            " hang tag", " booklet", " case",
+        )):
+            for canonical, m_name, m_pat in self._model_patterns:
+                if "accessories" not in (canonical or ""):
+                    continue
+                if m_pat.search(haystack):
+                    return self._build_match(
+                        canonical, m_name, confidence="model_only"
+                    )
 
         # Pass 2b: Loungefly model-only. Auction listings frequently
         # describe Loungefly products without mentioning the brand

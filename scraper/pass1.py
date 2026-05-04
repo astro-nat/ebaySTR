@@ -531,31 +531,78 @@ class Phase1Scraper:
                 progress_callback(current, total, label)
 
         async with httpx.AsyncClient() as client:
-            _report(0, 3, f"Querying HiBid for local auctions within {self.radius} mi of {self.zip_code or '(any)'}…")
-            local_auctions = await self.fetch_auctions(client, self.zip_code, self.radius)
-            local_raw_count = len(local_auctions)
-            local_auctions = self._filter_by_closing_date(local_auctions)
+            # Parallelize the local + nationwide GraphQL calls. They were
+            # sequential before — total Phase 1a was ~10s for two ~5s
+            # calls in series. Running them concurrently cuts that to
+            # ~5s wall-clock. asyncio.gather waits for both; if either
+            # raises, propagate (we want both to succeed for a correct
+            # candidate list).
+            _report(
+                0, 2,
+                f"Querying HiBid (local within {self.radius} mi of "
+                f"{self.zip_code or '(any)'}, nationwide in parallel)…"
+            )
+            # Hard outer timeout so a hung GraphQL request can't wedge
+            # the whole discovery indefinitely. httpx has its own per-
+            # request timeout (15s from config), but rare proxy /
+            # connection-pool edge cases can let a request sit
+            # waiting. The asyncio.wait_for here is a watchdog: 45s
+            # ceiling for the parallel pair, well above the expected
+            # ~5s.
+            try:
+                if self.include_nationwide:
+                    local_raw, nationwide_raw = await asyncio.wait_for(
+                        asyncio.gather(
+                            self.fetch_auctions(
+                                client, self.zip_code, self.radius
+                            ),
+                            self.fetch_auctions(client, "", 0),
+                        ),
+                        timeout=45.0,
+                    )
+                else:
+                    local_raw = await asyncio.wait_for(
+                        self.fetch_auctions(
+                            client, self.zip_code, self.radius
+                        ),
+                        timeout=45.0,
+                    )
+                    nationwide_raw = []
+            except asyncio.TimeoutError as e:
+                raise RuntimeError(
+                    "HiBid discovery timed out after 45s. The GraphQL "
+                    "endpoint is hung or the network connection is "
+                    "blocked. Try again in a moment."
+                ) from e
+
+            # Local processing (filter by closing date, mark source).
+            local_raw_count = len(local_raw)
+            local_auctions = self._filter_by_closing_date(local_raw)
             local_ids = {a['auction_id'] for a in local_auctions}
             for a in local_auctions:
                 a['source'] = 'Local Pickup'
             _report(
-                1, 3,
+                1, 2,
                 f"Local: {len(local_auctions)} kept "
                 f"(of {local_raw_count} returned, filtered by closing date)",
             )
 
+            # Nationwide processing.
             remote_auctions: List[Dict] = []
             if self.include_nationwide:
-                _report(1, 3, "Querying HiBid for nationwide shippable auctions…")
-                nationwide_raw = await self.fetch_auctions(client, "", 0)
-                remote_auctions = [a for a in nationwide_raw if a['auction_id'] not in local_ids]
+                remote_auctions = [
+                    a for a in nationwide_raw
+                    if a['auction_id'] not in local_ids
+                ]
                 pre_close_count = len(remote_auctions)
                 remote_auctions = self._filter_by_closing_date(remote_auctions)
-                remote_auctions = sorted(remote_auctions, key=lambda a: a.get('date_end', ''))
+                remote_auctions = sorted(
+                    remote_auctions, key=lambda a: a.get('date_end', ''),
+                )
                 for a in remote_auctions:
                     a['source'] = 'Ship'
                 _report(
-                    2, 3,
+                    2, 2,
                     f"Nationwide: {len(remote_auctions)} kept "
                     f"(of {len(nationwide_raw)} returned, "
                     f"{pre_close_count - len(remote_auctions)} dropped "
@@ -619,8 +666,8 @@ class Phase1Scraper:
         }
 
     async def sample_categories_batch(
-        self, auctions: List[Dict], sample_size: int = 20,
-        batch_size: int = 15, progress_callback=None,
+        self, auctions: List[Dict], sample_size: int = 8,
+        batch_size: int = 30, progress_callback=None,
     ) -> Dict[int, Dict[str, list]]:
         """Sample categories + titles for a batch of auctions concurrently.
 

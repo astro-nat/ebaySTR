@@ -255,6 +255,15 @@ def suggest_from_cache(
         if col in cache_df.columns:
             cache_df[col] = pd.to_numeric(cache_df[col], errors="coerce")
 
+    # Cached auctions saved BEFORE the comps step ran (e.g., audit-
+    # only cache writes from the streamed-discovery flow, or a comp
+    # run that errored out partway through) don't have the
+    # est_resale column. Without comps there's no way to score
+    # brand candidates, so return early — the user gets an empty
+    # suggestion list with no false drama.
+    if "est_resale" not in cache_df.columns:
+        return pd.DataFrame()
+
     # Filter to lots with meaningful comp signal
     eligible_mask = (
         cache_df["est_resale"].notna()
