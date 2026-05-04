@@ -1,0 +1,383 @@
+{
+  "schema_version": "1.0",
+  "domain": "lightweight_collectibles",
+  "last_updated": "2026-05-04",
+  "summary": "High-resale items that ship in poly mailers or small boxes. Curated to fit the user's preference: NO power tools, NO mid-size kitchen appliances, NO large furniture. Sweet spot is items under 5 lbs with $50-500 resale value — vintage lanterns, premium pocket knives, multi-tools, vintage radios, motorcycle helmets, premium drinkware, smart chargers, metal detectors, and protective cases. These are the items hiding in mixed shop-cleanout / estate auctions that the previous BOLO files (clothing/computer/auto/etc.) didn't capture.",
+  "field_workflow": [
+    "Always weigh before listing — anything over 5 lbs needs medium_box freight, kills margin on items under $100",
+    "Vintage lantern condition: globe (intact, no cracks), pump (rebuildable), generator tube (replaceable)",
+    "Pocket knife: confirm blade isn't bent, lock function works, original box adds 30%+",
+    "Multi-tool: all blades / pliers / screwdrivers function smoothly",
+    "Vintage radio: power-on test if possible; faceplate condition + tube glow visible",
+    "Helmet: DOT/SNELL sticker intact, liner not torn, retention strap functions",
+    "Pelican case: foam intact, latches working, hinge pins present",
+    "Original packaging on knives + multi-tools = +25-40% over loose"
+  ],
+  "skip_list": [
+    "Cracked lantern globe (replacement globes available but mostly not worth it)",
+    "Damaged knife blade (bent / chipped / pitted)",
+    "Helmet with cracks / impact damage (DOT-compliant resale impossible)",
+    "Pelican case with missing foam",
+    "Generic camping lantern (battery-powered modern)",
+    "Walmart-tier multi-tool",
+    "Cracked radio cabinet",
+    "Untested electronics (broad caveat — disclose if you don't test)"
+  ],
+  "brands": [
+    {
+      "brand": "Coleman vintage lanterns",
+      "category": "vintage_lantern",
+      "tier": 2,
+      "models": [
+        "Coleman 200A", "Coleman 200a", "Coleman 200",
+        "Coleman 220", "Coleman 220E", "Coleman 220F", "Coleman 220H",
+        "Coleman 228", "Coleman 228E", "Coleman 228F", "Coleman 228H",
+        "Coleman 242", "Coleman 242C",
+        "Coleman 275", "Coleman 282", "Coleman 286",
+        "Coleman 290", "Coleman 295",
+        "Coleman 321", "Coleman 321A",
+        "Coleman lantern", "Coleman gas lantern",
+        "Coleman propane lantern", "Coleman kerosene lantern",
+        "Coleman white gas"
+      ],
+      "era_markers": [
+        "Coleman branding etched on tank or cap",
+        "Date stamp on bottom of tank (e.g. '4 73' = April 1973)",
+        "Globe color: red (200A iconic) / yellow (220/228 dual-mantle) / green",
+        "Original box / sleeve doubles value",
+        "Made in Wichita Kansas stamping",
+        "Sunshine of the Night logo (older premium)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "200A red lantern (working, dated)", "low": 50, "high": 150},
+        {"item": "200A in original box", "low": 130, "high": 280},
+        {"item": "220/228 dual-mantle (yellow globe)", "low": 60, "high": 180},
+        {"item": "242C nickel-plated (rare)", "low": 200, "high": 500},
+        {"item": "vintage 1950s-60s (any working)", "low": 80, "high": 220}
+      ],
+      "target_buy_usd": {"low": 5, "high": 40},
+      "platform_primary": "eBay",
+      "platform_secondary": "Etsy",
+      "comp_query_template": "coleman {model} lantern vintage",
+      "ship_class": "small_box",
+      "notes": "Coleman 200A red lantern is the iconic American camping object. Date stamp on bottom of tank identifies year (production 1951-1983). NOTE: 'Coleman lantern' alias intentionally narrow to AVOID matching Coleman coolers / water jugs / propane fuel canisters which are too bulky / commodity. Models list focuses on ICONIC vintage models with collector demand.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Yeti drinkware",
+      "category": "premium_drinkware",
+      "tier": 2,
+      "models": [
+        "Yeti Rambler 30oz", "Yeti Rambler 20oz", "Yeti Rambler 10oz",
+        "Yeti Rambler 14oz", "Yeti Rambler 18oz", "Yeti Rambler 36oz",
+        "Yeti Rambler bottle", "Yeti Rambler tumbler",
+        "Yeti colster", "Yeti slim colster", "Yeti tall colster",
+        "Yeti Rambler half gallon", "Yeti Rambler 1 gallon",
+        "Yeti wine tumbler", "Yeti stackable pint",
+        "Yeti Yonder", "Yeti Daytrip"
+      ],
+      "era_markers": [
+        "Yeti branding stamped on bottom",
+        "Limited-edition colors (Cosmic Lilac, Big Wave Blue, Camp Green, etc.) command premium",
+        "Discontinued colors / collaborations (Wade Bowen, Brumate, Disney) = scarce premium",
+        "Original cardboard sleeve premium",
+        "MagSlider lid vs Strawcap lid"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Limited-edition tumbler (Cosmic Lilac, Charcoal etc.)", "low": 50, "high": 130},
+        {"item": "Standard Rambler 30oz / 20oz", "low": 25, "high": 50},
+        {"item": "Discontinued color tumbler", "low": 60, "high": 180},
+        {"item": "Yeti Rambler half-gallon jug", "low": 70, "high": 130}
+      ],
+      "target_buy_usd": {"low": 3, "high": 25},
+      "platform_primary": "eBay",
+      "platform_secondary": "Poshmark",
+      "comp_query_template": "yeti {model} {color}",
+      "ship_class": "poly_mailer",
+      "notes": "Tumblers and bottles ship in poly mailer. EXCLUDES Yeti coolers (Tundra, Hopper, Loadout) which are too bulky per user preference. Discontinued colors are the resale play — every season Yeti rotates colors; the previous season's colors trade at 30-100% premium over current.",
+      "condition_critical": true
+    },
+    {
+      "brand": "NOCO + Schumacher chargers",
+      "category": "battery_charger",
+      "tier": 2,
+      "models": [
+        "NOCO Genius", "NOCO G750", "NOCO G3500", "NOCO G7200",
+        "NOCO GB40", "NOCO GB50", "NOCO GB70", "NOCO GB150",
+        "NOCO Boost Plus", "NOCO Boost HD", "NOCO Boost Pro",
+        "NOCO Genius1", "NOCO Genius5", "NOCO Genius10",
+        "Schumacher SC1280", "Schumacher SC1281", "Schumacher SP1297",
+        "Schumacher DSR131", "Schumacher SE-4022",
+        "CTEK MUS 4.3", "CTEK MXS 5.0", "CTEK CT5",
+        "Battery Tender Junior", "Battery Tender Plus"
+      ],
+      "era_markers": [
+        "NOCO branding (red + black housing)",
+        "Schumacher branding (yellow + black or red)",
+        "CTEK branding (Swedish, blue + black)",
+        "Original packaging w/ accessories (clamps, ring terminals, dust cap)",
+        "Genuine vs counterfeit (verify hologram on package)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "NOCO GB40 Boost Plus jump starter", "low": 80, "high": 130},
+        {"item": "NOCO Genius G3500 / G7200", "low": 60, "high": 120},
+        {"item": "Schumacher SC1280 / SC1281", "low": 80, "high": 140},
+        {"item": "CTEK MUS 4.3 / MXS 5.0", "low": 60, "high": 120},
+        {"item": "Battery Tender Plus / Junior", "low": 30, "high": 60}
+      ],
+      "target_buy_usd": {"low": 3, "high": 30},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "{brand} {model}",
+      "ship_class": "small_box",
+      "notes": "Smart battery chargers and jump starters fit in small boxes. NOCO Genius series is the consumer favorite; Schumacher is the budget/heavy-duty segment; CTEK is the Euro-luxury choice (BMW / Porsche owners). All ship at the small_box rate.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Vintage motorcycle helmets",
+      "category": "vintage_helmet",
+      "tier": 2,
+      "models": [
+        "Bell 500-TX", "Bell Star", "Bell Magnum",
+        "Bell Toptex", "Bell Moto-3", "Bell Moto-4", "Bell Moto-5",
+        "Bell R-T",
+        "Arai Quantum-X", "Arai Corsair", "Arai Signet",
+        "Shoei RF-1400", "Shoei X-Spirit", "Shoei GT-Air",
+        "AGV K6", "AGV Pista GP",
+        "Vintage Bell helmet", "Vintage Buco helmet",
+        "Vintage Snell helmet", "Vintage half helmet",
+        "Steve McQueen Bell"
+      ],
+      "era_markers": [
+        "Bell logo embroidered or screen-printed",
+        "Snell certification sticker (Snell '70 / '75 / '80 / '85 / '90 etc.)",
+        "DOT compliance label",
+        "Made in USA stamping (vintage premium)",
+        "Original visor + chin strap functioning",
+        "1970s-80s Bell Moto-3 / Bell Star = collector premium"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Bell Star / 500-TX vintage", "low": 130, "high": 350},
+        {"item": "Bell Moto-3 (1970s motocross)", "low": 200, "high": 500},
+        {"item": "Vintage Buco / Buco Defender", "low": 150, "high": 400},
+        {"item": "Shoei RF-1400 (modern)", "low": 280, "high": 480},
+        {"item": "Arai Corsair / Quantum-X (modern)", "low": 380, "high": 700},
+        {"item": "AGV K6 / Pista GP (modern)", "low": 280, "high": 750}
+      ],
+      "target_buy_usd": {"low": 10, "high": 80},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "{brand} {model} helmet",
+      "ship_class": "small_box",
+      "notes": "Vintage Bell / Buco helmets (1960s-80s) have a passionate cafe-racer / vintage-motorcycle following. Steve McQueen Bell is the most-replicated vintage style. CRITICAL: only resell helmets WITHOUT impact damage — cracked / dropped helmets aren't safe and are illegal to misrepresent. Modern Arai / Shoei / AGV are premium-tier shipping in small boxes.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Vintage radios",
+      "category": "vintage_audio",
+      "tier": 2,
+      "models": [
+        "Zenith Transoceanic", "Zenith Royal 3000",
+        "Zenith T600", "Zenith H500", "Zenith G500",
+        "Zenith Wave Magnet",
+        "Sony ICF-7600", "Sony ICF-2010", "Sony ICF-SW77",
+        "Sony TR-63", "Sony TR-65", "Sony TFM",
+        "Grundig Satellit 700", "Grundig Yacht Boy",
+        "Grundig Satellit 800", "Grundig G3",
+        "Panasonic RF-2200", "Panasonic RF-4900",
+        "Realistic DX-440", "Hallicrafters S-38",
+        "Hallicrafters S-40", "Hallicrafters S-120"
+      ],
+      "era_markers": [
+        "Zenith Transoceanic = the iconic shortwave portable",
+        "Sony ICF-2010 = consensus best portable shortwave (1985-2003)",
+        "Sony ICF-SW77 + Grundig Satellit 700 = enthusiast tier",
+        "Tube-radio era (Hallicrafters S-series 1940s-60s)",
+        "Working condition with original strap / accessories = +30%"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Zenith Transoceanic Royal 1000 (1950s-60s)", "low": 200, "high": 600},
+        {"item": "Zenith Transoceanic Royal 3000", "low": 130, "high": 380},
+        {"item": "Sony ICF-2010 working", "low": 280, "high": 580},
+        {"item": "Sony ICF-7600", "low": 100, "high": 250},
+        {"item": "Grundig Satellit 700 / 800", "low": 200, "high": 480},
+        {"item": "Hallicrafters S-38 / S-40", "low": 100, "high": 280}
+      ],
+      "target_buy_usd": {"low": 10, "high": 80},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "{brand} {model} radio vintage",
+      "ship_class": "small_box",
+      "notes": "Vintage portable shortwave radios have a passionate enthusiast following (DXer hobby community). Zenith Transoceanic is the iconic American shortwave; Sony ICF-2010 is the consensus engineering masterpiece. Always test power-on + dial accuracy before listing. Original leather case adds 20-40%.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Pelican cases",
+      "category": "protective_case",
+      "tier": 2,
+      "models": [
+        "Pelican 1170", "Pelican 1200", "Pelican 1300",
+        "Pelican 1400", "Pelican 1450", "Pelican 1500",
+        "Pelican 1510", "Pelican 1520", "Pelican 1535",
+        "Pelican 1610", "Pelican 1620", "Pelican 1650",
+        "Pelican Vault V200", "Pelican Vault V300", "Pelican Vault V730",
+        "Pelican Air 1535", "Pelican Air 1615", "Pelican Air 1745",
+        "Pelican Storm iM2050", "Pelican Storm iM2300", "Pelican Storm iM2400",
+        "Pelican Ruck R20", "Pelican Ruck R40", "Pelican Ruck R60"
+      ],
+      "era_markers": [
+        "Pelican branding embossed on shell",
+        "Made in USA stamping (Torrance California)",
+        "TSA-compliant locks",
+        "Lifetime warranty registration card",
+        "Original foam (custom-cut for camera/gun = premium)",
+        "1450 / 1500 are the most-popular consumer sizes"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Pelican 1620 (large)", "low": 130, "high": 220},
+        {"item": "Pelican 1500 / 1510 (carry-on size)", "low": 100, "high": 180},
+        {"item": "Pelican 1450 / 1400 (mid-size)", "low": 80, "high": 140},
+        {"item": "Pelican 1170 / 1200 / 1300 (small)", "low": 50, "high": 100},
+        {"item": "Pelican Vault V200 / V300 (gun case)", "low": 100, "high": 200},
+        {"item": "Pelican Air 1535 (lighter)", "low": 130, "high": 240}
+      ],
+      "target_buy_usd": {"low": 10, "high": 80},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "pelican {model}",
+      "ship_class": "medium_box",
+      "notes": "Pelican cases are the gold-standard protective case. Smaller models (1170-1500) ship in small_box; 1610+ ship medium_box. Original custom foam (cut for specific cameras / scopes / guns) commands premium. Used examples in clean condition trade at 60-70% of new MSRP.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Premium pocket knives",
+      "category": "pocket_knife",
+      "tier": 2,
+      "models": [
+        "Spyderco Para Military 2", "Spyderco PM2", "Spyderco Paramilitary 2",
+        "Spyderco Manix 2", "Spyderco Endura", "Spyderco Delica",
+        "Spyderco Native 5", "Spyderco Tenacious", "Spyderco Sage",
+        "Benchmade Bugout 535", "Benchmade Mini Bugout",
+        "Benchmade Griptilian 551", "Benchmade Mini Griptilian",
+        "Benchmade Adamas 275", "Benchmade Bailout",
+        "Benchmade Infidel", "Benchmade 940",
+        "Microtech Ultratech", "Microtech Combat Troodon",
+        "Microtech Halo", "Microtech UTX-85",
+        "Zero Tolerance ZT 0350", "ZT 0562", "ZT 0566",
+        "Hinderer XM-18", "Hinderer Halftrack",
+        "CRKT M16", "Cold Steel Recon 1"
+      ],
+      "era_markers": [
+        "Spyderco round-thumb-hole opener (signature)",
+        "Benchmade AXIS lock (signature)",
+        "Microtech automatic OTF / side-opening",
+        "ZT triangular logo",
+        "Made in USA / Italy / Taiwan markings",
+        "S30V / S35VN / S45VN / M390 / Magnacut blade steel",
+        "Original box + sheath + papers = +30%"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Microtech Ultratech (auto OTF)", "low": 280, "high": 480},
+        {"item": "Microtech Combat Troodon", "low": 380, "high": 600},
+        {"item": "Hinderer XM-18 (custom maker)", "low": 480, "high": 900},
+        {"item": "Benchmade Bugout 535 / Mini", "low": 130, "high": 230},
+        {"item": "Spyderco Para Military 2", "low": 130, "high": 220},
+        {"item": "ZT 0350 / 0562", "low": 130, "high": 250}
+      ],
+      "target_buy_usd": {"low": 5, "high": 130},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "{brand} {model}",
+      "ship_class": "poly_mailer",
+      "notes": "Premium pocket knives are the highest $/oz of anything in this BOLO. Spyderco PM2 + Benchmade Bugout are the volume sellers; Microtech Ultratech (automatic OTF) commands premium because OTF knives are restricted in some states. Counterfeits exist for high-end models — verify serial number with maker.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Multi-tools",
+      "category": "multi_tool",
+      "tier": 2,
+      "models": [
+        "Leatherman Wave Plus", "Leatherman Wave +",
+        "Leatherman Charge Plus", "Leatherman Charge +",
+        "Leatherman Surge", "Leatherman Skeletool",
+        "Leatherman Wingman", "Leatherman Sidekick",
+        "Leatherman Free P4", "Leatherman Free P2",
+        "Leatherman Signal", "Leatherman OHT",
+        "Leatherman Style PS", "Leatherman Squirt",
+        "Gerber Suspension", "Gerber MP600", "Gerber MP1",
+        "Gerber Center-Drive", "Gerber Truss",
+        "Victorinox SwissTool", "Victorinox SwissTool Spirit",
+        "Sog PowerAssist", "Sog PowerLock"
+      ],
+      "era_markers": [
+        "Leatherman branding etched on jaw",
+        "Made in Portland Oregon stamping (Leatherman premium)",
+        "Original sheath included (+15-20%)",
+        "Black-oxide vs stainless finish",
+        "Discontinued models (Leatherman Squirt PS4) command premium"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Leatherman Wave Plus / Charge Plus", "low": 100, "high": 200},
+        {"item": "Leatherman Surge (largest)", "low": 130, "high": 230},
+        {"item": "Leatherman Free P4", "low": 130, "high": 220},
+        {"item": "Leatherman Skeletool", "low": 60, "high": 110},
+        {"item": "Discontinued Leatherman (Squirt PS4 etc.)", "low": 130, "high": 280},
+        {"item": "Gerber MP600", "low": 50, "high": 100}
+      ],
+      "target_buy_usd": {"low": 5, "high": 60},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "{brand} {model}",
+      "ship_class": "poly_mailer",
+      "notes": "Leatherman dominates this category. Wave Plus + Charge Plus are the volume sellers. Discontinued models (Squirt PS4, Crater C33) trade at premium. Always verify all blades / pliers / screwdrivers function smoothly before listing.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Metal detectors",
+      "category": "metal_detector",
+      "tier": 2,
+      "models": [
+        "Bounty Hunter Discovery 3300", "Bounty Hunter Tracker IV",
+        "Bounty Hunter Land Ranger Pro", "Bounty Hunter Pioneer",
+        "Bounty Hunter Time Ranger", "Bounty Hunter Quick Draw",
+        "Garrett AT Pro", "Garrett AT Max", "Garrett AT Gold",
+        "Garrett Ace 200", "Garrett Ace 300", "Garrett Ace 400",
+        "Garrett Apex", "Garrett Pro-Pointer AT",
+        "Whites Spectra V3i", "Whites MX Sport", "Whites Coinmaster",
+        "Whites TreasureMaster",
+        "Minelab Equinox 600", "Minelab Equinox 800",
+        "Minelab Manticore", "Minelab CTX 3030",
+        "XP Deus II", "XP ORX",
+        "Fisher F22", "Fisher F44", "Fisher F75"
+      ],
+      "era_markers": [
+        "Bounty Hunter / Garrett / Whites / Minelab / XP / Fisher branding",
+        "Original retail packaging + manual + headphones",
+        "Coil included (DD vs concentric)",
+        "Bag / cover accessory (Garrett soft case)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Minelab Equinox 800", "low": 600, "high": 900},
+        {"item": "XP Deus II", "low": 1200, "high": 1700},
+        {"item": "Garrett AT Max / AT Pro", "low": 380, "high": 600},
+        {"item": "Whites Spectra V3i (discontinued)", "low": 600, "high": 1100},
+        {"item": "Bounty Hunter Discovery 3300 / Land Ranger Pro", "low": 130, "high": 280},
+        {"item": "Bounty Hunter Tracker IV (entry)", "low": 60, "high": 100}
+      ],
+      "target_buy_usd": {"low": 10, "high": 200},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "{brand} {model} metal detector",
+      "ship_class": "small_box",
+      "notes": "Metal detectors are an enthusiast hobby with sustained demand. Minelab + XP are the premium tier (used by serious hunters); Garrett + Whites are mid-tier consumer favorites; Bounty Hunter is entry tier. Whites Electronics went out of business in 2020 — their detectors are appreciating as supply dwindles. Detectors break down compactly into shafts + control box for shipping.",
+      "condition_critical": true
+    }
+  ],
+  "platform_notes": {
+    "eBay": "Dominant marketplace for lightweight collectibles.",
+    "Etsy": "Vintage Coleman lanterns + vintage radios get a slight Etsy lift over eBay due to the demographic.",
+    "BladeForums / KnifeCommunity": "Reference forums for premium pocket knives — useful for sanity-checking comps + identifying counterfeits.",
+    "DXing.com forums": "Vintage radio enthusiast community — useful for cross-referencing rare model values.",
+    "DetectorProspector / TreasureNet": "Metal detector enthusiast forums — comp benchmarks for used detectors."
+  }
+}

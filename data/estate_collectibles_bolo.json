@@ -1,0 +1,717 @@
+{
+  "schema_version": "1.0",
+  "domain": "estate_collectibles",
+  "last_updated": "2026-05-04",
+  "summary": "Lightweight high-resale collectibles common at estate auctions. Strict focus: items that ship in poly_mailer or small_box AND have a sustained collector market with $50+ average resale value. Sweet spot is signed costume jewelry (vintage 1940s-60s), premium figurines (Hummel, Lladró, Royal Doulton), pottery (Rookwood, Roseville, Hull, McCoy, Weller), glassware (Fenton, Imperial Candlewick, Heisey), and iconic vintage toys (Steiff, vintage Fisher-Price). Skips heavy pieces (large pottery vases >5 lbs, full china sets, large lamps) — these are physically too costly to ship for the typical $50-300 used-resale price point.",
+  "field_workflow": [
+    "Confirm SIGNATURE / hallmark on the piece — unsigned costume jewelry is commodity",
+    "Pottery / figurines: photograph maker's mark on the bottom (Roseville, McCoy, Hummel #s)",
+    "Glassware: hold against light to spot chips/cracks (deal-killer for collector-tier)",
+    "Jewelry: gold-tone vs sterling matters HUGELY — verify '925' / 'sterling' stamp",
+    "Hummel: TMK (trademark) number identifies era (TMK-1 = 1935-49, TMK-8 = 2000-2008)",
+    "Royal Doulton character jugs: model letter+number (D6XXX series) + size (large/small/mini/tiny)",
+    "Damaged / chipped / repaired pieces drop value 70-90% — disclose in listing",
+    "Original box / paperwork / certificate adds 20-50% on premium pieces"
+  ],
+  "skip_list": [
+    "Made in China (modern reproduction)",
+    "Resin / plastic 'antique-style'",
+    "Generic figurines",
+    "Unsigned costume jewelry",
+    "Damaged / chipped / cracked",
+    "Repaired / glued",
+    "Reproductions",
+    "Large urns / lamps (too heavy)",
+    "Full china sets (heavy + buyers want individual pieces)",
+    "Mass-market modern Lenox / Mikasa (post-2000 commodity tier)"
+  ],
+  "brands": [
+    {
+      "brand": "Hummel / Goebel figurines",
+      "category": "vintage_figurine",
+      "tier": 1,
+      "models": [
+        "M.I. Hummel", "Hummel TMK", "Hummel 1", "Hummel 2",
+        "Hummel 3", "Hummel 4", "Hummel 5", "Hummel 6",
+        "Hummel 7", "Hummel 8",
+        "Hummel Apple Tree Boy", "Hummel Apple Tree Girl",
+        "Hummel Merry Wanderer", "Hummel Stormy Weather",
+        "Hummel Umbrella Boy", "Hummel Umbrella Girl",
+        "Hummel Goose Girl", "Hummel Be Patient",
+        "Hummel Little Pharmacist", "Hummel Doctor",
+        "Goebel figurine", "Goebel Hummel"
+      ],
+      "era_markers": [
+        "Hummel signature on the back of the figurine",
+        "Goebel stamp on bottom (Hummel was made by Goebel)",
+        "TMK trademark date code (Crown TMK-1 = 1935-49 most premium, Full Bee TMK-2 = 1950-59 premium, Stylized Bee TMK-3/4 = 1960s-72)",
+        "Original box with authenticity card",
+        "West Germany vs Germany stamp (West Germany = pre-1990 premium)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Crown TMK-1 (1935-49) figurine", "low": 200, "high": 1500},
+        {"item": "Full Bee TMK-2 (1950-59) figurine", "low": 100, "high": 600},
+        {"item": "Stylized Bee TMK-3/4 (1960s)", "low": 60, "high": 280},
+        {"item": "Modern TMK-7/8 (post-1990)", "low": 30, "high": 100},
+        {"item": "Apple Tree Boy/Girl complete pair", "low": 130, "high": 380}
+      ],
+      "target_buy_usd": {"low": 5, "high": 80},
+      "platform_primary": "eBay",
+      "platform_secondary": "Replacements.com",
+      "comp_query_template": "hummel {model} tmk",
+      "ship_class": "small_box",
+      "notes": "Hummel is the dominant collector figurine brand. TMK number on the bottom dates the piece — older TMKs trade at significant premium over modern reproductions. Watch for missing accessories (umbrellas / lanterns / animals) — incomplete figurines lose 40-60%.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Lladró figurines",
+      "category": "vintage_figurine",
+      "tier": 1,
+      "models": [
+        "Lladro", "Lladró",
+        "Lladro Spain", "Lladró Spain",
+        "Lladro porcelain", "Lladro figurine",
+        "Don Quixote", "Lladro angel", "Lladro ballerina",
+        "Lladro mother", "Lladro retired"
+      ],
+      "era_markers": [
+        "Lladró backstamp on bottom (blue-printed logo)",
+        "Made in Spain stamping",
+        "Sculptor's signature on premium pieces",
+        "Original box + leaflet w/ piece number",
+        "Retired (discontinued) pieces command premium"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Retired Lladró large figurine", "low": 200, "high": 1200},
+        {"item": "Retired Lladró small/medium", "low": 100, "high": 400},
+        {"item": "Current production figurine", "low": 60, "high": 250}
+      ],
+      "target_buy_usd": {"low": 8, "high": 120},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "lladro {model} retired",
+      "ship_class": "small_box",
+      "notes": "Lladró is Spanish premium porcelain — high-detail, recognizable matte finish. Retired (discontinued) pieces are the resale champions. Verify Lladró backstamp + original box / paperwork. Counterfeits exist (especially mass-market Chinese knockoffs); the genuine matte finish is unmistakable.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Royal Doulton",
+      "category": "vintage_figurine",
+      "tier": 1,
+      "models": [
+        "Royal Doulton character jug", "Royal Doulton Toby jug",
+        "Royal Doulton figurine", "Royal Doulton HN",
+        "Royal Doulton Bunnykins", "Royal Doulton Pretty Ladies",
+        "Royal Doulton Old Charley", "Royal Doulton Long John Silver",
+        "Royal Doulton Falstaff", "Royal Doulton Drake",
+        "Royal Doulton D6", "Royal Doulton large jug",
+        "Royal Doulton small jug", "Royal Doulton mini jug",
+        "Royal Doulton tiny jug", "Royal Doulton Bairnsfather"
+      ],
+      "era_markers": [
+        "Royal Doulton backstamp (lion + crown)",
+        "HN model number for figurines (e.g. HN2304)",
+        "D6 model number for character jugs (e.g. D6296)",
+        "Made in England stamping",
+        "Size designation: large (5-7 inch) / small (3-4) / miniature (2.5) / tiny (1.5)",
+        "Bone china marking on figurines"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Limited / discontinued character jug (large)", "low": 150, "high": 600},
+        {"item": "Standard character jug (large)", "low": 60, "high": 220},
+        {"item": "Mini / Tiny character jug rare", "low": 80, "high": 280},
+        {"item": "HN figurine (Pretty Ladies)", "low": 70, "high": 300},
+        {"item": "Bunnykins figurine", "low": 30, "high": 150}
+      ],
+      "target_buy_usd": {"low": 5, "high": 80},
+      "platform_primary": "eBay",
+      "platform_secondary": "Replacements.com",
+      "comp_query_template": "royal doulton {model} d6",
+      "ship_class": "small_box",
+      "notes": "Royal Doulton character jugs (D6XXX series) are a deep collector market — model + size + edition status all matter. Limited editions / discontinued models trade 3-5x current production. Bunnykins (children's figurine line) has its own collector base. Always verify HN/D6 number on bottom.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Wedgwood",
+      "category": "vintage_figurine",
+      "tier": 2,
+      "models": [
+        "Wedgwood Jasperware", "Wedgwood Jasper Ware",
+        "Wedgwood blue jasper", "Wedgwood black jasper",
+        "Wedgwood green jasper", "Wedgwood lilac jasper",
+        "Wedgwood tri-color", "Wedgwood Queens Ware",
+        "Wedgwood basalt", "Wedgwood black basalt",
+        "Wedgwood Portland Vase", "Wedgwood limited",
+        "Wedgwood bone china"
+      ],
+      "era_markers": [
+        "Wedgwood impressed mark on bottom (often with date letter)",
+        "Made in England stamping",
+        "Three-letter date code (e.g. 'YYY' = 1908)",
+        "Color variant (blue / sage green / lilac / black) influences value",
+        "Portland Vase reproductions are the iconic Wedgwood piece"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Wedgwood Jasperware lilac (rare)", "low": 200, "high": 700},
+        {"item": "Wedgwood Jasperware sage green", "low": 130, "high": 400},
+        {"item": "Wedgwood Jasperware blue (common)", "low": 60, "high": 200},
+        {"item": "Wedgwood basalt black", "low": 100, "high": 350}
+      ],
+      "target_buy_usd": {"low": 8, "high": 80},
+      "platform_primary": "eBay",
+      "platform_secondary": "Replacements.com",
+      "comp_query_template": "wedgwood jasperware {color}",
+      "ship_class": "small_box",
+      "notes": "Wedgwood Jasperware is the iconic colored matte-stoneware with white relief figures. Lilac is the rarest color (commands premium); sage green next; classic blue is the most common. Date letters on the bottom identify era (Wedgwood used a 3-letter code system through 1980).",
+      "condition_critical": true
+    },
+    {
+      "brand": "Norman Rockwell collectibles",
+      "category": "vintage_figurine",
+      "tier": 2,
+      "models": [
+        "Norman Rockwell figurine", "Norman Rockwell plate",
+        "Norman Rockwell limited edition", "Norman Rockwell signed",
+        "Saturday Evening Post Rockwell",
+        "Rockwell Heritage", "Rockwell Christmas",
+        "Rockwell Triple Self Portrait",
+        "Rockwell Doctor and Doll",
+        "Gorham Rockwell", "Knowles Rockwell"
+      ],
+      "era_markers": [
+        "Norman Rockwell signature reproduced on the piece",
+        "Manufacturer (Gorham / Knowles / Lenox / Hallmark)",
+        "Edition number (limited editions)",
+        "Original certificate of authenticity"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Norman Rockwell figurine signed series", "low": 50, "high": 280},
+        {"item": "Norman Rockwell limited edition plate", "low": 30, "high": 130},
+        {"item": "Norman Rockwell original Saturday Evening Post print", "low": 60, "high": 250}
+      ],
+      "target_buy_usd": {"low": 3, "high": 40},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "norman rockwell {item}",
+      "ship_class": "small_box",
+      "notes": "Norman Rockwell collectibles span figurines (Gorham), plates (Knowles), and prints. The image (Triple Self Portrait, Doctor and Doll, Saturday Evening Post covers) drives value more than the manufacturer. Limited editions with original COA / box command premium."
+    },
+    {
+      "brand": "Roseville Pottery",
+      "category": "vintage_pottery",
+      "tier": 1,
+      "models": [
+        "Roseville pottery", "Roseville vase",
+        "Roseville Pinecone", "Roseville Magnolia",
+        "Roseville Zephyr Lily", "Roseville Apple Blossom",
+        "Roseville Bushberry", "Roseville Snowberry",
+        "Roseville Freesia", "Roseville Iris",
+        "Roseville Foxglove", "Roseville Clematis",
+        "Roseville Water Lily", "Roseville Wisteria",
+        "Roseville Bleeding Heart", "Roseville Donatello"
+      ],
+      "era_markers": [
+        "Roseville USA mark on bottom (impressed or raised)",
+        "Pre-1936 pieces are rarely marked (paper labels)",
+        "Pattern-specific shape designations",
+        "Color variations matter (Pinecone Brown most common, Blue/Green premium)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Roseville Pinecone large vase", "low": 200, "high": 600},
+        {"item": "Roseville Magnolia / Wisteria pieces", "low": 130, "high": 450},
+        {"item": "Roseville smaller bud vase / pieces", "low": 60, "high": 200}
+      ],
+      "target_buy_usd": {"low": 5, "high": 60},
+      "platform_primary": "eBay",
+      "platform_secondary": "Etsy",
+      "comp_query_template": "roseville pottery {pattern}",
+      "ship_class": "small_box",
+      "notes": "Roseville is the premium American art pottery brand. Pattern (Pinecone, Magnolia, Wisteria, Iris) + color + size all drive value. Reproductions exist — verify the impressed Roseville mark + correct color glaze + correct pattern detail. Avoid pieces over 12 inches — too heavy for small_box freight."
+    },
+    {
+      "brand": "Hull / McCoy / Weller / Rookwood pottery",
+      "category": "vintage_pottery",
+      "tier": 2,
+      "models": [
+        "Hull pottery", "Hull vase", "Hull cookie jar",
+        "Hull Magnolia", "Hull Tulip", "Hull Sunglow",
+        "Hull Little Red Riding Hood",
+        "McCoy pottery", "McCoy USA", "McCoy cookie jar",
+        "McCoy planter", "McCoy Pottery cookie jar",
+        "Weller pottery", "Weller Forest", "Weller Hudson",
+        "Weller Coppertone", "Weller Sicard",
+        "Rookwood pottery", "Rookwood vellum",
+        "Rookwood production", "Rookwood Cincinnati",
+        "Roseville Cherry Blossom"
+      ],
+      "era_markers": [
+        "Hull stamp on bottom + 'Hull USA'",
+        "McCoy USA impressed mark + model number",
+        "Weller Pottery stamp (varies by era)",
+        "Rookwood flame-and-RP mark + Roman numeral year",
+        "Hand-painted vs decal-applied artwork"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Rookwood vellum vase signed", "low": 280, "high": 1500},
+        {"item": "Rookwood production vase", "low": 100, "high": 400},
+        {"item": "Hull Little Red Riding Hood", "low": 150, "high": 500},
+        {"item": "Hull Magnolia / Tulip vase", "low": 60, "high": 220},
+        {"item": "McCoy cookie jar (vintage)", "low": 40, "high": 180},
+        {"item": "Weller Coppertone / Sicard", "low": 130, "high": 600}
+      ],
+      "target_buy_usd": {"low": 3, "high": 80},
+      "platform_primary": "eBay",
+      "platform_secondary": "Etsy",
+      "comp_query_template": "{brand} pottery {pattern}",
+      "ship_class": "small_box",
+      "notes": "Rookwood is the premium American art pottery (1880s-1960s, Cincinnati Ohio) — flame-and-RP mark + Roman numeral year date the piece. Hull's 'Little Red Riding Hood' line (1943-57) has a passionate cult following. McCoy cookie jars are mid-tier collector market. Weller Coppertone (frog/turtle motifs) and Sicard (iridescent) are scarce premium variants.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Fenton Art Glass",
+      "category": "vintage_glassware",
+      "tier": 1,
+      "models": [
+        "Fenton Art Glass", "Fenton glass",
+        "Fenton carnival glass", "Fenton iridescent",
+        "Fenton hobnail", "Fenton milk glass hobnail",
+        "Fenton burmese", "Fenton custard",
+        "Fenton opalescent", "Fenton silvercrest",
+        "Fenton emerald", "Fenton ruby",
+        "Fenton Bicentennial", "Fenton hand painted",
+        "Fenton signed", "Fenton retired"
+      ],
+      "era_markers": [
+        "Fenton acid-etched logo on bottom (used 1970+)",
+        "Hand-painted artist signature on premium pieces",
+        "Carnival glass = iridescent finish",
+        "Burmese = pink-to-yellow color shift",
+        "Fenton sticker (paper label) on older pieces"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Fenton carnival glass rare color", "low": 130, "high": 480},
+        {"item": "Fenton burmese signed", "low": 100, "high": 350},
+        {"item": "Fenton hobnail milk glass piece", "low": 30, "high": 150},
+        {"item": "Fenton hand-painted artist signed", "low": 80, "high": 280}
+      ],
+      "target_buy_usd": {"low": 3, "high": 60},
+      "platform_primary": "eBay",
+      "platform_secondary": "Etsy",
+      "comp_query_template": "fenton {pattern} {color}",
+      "ship_class": "small_box",
+      "notes": "Fenton Art Glass (1905-2011) is a deep collector market — color, pattern, and era all influence value. Carnival glass (iridescent) and Burmese (pink-yellow) are the resale champions. The acid-etched logo on the bottom dates the piece to 1970+; older pieces had paper labels (often missing).",
+      "condition_critical": true
+    },
+    {
+      "brand": "Imperial Candlewick + premium glassware",
+      "category": "vintage_glassware",
+      "tier": 2,
+      "models": [
+        "Imperial Candlewick", "Candlewick glass",
+        "Candlewick crystal", "Candlewick punch bowl",
+        "Heisey glass", "Heisey crystal",
+        "Heisey Orchid", "Heisey Rose",
+        "Cambridge glass", "Cambridge Rose Point",
+        "Cambridge Caprice", "Fostoria",
+        "Fostoria American", "Fostoria Coin",
+        "Westmoreland glass", "Westmoreland milk glass",
+        "Tiffin glass", "Indiana glass"
+      ],
+      "era_markers": [
+        "Imperial Candlewick: pattern of bead-and-button glass clusters",
+        "Heisey: H-in-diamond mark",
+        "Cambridge: C-in-triangle mark",
+        "Fostoria: paper labels (often missing)",
+        "Made-in-USA marker on most"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Imperial Candlewick rare piece (punch bowl set)", "low": 200, "high": 700},
+        {"item": "Cambridge Rose Point individual piece", "low": 30, "high": 150},
+        {"item": "Heisey Orchid stemware", "low": 30, "high": 130},
+        {"item": "Fostoria American piece", "low": 25, "high": 100}
+      ],
+      "target_buy_usd": {"low": 3, "high": 50},
+      "platform_primary": "eBay",
+      "platform_secondary": "Replacements.com",
+      "comp_query_template": "{brand} {pattern}",
+      "ship_class": "small_box",
+      "notes": "Replacements.com is the comp benchmark for these patterns — they list every Heisey / Cambridge / Fostoria piece with values. Volume play is buying mixed lots and listing pieces individually. Verify pattern + color + size against Replacements.com lookup before listing."
+    },
+    {
+      "brand": "Vintage signed costume jewelry",
+      "category": "vintage_jewelry",
+      "tier": 2,
+      "models": [
+        "Trifari", "Crown Trifari", "Trifari signed",
+        "Eisenberg", "Eisenberg Original", "Eisenberg Ice",
+        "Weiss", "Weiss rhinestone", "Weiss signed",
+        "Miriam Haskell", "Haskell glass beads",
+        "Hobé", "Hobe jewelry", "Hobé signed",
+        "Coro", "Coro Craft", "Coro duette",
+        "Sarah Coventry", "Sarah Cov",
+        "Boucher", "Marcel Boucher",
+        "Hattie Carnegie", "Schiaparelli",
+        "Joseff of Hollywood", "Kramer",
+        "Schreiner", "Lisner",
+        "Monet", "Napier", "Bogoff"
+      ],
+      "era_markers": [
+        "Signature stamped or impressed on the back (Trifari, Coro, Weiss, etc.)",
+        "Trifari Crown logo (1937-67 = Crown Trifari premium era)",
+        "Eisenberg Original (pre-1945) = highest tier",
+        "Schiaparelli + Joseff of Hollywood are extreme premium",
+        "Original tag / earring backs / clasp markings"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Schiaparelli signed piece", "low": 280, "high": 1500},
+        {"item": "Joseff of Hollywood", "low": 200, "high": 800},
+        {"item": "Eisenberg Original (pre-1945)", "low": 130, "high": 600},
+        {"item": "Crown Trifari brooch / set", "low": 60, "high": 280},
+        {"item": "Weiss rhinestone brooch", "low": 50, "high": 220},
+        {"item": "Miriam Haskell brooch / earrings", "low": 100, "high": 400},
+        {"item": "Coro Craft / Hobé signed", "low": 40, "high": 180}
+      ],
+      "target_buy_usd": {"low": 3, "high": 60},
+      "platform_primary": "eBay",
+      "platform_secondary": "Etsy",
+      "comp_query_template": "{brand} {item} signed",
+      "ship_class": "poly_mailer",
+      "notes": "Vintage signed costume jewelry is the highest $/oz of anything in this BOLO. SIGNATURE is everything — unsigned costume pieces (even if visually similar) trade at 10-30% of signed equivalents. Always photograph the back / hallmark when listing. Crown Trifari (1937-67), Eisenberg Original (pre-45), and Schiaparelli are the resale apex.",
+      "condition_critical": true
+    },
+    {
+      "brand": "James Avery + Brighton + Pandora",
+      "category": "modern_jewelry",
+      "tier": 2,
+      "models": [
+        "James Avery sterling", "James Avery silver",
+        "James Avery charm", "James Avery bracelet",
+        "James Avery ring", "James Avery necklace",
+        "James Avery retired",
+        "Brighton silver", "Brighton bracelet",
+        "Brighton heart", "Brighton necklace",
+        "Brighton retired",
+        "Pandora bracelet", "Pandora charm",
+        "Pandora ring", "Pandora ALE",
+        "Pandora retired", "Pandora limited edition"
+      ],
+      "era_markers": [
+        "James Avery JA stamp + sterling 925 mark",
+        "Brighton heart logo + serial number",
+        "Pandora ALE stamp (Algot Enevoldsen, founder)",
+        "S925 / 925 sterling silver mark",
+        "Original pouch / box adds premium"
+      ],
+      "comp_ranges_usd": [
+        {"item": "James Avery retired charm bracelet (full)", "low": 130, "high": 500},
+        {"item": "Pandora retired charm (Disney / Mickey / rare)", "low": 60, "high": 280},
+        {"item": "Brighton heart bracelet retired", "low": 60, "high": 180},
+        {"item": "Standard James Avery sterling charm", "low": 25, "high": 70},
+        {"item": "Standard Pandora charm", "low": 18, "high": 60}
+      ],
+      "target_buy_usd": {"low": 3, "high": 50},
+      "platform_primary": "eBay",
+      "platform_secondary": "Poshmark",
+      "comp_query_template": "{brand} {item}",
+      "ship_class": "poly_mailer",
+      "notes": "James Avery sterling silver charms have a passionate Texas-centered collector base — every charm is hand-finished, resells extremely well. Pandora retired charms (especially Disney collaborations) trade at premium over current. Brighton's heart-pattern jewelry has loyal Texas / Southwest demographic.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Swarovski crystal",
+      "category": "modern_jewelry",
+      "tier": 2,
+      "models": [
+        "Swarovski crystal", "Swarovski figurine",
+        "Swarovski necklace", "Swarovski bracelet",
+        "Swarovski earrings", "Swarovski ring",
+        "Swarovski Annual Edition",
+        "Swarovski Centenary", "Swarovski Disney",
+        "Swarovski retired", "Swarovski limited",
+        "Swarovski crystal society"
+      ],
+      "era_markers": [
+        "Swarovski swan logo (post-1989)",
+        "SCS Crystal Society membership pieces (member-only premium)",
+        "Original presentation box + COA",
+        "Annual Edition pieces (1987+ series)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Swarovski Annual Edition figurine", "low": 130, "high": 600},
+        {"item": "SCS member-only retired piece", "low": 200, "high": 800},
+        {"item": "Standard Swarovski figurine", "low": 30, "high": 130},
+        {"item": "Swarovski crystal jewelry piece", "low": 25, "high": 120}
+      ],
+      "target_buy_usd": {"low": 3, "high": 50},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "swarovski {model}",
+      "ship_class": "poly_mailer",
+      "notes": "Annual Edition and Crystal Society retired pieces are the resale champions — both released in limited runs. Verify Swarovski swan logo etched into the base. Counterfeits / generic Czech crystal masquerading as Swarovski exists; the swan etch is unmistakable.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Steiff + vintage stuffed animals",
+      "category": "vintage_toys",
+      "tier": 1,
+      "models": [
+        "Steiff", "Steiff bear", "Steiff teddy",
+        "Steiff button-in-ear", "Steiff knopf im ohr",
+        "Steiff Mohair", "Steiff antique",
+        "Steiff 1900", "Steiff vintage",
+        "Steiff limited edition", "Steiff Zotty",
+        "Steiff Margarete Steiff"
+      ],
+      "era_markers": [
+        "Steiff button-in-ear (signature steel button + yellow tag)",
+        "Yellow / red / white tag identifies era",
+        "White tag = limited edition",
+        "Mohair fabric (older pieces 1900s-1950s) = highest premium",
+        "Antique Steiff (pre-WWII) = museum-tier"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Antique pre-WWII Steiff bear", "low": 800, "high": 5000},
+        {"item": "Vintage 1950s-60s Steiff", "low": 200, "high": 700},
+        {"item": "Modern Steiff limited edition", "low": 130, "high": 400},
+        {"item": "Standard Steiff (post-1990)", "low": 60, "high": 180}
+      ],
+      "target_buy_usd": {"low": 5, "high": 80},
+      "platform_primary": "eBay",
+      "platform_secondary": "Etsy",
+      "comp_query_template": "steiff {model}",
+      "ship_class": "small_box",
+      "notes": "Steiff is the premium teddy bear / stuffed animal brand. Button-in-ear (steel button + yellow tag) is the signature authentication. Pre-WWII (antique) Steiff bears are the holy grail — even small ones trade $1000+. Modern limited editions hold value but at lower tier.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Vintage Fisher-Price",
+      "category": "vintage_toys",
+      "tier": 2,
+      "models": [
+        "Vintage Fisher-Price", "Fisher-Price Little People",
+        "Fisher-Price A-Frame", "Fisher-Price Family Farm",
+        "Fisher-Price Castle", "Fisher-Price Pull Toy",
+        "Fisher-Price Bus", "Fisher-Price Clock",
+        "Fisher-Price Music Box", "Fisher-Price Chatter Telephone",
+        "Fisher-Price Snoopy", "Fisher-Price farmer in the dell",
+        "Fisher-Price Adventure People",
+        "Fisher-Price 1960s", "Fisher-Price 1970s"
+      ],
+      "era_markers": [
+        "Wood + paper litho construction (pre-1980 = vintage)",
+        "Fisher-Price USA stamp on toy",
+        "Made in East Aurora NY stamping",
+        "Wooden Little People (pre-1991) vs plastic (post-1991)",
+        "Original box / accessories double value"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Vintage Family Farm w/ Little People + accessories", "low": 80, "high": 280},
+        {"item": "Vintage Castle complete", "low": 100, "high": 380},
+        {"item": "Wooden Little People sets (1960s-70s)", "low": 50, "high": 200},
+        {"item": "Vintage Music Box / Chatter Telephone", "low": 25, "high": 80}
+      ],
+      "target_buy_usd": {"low": 2, "high": 35},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "vintage fisher-price {model}",
+      "ship_class": "small_box",
+      "notes": "Vintage Fisher-Price (pre-1980, pre-plastic-Little-People) is highly collectible. Wooden Little People + paper-litho playsets from the 1960s-70s are the resale champions. Original boxes + complete-with-all-accessories sets command 2-3x loose pricing.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Longaberger baskets",
+      "category": "vintage_basket",
+      "tier": 2,
+      "models": [
+        "Longaberger basket", "Longaberger Heritage",
+        "Longaberger Christmas", "Longaberger Mother's Day",
+        "Longaberger May Series", "Longaberger Bee",
+        "Longaberger Founders", "Longaberger signed",
+        "Longaberger retired", "Longaberger Dresden",
+        "Longaberger Woven Memories",
+        "Longaberger small basket", "Longaberger medium basket"
+      ],
+      "era_markers": [
+        "Longaberger signature on basket bottom (signed by weaver)",
+        "Made in Dresden Ohio stamping",
+        "Date stamped on the basket",
+        "Original woven liner + protector + tie-on premium",
+        "Limited edition / commemorative pieces command premium"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Longaberger Founders / large rare", "low": 130, "high": 480},
+        {"item": "Longaberger Christmas / Mother's Day series", "low": 80, "high": 250},
+        {"item": "Longaberger standard medium with liner", "low": 35, "high": 100},
+        {"item": "Longaberger small basket", "low": 25, "high": 60}
+      ],
+      "target_buy_usd": {"low": 3, "high": 40},
+      "platform_primary": "eBay",
+      "platform_secondary": "Etsy",
+      "comp_query_template": "longaberger {model}",
+      "ship_class": "small_box",
+      "notes": "Longaberger went bankrupt in 2018, ending production — supply is now fixed and prices have risen. Annual Christmas / Mother's Day series and weaver-signed pieces are the resale champions. Always photograph weaver signature + date stamp + original liner."
+    },
+    {
+      "brand": "Rae Dunn pottery",
+      "category": "modern_pottery",
+      "tier": 2,
+      "models": [
+        "Rae Dunn", "Rae Dunn pottery",
+        "Rae Dunn mug", "Rae Dunn canister",
+        "Rae Dunn pitcher", "Rae Dunn farmhouse",
+        "Rae Dunn season", "Rae Dunn limited",
+        "Rae Dunn Magenta", "Rae Dunn LL"
+      ],
+      "era_markers": [
+        "Rae Dunn signature on bottom",
+        "LL stamp (pieces dated 2010+)",
+        "Magenta backstamp = current production",
+        "Discontinued seasonal pieces (Halloween, Christmas, etc.) = premium"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Rae Dunn rare seasonal mug", "low": 60, "high": 200},
+        {"item": "Rae Dunn cellar / canister set", "low": 80, "high": 250},
+        {"item": "Rae Dunn standard mug", "low": 15, "high": 50}
+      ],
+      "target_buy_usd": {"low": 1, "high": 25},
+      "platform_primary": "eBay",
+      "platform_secondary": "Mercari",
+      "comp_query_template": "rae dunn {model}",
+      "ship_class": "small_box",
+      "notes": "Rae Dunn farmhouse-style pottery has a passionate (almost cult) collector base since ~2018. Seasonal / discontinued pieces command 5-10x retail. Magenta backstamp = current production; LL backstamp = older. Watch for repaired chips — Rae Dunn buyers are picky."
+    },
+    {
+      "brand": "Lenox limited editions",
+      "category": "vintage_figurine",
+      "tier": 2,
+      "models": [
+        "Lenox limited edition", "Lenox figurine",
+        "Lenox china collection", "Lenox Disney",
+        "Lenox Carousel", "Lenox Heritage",
+        "Lenox Christmas", "Lenox crystal",
+        "Lenox Princess", "Lenox bone china",
+        "Lenox Made in USA"
+      ],
+      "era_markers": [
+        "Lenox backstamp + bone china marking",
+        "Made in USA stamping (older premium over imported)",
+        "Limited edition number / certificate of authenticity",
+        "Hand-painted detailing on premium figurines"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Lenox Carousel limited edition figurine", "low": 100, "high": 350},
+        {"item": "Lenox Disney figurine", "low": 80, "high": 280},
+        {"item": "Standard Lenox bone china piece", "low": 30, "high": 120}
+      ],
+      "target_buy_usd": {"low": 3, "high": 30},
+      "platform_primary": "eBay",
+      "platform_secondary": "Replacements.com",
+      "comp_query_template": "lenox {model}",
+      "ship_class": "small_box",
+      "notes": "Lenox limited-edition figurines + Disney collection have steady collector demand. Skip mass-market Lenox china (post-2000 commodity tier). Made-in-USA Lenox is premium over imported."
+    },
+    {
+      "brand": "Steuben + Waterford crystal",
+      "category": "premium_crystal",
+      "tier": 1,
+      "models": [
+        "Steuben crystal", "Steuben glass", "Steuben sculpture",
+        "Steuben Corning", "Steuben hand cooler",
+        "Waterford crystal", "Waterford Lismore",
+        "Waterford Marquis", "Waterford Alana",
+        "Waterford Colleen", "Waterford limited",
+        "Waterford bowl", "Waterford vase",
+        "Waterford bell", "Waterford ornament"
+      ],
+      "era_markers": [
+        "Steuben S signature etched into base",
+        "Waterford signature (acid-etched script)",
+        "Made in Ireland stamping (Waterford pre-2008 closure of Irish plant)",
+        "Original presentation box + paperwork"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Steuben hand cooler / sculpture", "low": 280, "high": 1500},
+        {"item": "Waterford Lismore set (8 pcs)", "low": 280, "high": 800},
+        {"item": "Waterford Lismore individual stem", "low": 50, "high": 160},
+        {"item": "Waterford bowl / vase Made in Ireland", "low": 130, "high": 480}
+      ],
+      "target_buy_usd": {"low": 8, "high": 130},
+      "platform_primary": "eBay",
+      "platform_secondary": "Replacements.com",
+      "comp_query_template": "{brand} {pattern}",
+      "ship_class": "small_box",
+      "notes": "Steuben (American premium) + Waterford (Irish premium) are the crystal resale apex. Made-in-Ireland Waterford (pre-2008 plant closure) commands premium over post-closure imports. Lismore is the dominant Waterford pattern. Always inspect for chips on the rim — even tiny chips kill collector resale."
+    },
+    {
+      "brand": "Belleek Irish porcelain",
+      "category": "vintage_figurine",
+      "tier": 1,
+      "models": [
+        "Belleek", "Belleek China",
+        "Belleek Ireland", "Belleek Parian",
+        "Belleek shamrock", "Belleek basket",
+        "Belleek figurine", "Belleek vase",
+        "Belleek tea set", "Belleek harp"
+      ],
+      "era_markers": [
+        "Belleek harp / tower mark on bottom (mark identifies era 1857-present)",
+        "Made in Ireland stamping",
+        "Black mark (pre-1955) = premium era",
+        "Green mark (1955-80) = mid-tier",
+        "Gold mark (1980+) = standard production"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Black-mark Belleek (pre-1955) basket", "low": 280, "high": 900},
+        {"item": "Green-mark Belleek (1955-80)", "low": 130, "high": 400},
+        {"item": "Gold-mark Belleek standard", "low": 60, "high": 180}
+      ],
+      "target_buy_usd": {"low": 5, "high": 80},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "belleek {item}",
+      "ship_class": "small_box",
+      "notes": "Belleek's iridescent porcelain (Parian ware) is the iconic Irish china. Mark color identifies the era (Black 1857-1955 = highest tier, Green 1955-80 = middle, Gold post-1980 = standard). Original handwoven basketry in larger pieces is stunning + commands huge premium.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Vintage Lionel + Marx trains",
+      "category": "vintage_toys",
+      "tier": 2,
+      "models": [
+        "Lionel train", "Lionel postwar", "Lionel prewar",
+        "Lionel O scale", "Lionel O gauge",
+        "Lionel locomotive", "Lionel set",
+        "Lionel Hudson", "Lionel Berkshire",
+        "Marx train", "Marx tin litho",
+        "American Flyer train",
+        "Lionel No.", "Lionel boxcar"
+      ],
+      "era_markers": [
+        "Lionel branding stamped on engine / boxcar",
+        "Postwar (1945-69) era is the volume collector market",
+        "Prewar (pre-1945) Lionel = premium tier",
+        "Original box + manual + transformer = +50%",
+        "Standard Gauge (large) vs O Gauge (medium) vs HO (small)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Lionel postwar set complete with box", "low": 280, "high": 900},
+        {"item": "Prewar Lionel locomotive", "low": 200, "high": 1500},
+        {"item": "Individual Lionel boxcar postwar", "low": 25, "high": 100},
+        {"item": "Marx tin litho train pieces", "low": 30, "high": 130}
+      ],
+      "target_buy_usd": {"low": 3, "high": 80},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "lionel {model}",
+      "ship_class": "small_box",
+      "notes": "Lionel postwar (1945-69) is the dominant collector market. Iconic locomotives like the Hudson + Berkshire steam engines have huge premium. Marx is mid-tier vs Lionel. American Flyer is third-tier. Watch for repainted / refurbished pieces — collectors want original paint."
+    }
+  ],
+  "platform_notes": {
+    "eBay": "Dominant marketplace for estate collectibles.",
+    "Replacements.com": "Comp benchmark for Hummel / Royal Doulton / Wedgwood / Lenox / Heisey / Cambridge / Fostoria patterns. Don't sell here (low payout) — use as the lookup for what a piece is worth before listing on eBay.",
+    "Etsy": "Vintage 20+ years old gets a slight Etsy lift — particularly for Roseville pottery, Fenton glass, Longaberger, vintage Fisher-Price.",
+    "Ruby Lane": "Premium antique-jewelry specialist — only worth a separate listing for $200+ signed costume pieces.",
+    "1stDibs": "Top-tier vintage marketplace — only relevant for $500+ Schiaparelli / Joseff / Steiff antique pieces."
+  }
+}

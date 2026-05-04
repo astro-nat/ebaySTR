@@ -51,13 +51,19 @@ class AuctionCache:
              closing_date: str = "",
              green_pct: Optional[float] = None,
              green_count: Optional[int] = None,
-             total_count: Optional[int] = None) -> None:
+             total_count: Optional[int] = None,
+             bolo_count: Optional[int] = None) -> None:
         """Persist the analyzed DataFrame for this auction.
 
         green_pct / green_count / total_count are computed by the caller
         at save-time (when the full working df with est_roi is available)
         and stored alongside the slim df so the sidebar auction list can
         show "X% green" without rehydrating est_roi against fresh bids.
+
+        bolo_count = number of lots in this auction whose title/desc
+        matched a brand on the BOLO list. Stored at save-time using
+        whatever BOLO file is current; sidebar reads this to show a
+        "🎯 N BOLO" badge per cached auction.
         """
         if df is None or df.empty:
             return
@@ -74,6 +80,7 @@ class AuctionCache:
             "green_pct": green_pct,
             "green_count": green_count,
             "total_count": total_count,
+            "bolo_count": bolo_count,
         }
         with open(self._path(auction_id), "wb") as f:
             pickle.dump(payload, f)
@@ -172,6 +179,7 @@ class AuctionCache:
                     "green_pct": payload.get("green_pct"),
                     "green_count": payload.get("green_count"),
                     "total_count": payload.get("total_count"),
+                    "bolo_count": payload.get("bolo_count"),
                 })
             except Exception:
                 continue

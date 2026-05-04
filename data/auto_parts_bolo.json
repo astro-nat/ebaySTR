@@ -1,0 +1,685 @@
+{
+  "schema_version": "1.0",
+  "domain": "auto_parts",
+  "last_updated": "2026-05-04",
+  "summary": "Automotive replacement parts and performance modifications. eBay is the dominant marketplace — buyers search by EXACT part number for their specific vehicle make/model/year. OEM-stamped parts (Bosch, Denso, ACDelco, Motorcraft, Mopar) trade at significant premium over aftermarket equivalents. Lightweight high-margin items: spark plugs, ignition coils, headlight assemblies, sensors, mirrors, switches. Heavy/large items (hoods, doors, tailgates) are unprofitable to ship — auction-only / pickup-only territory. Performance parts (Brembo brakes, Magnaflow exhaust, BBS wheels) have dedicated enthusiast markets with strong sustained demand.",
+  "field_workflow": [
+    "Verify part number on the part itself — listings live and die by SKU match",
+    "OEM / Genuine / Original stamping = +50-100% over generic aftermarket",
+    "Vehicle fitment: list specific year/make/model/engine/trim — buyers filter by this",
+    "Test electronics (alternators, ignition coils, fuel injectors) when possible",
+    "Brake rotors: measure thickness — below minimum spec = recycle, not resale",
+    "Spark plugs: don't bother unless platinum / iridium / OEM-package new",
+    "Headlight assemblies: check for clouding (yellowing) — premium examples are clear",
+    "Heavy items (rotors, calipers, alternators): factor freight into pricing"
+  ],
+  "skip_list": [
+    "Aftermarket no-name",
+    "Generic clone",
+    "Bent / damaged",
+    "Cracked housings",
+    "Chinese knockoff",
+    "Pull-from-junkyard rusty",
+    "Mismatched left/right pair",
+    "DEPO (low-quality aftermarket lighting)",
+    "TYC econo line",
+    "Hot Wheels / die-cast (collector market, not parts)",
+    "Toy car"
+  ],
+  "brands": [
+    {
+      "brand": "Bosch automotive",
+      "category": "auto_electrical",
+      "tier": 2,
+      "models": [
+        "Bosch spark plug", "Bosch double iridium",
+        "Bosch platinum", "Bosch alternator",
+        "Bosch starter motor", "Bosch fuel injector",
+        "Bosch oxygen sensor", "Bosch lambda sensor",
+        "Bosch wiper blade", "Bosch ignition coil",
+        "Bosch fuel pump", "Bosch mass air flow",
+        "Bosch ABS module", "Bosch electronic control",
+        "Bosch glow plug", "Bosch CP4 pump",
+        "Bosch motronic", "Bosch headlight"
+      ],
+      "era_markers": [
+        "Bosch logo on the part itself",
+        "Made in Germany / Made in USA stamping (premium)",
+        "OE / OEM designation on package",
+        "Bosch-blue + red packaging vs counterfeit (faded colors = fake)",
+        "Part number format (0 280 158 117 / etc.)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Bosch alternator (vehicle-specific)", "low": 80, "high": 250},
+        {"item": "Bosch CP4 high-pressure fuel pump", "low": 350, "high": 700},
+        {"item": "Bosch fuel injector set (4-6 pcs)", "low": 200, "high": 500},
+        {"item": "Bosch ignition coil pack (6-8 pcs OEM)", "low": 150, "high": 320},
+        {"item": "Bosch oxygen sensor (each)", "low": 50, "high": 130},
+        {"item": "Bosch wiper blade set", "low": 25, "high": 45}
+      ],
+      "target_buy_usd": {"low": 5, "high": 60},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "bosch {part} {vehicle}",
+      "ship_class": "small_box",
+      "notes": "Note: this is a SEPARATE entry from 'Bosch appliance parts'. Same brand, different product line. Aliases below specifically gate on automotive context (spark plug / alternator / fuel injector / etc.) so a Bosch dishwasher rack doesn't get matched here. CP4 high-pressure fuel pumps are a known failure point on Ford Powerstroke + GM Duramax — strong replacement-part demand.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Denso",
+      "category": "auto_electrical",
+      "tier": 2,
+      "models": [
+        "Denso iridium", "Denso platinum", "Denso TT",
+        "Denso alternator", "Denso starter",
+        "Denso A/C compressor", "Denso fuel injector",
+        "Denso oxygen sensor", "Denso ignition coil",
+        "Denso radiator", "Denso fuel pump",
+        "Denso AC condenser", "Denso TT iridium"
+      ],
+      "era_markers": [
+        "Denso logo / branding",
+        "Made in Japan / Made in USA stamping",
+        "OE supplier to Toyota, Honda, Subaru, Mazda",
+        "Part number format with Denso prefix"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Denso A/C compressor (vehicle-specific)", "low": 130, "high": 350},
+        {"item": "Denso alternator OEM remanufactured", "low": 100, "high": 280},
+        {"item": "Denso radiator (vehicle-specific)", "low": 130, "high": 280},
+        {"item": "Denso iridium spark plug set (4 pcs)", "low": 25, "high": 55}
+      ],
+      "target_buy_usd": {"low": 4, "high": 60},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "denso {part} {vehicle}",
+      "ship_class": "small_box",
+      "notes": "Denso is the OEM supplier for most Japanese makes (Toyota, Honda, Subaru, Mazda) — buyers specifically search Denso when they want OEM-equivalent at OEM price. A/C compressors and alternators are the volume sellers.",
+      "condition_critical": true
+    },
+    {
+      "brand": "NGK ignition",
+      "category": "auto_electrical",
+      "tier": 2,
+      "models": [
+        "NGK Iridium IX", "NGK Iridium TR",
+        "NGK Laser Iridium", "NGK Laser Platinum",
+        "NGK G-Power", "NGK V-Power", "NGK Standard",
+        "NGK ignition coil", "NGK COP coil",
+        "NGK ignition wire", "NGK O2 sensor",
+        "NGK NTK lambda"
+      ],
+      "era_markers": [
+        "NGK / NTK branding (NTK = oxygen sensors, NGK subsidiary)",
+        "Iridium (premium) > Platinum (mid) > Standard (commodity)",
+        "Made in Japan stamping",
+        "Part number etched on insulator (e.g. BKR6E-11 / IZTR5B11)",
+        "OEM packaging vs unboxed loose"
+      ],
+      "comp_ranges_usd": [
+        {"item": "NGK Iridium / Laser Iridium spark plug set (6-8 pcs)", "low": 35, "high": 90},
+        {"item": "NGK COP ignition coil set (4-6 pcs)", "low": 120, "high": 280},
+        {"item": "NTK oxygen sensor (each)", "low": 60, "high": 140}
+      ],
+      "target_buy_usd": {"low": 3, "high": 30},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "ngk {part}",
+      "ship_class": "small_box",
+      "notes": "NGK is the dominant spark plug brand globally — Iridium IX is the volume seller. Counterfeit NGK plugs are a real problem; verify packaging hologram + correct font on insulator. NTK is NGK's oxygen-sensor subsidiary — same quality, different label.",
+      "condition_critical": true
+    },
+    {
+      "brand": "ACDelco",
+      "category": "auto_oem",
+      "tier": 2,
+      "models": [
+        "ACDelco Professional", "ACDelco Gold",
+        "ACDelco Silver", "ACDelco Advantage",
+        "ACDelco GM Original Equipment", "AC Delco Genuine",
+        "ACDelco alternator", "ACDelco starter",
+        "ACDelco brake pads", "ACDelco brake rotor",
+        "ACDelco oil filter", "ACDelco air filter",
+        "ACDelco spark plug", "ACDelco ignition coil",
+        "ACDelco oxygen sensor", "ACDelco fuel filter"
+      ],
+      "era_markers": [
+        "ACDelco / AC Delco branding (GM's OEM parts brand)",
+        "Professional Gold tier vs Silver vs Advantage",
+        "GM Original Equipment / Genuine designation = OEM-spec",
+        "Part number format (e.g. PF63E oil filter, 19355217 alternator)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "ACDelco alternator (vehicle-specific)", "low": 130, "high": 350},
+        {"item": "ACDelco brake pad set (Professional)", "low": 35, "high": 100},
+        {"item": "ACDelco oil filter PF series", "low": 6, "high": 18},
+        {"item": "ACDelco ignition coil (each)", "low": 30, "high": 80}
+      ],
+      "target_buy_usd": {"low": 3, "high": 50},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "acdelco {part} {vehicle}",
+      "ship_class": "small_box",
+      "notes": "ACDelco is GM's OEM brand — Professional / Gold tier matches GM-factory-installed parts. Silver and Advantage are economy lines (commodity, lower resale). 'GM Original Equipment' or 'GM Genuine Parts' on the package = best resale.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Motorcraft",
+      "category": "auto_oem",
+      "tier": 2,
+      "models": [
+        "Motorcraft FL-820S", "Motorcraft FL-500S",
+        "Motorcraft alternator", "Motorcraft starter",
+        "Motorcraft brake pads", "Motorcraft brake rotor",
+        "Motorcraft oil filter", "Motorcraft air filter",
+        "Motorcraft spark plug", "Motorcraft ignition coil",
+        "Motorcraft oxygen sensor", "Motorcraft fuel pump",
+        "Motorcraft Ford genuine", "Ford Motorcraft"
+      ],
+      "era_markers": [
+        "Motorcraft branding (Ford's OEM parts brand)",
+        "FL-prefix oil filter numbers (FL820S, FL500S = iconic)",
+        "Made in USA / Mexico stamping",
+        "Ford-Motorcraft co-branding on premium parts",
+        "Powerstroke diesel fuel injector / glow plug specific"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Motorcraft Powerstroke fuel injector set", "low": 600, "high": 1300},
+        {"item": "Motorcraft alternator", "low": 130, "high": 320},
+        {"item": "Motorcraft FL820S oil filter", "low": 12, "high": 22},
+        {"item": "Motorcraft ignition coil set (8 pcs Triton)", "low": 130, "high": 260}
+      ],
+      "target_buy_usd": {"low": 3, "high": 80},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "motorcraft {part} {vehicle}",
+      "ship_class": "small_box",
+      "notes": "Motorcraft is Ford's OEM brand. Powerstroke diesel parts (6.0L / 6.4L / 6.7L specific) are the highest-margin Motorcraft items — Ford diesel owners ONLY buy Motorcraft because aftermarket alternatives have a bad reliability reputation.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Mopar",
+      "category": "auto_oem",
+      "tier": 2,
+      "models": [
+        "Mopar Genuine", "Mopar Performance",
+        "Mopar alternator", "Mopar starter",
+        "Mopar brake pads", "Mopar brake rotor",
+        "Mopar oil filter", "Mopar air filter",
+        "Mopar spark plug", "Mopar ignition coil",
+        "Mopar oxygen sensor", "Mopar fuel pump",
+        "Mopar Hellcat", "Mopar SRT", "Mopar Hemi",
+        "Mopar Demon", "Mopar TRX"
+      ],
+      "era_markers": [
+        "Mopar branding (Chrysler / Dodge / Jeep / Ram OEM)",
+        "Mopar Performance line (factory hot-rod parts)",
+        "SRT / Hellcat / Demon / TRX specific = collector premium",
+        "Hemi-specific parts have iconic resale"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Mopar Hellcat / SRT specific parts", "low": 200, "high": 1500},
+        {"item": "Mopar Hemi spark plug set (16 pcs)", "low": 80, "high": 160},
+        {"item": "Mopar alternator (Hemi specific)", "low": 200, "high": 450},
+        {"item": "Mopar Performance air filter", "low": 35, "high": 80}
+      ],
+      "target_buy_usd": {"low": 3, "high": 100},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "mopar {part} {vehicle}",
+      "ship_class": "small_box",
+      "notes": "Mopar SRT / Hellcat / Demon / TRX-specific parts have huge enthusiast premium. Mopar Performance is the in-house tuning brand — 'cat-back' exhausts, cold air intakes, supercharger pulleys all command 2-3x aftermarket equivalents.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Brembo brakes",
+      "category": "auto_brakes",
+      "tier": 1,
+      "models": [
+        "Brembo GT", "Brembo GT-S", "Brembo GT-R",
+        "Brembo Sport", "Brembo BBK", "Brembo big brake kit",
+        "Brembo Xtra", "Brembo Max",
+        "Brembo OEM", "Brembo Original Equipment",
+        "Brembo M50", "Brembo M4",
+        "Brembo 4-piston", "Brembo 6-piston",
+        "Brembo 8-piston", "Brembo Stylema",
+        "Brembo TY3", "Brembo CSL"
+      ],
+      "era_markers": [
+        "Brembo logo on caliper",
+        "Made in Italy stamping",
+        "Color-coded calipers (red/yellow/black/silver)",
+        "Cross-drilled / slotted rotor pattern (premium signal)",
+        "OEM vs aftermarket BBK (big brake kit) distinction"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Brembo BBK 6-piston front kit", "low": 1500, "high": 3500},
+        {"item": "Brembo GT 4-piston caliper kit", "low": 1100, "high": 2200},
+        {"item": "Brembo OEM caliper (single, vehicle-specific)", "low": 200, "high": 500},
+        {"item": "Brembo cross-drilled rotor (each)", "low": 130, "high": 280},
+        {"item": "Brembo Xtra / Max brake pad set", "low": 60, "high": 130}
+      ],
+      "target_buy_usd": {"low": 15, "high": 350},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "brembo {model}",
+      "ship_class": "medium_box",
+      "notes": "Brembo is THE premium brake brand. OEM Brembo (factory-installed on M Power, Porsche, Ferrari, Hellcat) holds value strongly. Big Brake Kits (BBK) have dedicated upgrade-buyer market. Brembo motorcycle calipers (M50, Stylema) trade at similar premiums.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Akebono brakes",
+      "category": "auto_brakes",
+      "tier": 2,
+      "models": [
+        "Akebono Pro-ACT", "Akebono ProACT",
+        "Akebono EUR ceramic", "Akebono ASP",
+        "Akebono Performance", "Akebono Euro",
+        "Akebono Premium ceramic"
+      ],
+      "era_markers": [
+        "Akebono logo / branding (Japanese OE supplier)",
+        "Pro-ACT ceramic line (low-dust premium)",
+        "OEM supplier for Toyota, Lexus, Honda, Acura, Subaru"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Akebono Pro-ACT brake pad set", "low": 60, "high": 130},
+        {"item": "Akebono Performance line", "low": 80, "high": 160}
+      ],
+      "target_buy_usd": {"low": 5, "high": 50},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "akebono {model}",
+      "ship_class": "small_box",
+      "notes": "Akebono Pro-ACT ceramic pads are the gold standard for low-dust quiet braking — Lexus / Acura / Audi owners specifically request these. Strong loyal buyer base.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Hawk Performance brakes",
+      "category": "auto_brakes",
+      "tier": 2,
+      "models": [
+        "Hawk HPS", "Hawk HPS 5.0", "Hawk HP+",
+        "Hawk DTC-30", "Hawk DTC-60", "Hawk DTC-70",
+        "Hawk Blue 9012", "Hawk Black",
+        "Hawk PC", "Hawk LTS", "Hawk Performance Ceramic"
+      ],
+      "era_markers": [
+        "Hawk branding with compound code (HPS / HP+ / DTC)",
+        "Compound color (blue, black, red, yellow)",
+        "Track / street designation"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Hawk DTC-60 / DTC-70 track pads", "low": 200, "high": 400},
+        {"item": "Hawk HPS 5.0 / HP+ street pads", "low": 90, "high": 180}
+      ],
+      "target_buy_usd": {"low": 10, "high": 80},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "hawk {model}",
+      "ship_class": "small_box",
+      "notes": "Hawk is the #1 performance brake-pad brand. DTC-series for track use, HPS / HP+ for street performance. Track-day enthusiasts replace pads frequently — sustained replacement-part market."
+    },
+    {
+      "brand": "PowerStop / EBC brakes",
+      "category": "auto_brakes",
+      "tier": 2,
+      "models": [
+        "PowerStop Z36", "PowerStop Z23", "PowerStop Z26",
+        "PowerStop Z16", "PowerStop K-series kit",
+        "EBC Yellowstuff", "EBC Redstuff", "EBC Greenstuff",
+        "EBC Bluestuff", "EBC Orangestuff",
+        "EBC USR rotor", "EBC GD rotor"
+      ],
+      "era_markers": [
+        "PowerStop / EBC distinct brand markings",
+        "EBC color-coded compound system",
+        "Cross-drilled + slotted rotors visible from photo"
+      ],
+      "comp_ranges_usd": [
+        {"item": "PowerStop K-series complete kit (4 corners)", "low": 200, "high": 380},
+        {"item": "EBC Yellowstuff / Redstuff pad set", "low": 100, "high": 180},
+        {"item": "EBC slotted rotor (each)", "low": 90, "high": 160}
+      ],
+      "target_buy_usd": {"low": 8, "high": 70},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "{brand} {model}",
+      "ship_class": "medium_box",
+      "notes": "PowerStop is the value-tier brake-kit brand (drilled/slotted rotors at affordable price). EBC offers a color-coded compound system that's easy for buyers to choose from. Both have strong brand recognition in the upgrade-from-OEM market."
+    },
+    {
+      "brand": "K&N filters",
+      "category": "auto_filters",
+      "tier": 2,
+      "models": [
+        "K&N air filter", "K&N drop-in filter",
+        "K&N cold air intake", "K&N CAI",
+        "K&N oil filter", "K&N performance filter",
+        "K&N FIPK", "K&N 57 series", "K&N 77 series",
+        "K&N AirCharger", "K&N Typhoon",
+        "K&N high flow"
+      ],
+      "era_markers": [
+        "K&N red oil-soaked cotton element (signature)",
+        "K&N logo on filter",
+        "Made in USA stamping",
+        "Cleanable / reusable lifetime warranty"
+      ],
+      "comp_ranges_usd": [
+        {"item": "K&N cold air intake (vehicle-specific)", "low": 150, "high": 300},
+        {"item": "K&N drop-in air filter (panel)", "low": 35, "high": 70},
+        {"item": "K&N oil filter HP-1017", "low": 12, "high": 22}
+      ],
+      "target_buy_usd": {"low": 5, "high": 60},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "k&n {part}",
+      "ship_class": "medium_box",
+      "notes": "K&N is the dominant performance air filter brand. Cold air intakes (CAIs) and full FIPK kits are the volume sellers — vehicle-specific so always list with year/make/model. Counterfeits exist; verify hologram on box.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Premium OEM filters",
+      "category": "auto_filters",
+      "tier": 2,
+      "models": [
+        "Mann-Filter", "Mann Filter HU 925/4 X",
+        "Mahle filter", "Mahle OX series",
+        "Wix filter", "Wix XP", "Wix Pro-Tec",
+        "Hengst filter", "Mann + Hummel"
+      ],
+      "era_markers": [
+        "Mann / Mahle / Wix branding on filter housing",
+        "Made in Germany / Czech Republic / Mexico (varies)",
+        "OE supplier markings (Mann supplies BMW, Mercedes; Mahle supplies VW)",
+        "Part number format (HU 925/4 X / OX 154D2 etc.)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Mann oil filter (BMW / Mercedes specific)", "low": 12, "high": 25},
+        {"item": "Mahle oil filter (VW / Audi specific)", "low": 10, "high": 22},
+        {"item": "Wix XP oil filter (US domestic)", "low": 8, "high": 18}
+      ],
+      "target_buy_usd": {"low": 1, "high": 8},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "{brand} filter {vehicle}",
+      "ship_class": "poly_mailer",
+      "notes": "Mann-Filter and Mahle are OEM suppliers for German marques (BMW, Mercedes, VW, Audi). Wix is the US domestic favorite. Volume play — small per-item margin but quick-turn.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Gates belts and hoses",
+      "category": "auto_belts",
+      "tier": 2,
+      "models": [
+        "Gates serpentine belt", "Gates Micro-V",
+        "Gates timing belt", "Gates Fluidshield",
+        "Gates Green Stripe", "Gates K-belt",
+        "Gates radiator hose", "Gates Powergrip"
+      ],
+      "era_markers": [
+        "Gates logo + green / blue branding",
+        "Made in USA / Mexico stamping",
+        "OE supplier markings",
+        "Part number format (e.g. 5060615)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Gates timing belt kit (vehicle-specific)", "low": 80, "high": 180},
+        {"item": "Gates serpentine belt (Micro-V)", "low": 18, "high": 45},
+        {"item": "Gates radiator hose (upper or lower)", "low": 25, "high": 60}
+      ],
+      "target_buy_usd": {"low": 2, "high": 25},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "gates {part} {vehicle}",
+      "ship_class": "poly_mailer",
+      "notes": "Gates is the OEM supplier for serpentine belts on most American + Asian vehicles. Timing belt kits (with tensioner + idler + water pump bundled) are the highest-margin items.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Hella + Philips automotive lighting",
+      "category": "auto_lighting",
+      "tier": 2,
+      "models": [
+        "Hella headlight", "Hella H7", "Hella H4",
+        "Hella H11", "Hella H8", "Hella 9005", "Hella 9006",
+        "Hella 9012", "Hella xenon", "Hella HID",
+        "Philips X-tremeVision", "Philips RacingVision",
+        "Philips Diamond Vision", "Philips H7", "Philips H11",
+        "Philips Ultinon LED", "Philips D2S", "Philips D3S",
+        "Osram Night Breaker", "Osram Cool Blue"
+      ],
+      "era_markers": [
+        "Hella / Philips / Osram branding on bulb",
+        "Wattage + color temperature on package (3500K / 6000K)",
+        "DOT / ECE compliance markings",
+        "Genuine packaging vs aftermarket-clone packaging",
+        "Made in Germany / Czech / Korea / China (varies by line)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Hella OEM headlight assembly (vehicle-specific)", "low": 130, "high": 350},
+        {"item": "Philips X-tremeVision H7 pair", "low": 35, "high": 60},
+        {"item": "Philips D2S / D3S xenon (single)", "low": 80, "high": 160},
+        {"item": "Osram Night Breaker pair", "low": 30, "high": 60}
+      ],
+      "target_buy_usd": {"low": 3, "high": 80},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "{brand} {bulb_type} {vehicle}",
+      "ship_class": "small_box",
+      "notes": "Hella is the German OE lighting supplier (BMW, Mercedes, VW). Philips and Osram dominate the H4/H7/H11 bulb retail market — counterfeits are very common, verify hologram + tear-resistant packaging. LED retrofits (Philips Ultinon, Osram NightBreaker LED) are the fastest-growing segment.",
+      "condition_critical": true
+    },
+    {
+      "brand": "WeatherTech",
+      "category": "auto_trim",
+      "tier": 2,
+      "models": [
+        "WeatherTech FloorLiner", "WeatherTech Floor Liner",
+        "WeatherTech AVM", "WeatherTech all-weather mat",
+        "WeatherTech CargoLiner", "WeatherTech Cargo Liner",
+        "WeatherTech TechCare", "WeatherTech window deflector",
+        "WeatherTech mud flap", "WeatherTech bug deflector",
+        "WeatherTech sunshade"
+      ],
+      "era_markers": [
+        "WeatherTech branding (lifetime-warranty floor mats)",
+        "Vehicle fitment listed on package (year/make/model)",
+        "Made in USA stamping",
+        "Color (black / tan / cocoa / grey)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "WeatherTech FloorLiner full set (3 rows)", "low": 200, "high": 380},
+        {"item": "WeatherTech FloorLiner front pair", "low": 120, "high": 220},
+        {"item": "WeatherTech CargoLiner", "low": 100, "high": 180}
+      ],
+      "target_buy_usd": {"low": 8, "high": 80},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "weathertech {part} {vehicle}",
+      "ship_class": "medium_box",
+      "notes": "WeatherTech is the dominant premium floor-mat brand — vehicle-specific, made-in-USA, lifetime warranty. Used examples in clean condition trade at 60-70% of new MSRP. Husky Liners is the close competitor at slight discount."
+    },
+    {
+      "brand": "Magnaflow exhaust",
+      "category": "auto_exhaust",
+      "tier": 2,
+      "models": [
+        "Magnaflow cat-back", "Magnaflow Sound Chamber",
+        "Magnaflow Performance Series", "Magnaflow X-Pipe",
+        "Magnaflow Y-Pipe", "Magnaflow muffler",
+        "Magnaflow Direct-Fit", "Magnaflow OEM Grade Cat",
+        "Magnaflow CARB"
+      ],
+      "era_markers": [
+        "Magnaflow branding etched on muffler",
+        "CARB-compliant designation (California-legal)",
+        "Made in USA stamping",
+        "Cat-back vs axle-back distinction"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Magnaflow cat-back (vehicle-specific)", "low": 380, "high": 700},
+        {"item": "Magnaflow muffler (universal)", "low": 130, "high": 250},
+        {"item": "Magnaflow direct-fit catalytic converter", "low": 280, "high": 600}
+      ],
+      "target_buy_usd": {"low": 30, "high": 200},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "magnaflow {part} {vehicle}",
+      "ship_class": "large_box",
+      "notes": "Magnaflow is the volume performance-exhaust brand. CARB-compliant cat-back systems are popular for California buyers. Heavy / large items — large_box freight makes margin-tight unless buyer is local-pickup."
+    },
+    {
+      "brand": "Borla exhaust",
+      "category": "auto_exhaust",
+      "tier": 2,
+      "models": [
+        "Borla S-Type", "Borla ATAK", "Borla Touring",
+        "Borla cat-back", "Borla axle-back",
+        "Borla Pro XS muffler", "Borla XR-1"
+      ],
+      "era_markers": [
+        "Borla branding (lifetime warranty)",
+        "S-Type / ATAK / Touring sound profiles",
+        "Made in USA stamping (Oxnard, CA)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Borla ATAK cat-back (Mustang/Camaro/Charger specific)", "low": 700, "high": 1300},
+        {"item": "Borla S-Type axle-back", "low": 380, "high": 700}
+      ],
+      "target_buy_usd": {"low": 30, "high": 200},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "borla {model}",
+      "ship_class": "large_box",
+      "notes": "Borla is premium-tier American-made exhaust. ATAK is the loudest, S-Type is the daily-driver favorite, Touring is the quietest. Mustang / Camaro / Charger / Challenger applications are the volume sellers."
+    },
+    {
+      "brand": "HKS Japanese performance",
+      "category": "auto_performance",
+      "tier": 2,
+      "models": [
+        "HKS Hi-Power", "HKS Legamax", "HKS Super Sequential BOV",
+        "HKS SSQV", "HKS turbo", "HKS GT2",
+        "HKS GT3", "HKS Type-S", "HKS oil filter",
+        "HKS DBA Racing", "HKS Hipermax"
+      ],
+      "era_markers": [
+        "HKS branding (Japanese performance)",
+        "Made in Japan stamping",
+        "Distinctive blue-and-silver packaging",
+        "JDM-favorite for Skyline / Supra / EVO / WRX builds"
+      ],
+      "comp_ranges_usd": [
+        {"item": "HKS GT2 / GT3 turbocharger", "low": 1500, "high": 4500},
+        {"item": "HKS Super Sequential BOV", "low": 250, "high": 450},
+        {"item": "HKS Hipermax coilover set", "low": 1500, "high": 3500},
+        {"item": "HKS Hi-Power exhaust", "low": 700, "high": 1500}
+      ],
+      "target_buy_usd": {"low": 30, "high": 350},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "hks {model}",
+      "ship_class": "large_box",
+      "notes": "HKS is the OG JDM tuner brand. SSQV blow-off valve is iconic. Turbos and coilovers command extreme premium for Skyline GT-R / Supra / EVO / WRX applications. Counterfeits exist — verify serial number with HKS USA.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Mishimoto cooling",
+      "category": "auto_performance",
+      "tier": 2,
+      "models": [
+        "Mishimoto radiator", "Mishimoto intercooler",
+        "Mishimoto oil cooler", "Mishimoto charge pipe",
+        "Mishimoto silicone hose", "Mishimoto heat exchanger",
+        "Mishimoto baffled oil catch can",
+        "Mishimoto direct-fit radiator"
+      ],
+      "era_markers": [
+        "Mishimoto branding (blue accents)",
+        "Aluminum welded construction visible",
+        "Lifetime warranty markings",
+        "Direct-fit application listed on package"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Mishimoto radiator (vehicle-specific)", "low": 280, "high": 550},
+        {"item": "Mishimoto intercooler", "low": 600, "high": 1200},
+        {"item": "Mishimoto oil cooler kit", "low": 400, "high": 700}
+      ],
+      "target_buy_usd": {"low": 25, "high": 180},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "mishimoto {part} {vehicle}",
+      "ship_class": "medium_box",
+      "notes": "Mishimoto is the value-performance cooling specialist. Direct-fit radiators / intercoolers for popular tuner platforms (BRZ/86, EVO, WRX, GT-R, BMW M3) are the volume sellers."
+    },
+    {
+      "brand": "BBS Wheels",
+      "category": "auto_wheels",
+      "tier": 1,
+      "models": [
+        "BBS LM", "BBS LM-R", "BBS RS", "BBS RS-GT",
+        "BBS RM", "BBS RC", "BBS RX-R",
+        "BBS CH-R", "BBS CH", "BBS FI-R", "BBS FS",
+        "BBS RGR", "BBS SR", "BBS Super RS"
+      ],
+      "era_markers": [
+        "BBS center-cap logo (red BBS chevron)",
+        "Made in Germany / Made in Japan stamping",
+        "Forged vs cast designation",
+        "Multi-piece (RS / LM) vs single-piece (CH / FI) construction",
+        "Authenticity hologram sticker"
+      ],
+      "comp_ranges_usd": [
+        {"item": "BBS LM / LM-R 19-20 inch set of 4", "low": 4500, "high": 9000},
+        {"item": "BBS RS multi-piece classic set", "low": 3500, "high": 8500},
+        {"item": "BBS CH-R / FI-R single-piece set", "low": 2200, "high": 4500}
+      ],
+      "target_buy_usd": {"low": 100, "high": 1500},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "bbs {model}",
+      "ship_class": "large_box",
+      "notes": "BBS is THE premium wheel brand globally. RS / LM multi-piece wheels are restorable (rebarrel-able) and have collector demand. Counterfeits exist — verify forged stamps + center-cap hologram + multi-piece construction (real RS/LM bolts together).",
+      "condition_critical": true
+    },
+    {
+      "brand": "Volk Racing + Enkei wheels",
+      "category": "auto_wheels",
+      "tier": 1,
+      "models": [
+        "Volk TE37", "Volk TE37 SAGA", "Volk TE37 Ultra",
+        "Volk CE28N", "Volk ZE40", "Volk G25",
+        "Rays Engineering",
+        "Enkei RPF1", "Enkei NT03+M", "Enkei PF01",
+        "Enkei RC-T5", "Enkei TS-10", "Enkei Kojin"
+      ],
+      "era_markers": [
+        "Volk Racing logo + Rays Engineering co-branding",
+        "Forged Made in Japan stamping",
+        "Color (bronze / gunmetal / matte black are iconic)",
+        "Enkei MAT (most advanced technology) cast designation"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Volk TE37 set of 4 (forged JDM)", "low": 3500, "high": 7500},
+        {"item": "Volk CE28N set of 4", "low": 3000, "high": 6500},
+        {"item": "Enkei RPF1 set of 4", "low": 1100, "high": 1800},
+        {"item": "Enkei NT03+M set of 4", "low": 1500, "high": 2500}
+      ],
+      "target_buy_usd": {"low": 60, "high": 1000},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "{brand} {model}",
+      "ship_class": "large_box",
+      "notes": "Volk Racing TE37 is the iconic JDM forged wheel — the holy grail for Honda / Mitsubishi / Subaru / Nissan tuner builds. Bronze color commands 20-30% premium. Enkei RPF1 is the budget-tier counterpart that still trades extremely well. Counterfeits common; verify Rays Engineering stamping.",
+      "condition_critical": true
+    }
+  ],
+  "platform_notes": {
+    "eBay": "Dominant marketplace. Buyers search by EXACT part number + vehicle fitment. Use sold-listings filter for accurate comps.",
+    "RockAuto": "Sets the wholesale price floor for OEM-equivalent parts (ACDelco / Motorcraft / Mopar / Bosch). eBay used clears at 110-130% of RockAuto new price for OEM-stamped genuine items.",
+    "FCP Euro": "European-specialty wholesale benchmark. Sets the floor on Mann / Mahle / Bosch / Hella prices.",
+    "Forums": "BimmerForums, MBWorld, Tundra Talk, F-150 Online — these communities discuss exact part numbers + known failure points + 'best aftermarket equivalent'. Useful for sanity-checking comps."
+  }
+}

@@ -445,6 +445,14 @@ class Phase1Scraper:
             "errors": [{"auction_id", "auction_name", "error"}, ...],
             "per_auction": [{"auction_id", "auction_name", "raw_count", "kept": int}, ...]
         }
+
+        progress_callback signature:
+          (current, total, label, extras) -> None
+        where `extras` is a dict carrying running lot counts + names of
+        the auctions just completed in this batch, so the UI can show
+        "Fetched 12,450 lots so far · just finished: Estate Sale 4/29".
+        Older single-line callbacks are still supported via 3-arg call
+        when the callback only accepts 3 positional args.
         """
         agg = {
             "lots": [],
@@ -455,6 +463,7 @@ class Phase1Scraper:
         }
         total = len(auctions)
         effective_total = grand_total if grand_total is not None else total
+        running_lots = 0
 
         for i in range(0, total, batch_size):
             batch = auctions[i:i + batch_size]
@@ -465,10 +474,14 @@ class Phase1Scraper:
                 for a in batch
             ]
             results = await asyncio.gather(*tasks)
+            batch_lots = 0
+            batch_names = []
             for r in results:
                 agg["lots"].extend(r["lots"])
                 agg["raw_count"] += r["raw_count"]
                 agg["filtered_by_category"] += r["filtered_by_category"]
+                batch_lots += len(r["lots"])
+                batch_names.append(r["auction_name"])
                 if r["error"]:
                     agg["errors"].append({
                         "auction_id": r["auction_id"],
@@ -481,10 +494,23 @@ class Phase1Scraper:
                     "raw_count": r["raw_count"],
                     "kept": len(r["lots"]),
                 })
+            running_lots += batch_lots
 
             if progress_callback:
                 current = progress_offset + min(i + batch_size, total)
-                progress_callback(current, effective_total, phase_label)
+                extras = {
+                    "running_lots": agg["raw_count"] + progress_offset * 0,
+                    "running_kept": len(agg["lots"]),
+                    "batch_names": batch_names,
+                    "batch_lots": batch_lots,
+                    "errors_so_far": len(agg["errors"]),
+                }
+                # Try the new 4-arg signature first; fall back to 3-arg
+                # for older callers that don't take extras.
+                try:
+                    progress_callback(current, effective_total, phase_label, extras)
+                except TypeError:
+                    progress_callback(current, effective_total, phase_label)
 
         return agg
 
@@ -505,22 +531,36 @@ class Phase1Scraper:
                 progress_callback(current, total, label)
 
         async with httpx.AsyncClient() as client:
-            _report(0, 1, "Discovering local auctions...")
+            _report(0, 3, f"Querying HiBid for local auctions within {self.radius} mi of {self.zip_code or '(any)'}…")
             local_auctions = await self.fetch_auctions(client, self.zip_code, self.radius)
+            local_raw_count = len(local_auctions)
             local_auctions = self._filter_by_closing_date(local_auctions)
             local_ids = {a['auction_id'] for a in local_auctions}
             for a in local_auctions:
                 a['source'] = 'Local Pickup'
+            _report(
+                1, 3,
+                f"Local: {len(local_auctions)} kept "
+                f"(of {local_raw_count} returned, filtered by closing date)",
+            )
 
             remote_auctions: List[Dict] = []
             if self.include_nationwide:
-                _report(0, 1, "Discovering nationwide auctions...")
+                _report(1, 3, "Querying HiBid for nationwide shippable auctions…")
                 nationwide_raw = await self.fetch_auctions(client, "", 0)
                 remote_auctions = [a for a in nationwide_raw if a['auction_id'] not in local_ids]
+                pre_close_count = len(remote_auctions)
                 remote_auctions = self._filter_by_closing_date(remote_auctions)
                 remote_auctions = sorted(remote_auctions, key=lambda a: a.get('date_end', ''))
                 for a in remote_auctions:
                     a['source'] = 'Ship'
+                _report(
+                    2, 3,
+                    f"Nationwide: {len(remote_auctions)} kept "
+                    f"(of {len(nationwide_raw)} returned, "
+                    f"{pre_close_count - len(remote_auctions)} dropped "
+                    f"by closing date)",
+                )
 
             all_auctions = local_auctions + remote_auctions
             _report(len(all_auctions), max(len(all_auctions), 1),

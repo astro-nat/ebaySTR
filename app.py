@@ -9,12 +9,214 @@ import re
 from datetime import datetime, timedelta
 from pathlib import Path
 
+# Plotly is optional — the BOLO live pie chart degrades to the
+# existing markdown brand-tally line if plotly isn't installed.
+try:
+    import plotly.express as px  # type: ignore
+    _HAS_PLOTLY = True
+except ImportError:
+    _HAS_PLOTLY = False
+
+
+def _build_brand_pie(brand_counts: dict, title: str = "BOLO matches by brand"):
+    """Build a Plotly pie chart for brand counts. Returns the figure or
+    None if plotly isn't available / no data. Top 12 slices + everything
+    else aggregated as 'Other' so the chart stays readable on auctions
+    with very long brand tails."""
+    if not _HAS_PLOTLY or not brand_counts:
+        return None
+    items = sorted(
+        brand_counts.items(), key=lambda kv: kv[1], reverse=True
+    )
+    if len(items) > 12:
+        head = items[:11]
+        tail_total = sum(v for _, v in items[11:])
+        head.append((f"Other ({len(items) - 11} brands)", tail_total))
+        items = head
+    labels = [k for k, _ in items]
+    values = [v for _, v in items]
+    fig = px.pie(
+        names=labels, values=values, title=title, hole=0.4,
+    )
+    fig.update_traces(
+        textinfo="label+value",
+        textposition="outside",
+        hovertemplate="<b>%{label}</b><br>%{value} matches "
+                      "(%{percent})<extra></extra>",
+    )
+    fig.update_layout(
+        margin=dict(t=40, l=0, r=0, b=0),
+        height=380,
+        showlegend=True,
+        legend=dict(orientation="v", x=1.02, y=0.5),
+    )
+    return fig
+
 # --- IMPORT MODULES ---
 from scraper import Phase1Scraper
 from scraper.cache import AuctionCache, merge_cached_analysis
+from scraper.bolo import BoloMatcher
+from scraper.auth_check import (
+    analyze_description as _auth_analyze_description,
+    analyze_photo as _auth_analyze_photo,
+    merge_results as _auth_merge_results,
+    detect_stylized_replica as _detect_stylized_replica,
+)
 
 # Single shared cache instance; auto-creates the dir on first touch
 _AUCTION_CACHE = AuctionCache()
+
+# Single shared BOLO matcher. Hot-reloads from data/clothing_brand_bolo.json
+# whenever the file's mtime changes — the user can swap in a new quarterly
+# brand list without restarting Streamlit. The matcher is cheap (regex
+# patterns compiled once at load) so reading it per-row during render is fine.
+_BOLO_MATCHER = BoloMatcher()
+
+
+def _compute_bolo_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Add bolo_brand / bolo_tier / bolo_target_buy_low/high columns.
+
+    Idempotent: returns the df unchanged if already populated AND the
+    matcher mtime hasn't moved (we still recompute on file edit so a
+    swapped BOLO list takes effect).
+
+    Done lazily (during render) rather than baked into the audit pipeline
+    so the user can swap the JSON file at any time and have results
+    reflect the new list on the next rerun. No API cost, just regex.
+    """
+    if df is None or len(df) == 0 or 'title' not in df.columns:
+        return df
+    titles = df['title'].fillna('').astype(str)
+    descs = (df['description'].fillna('').astype(str)
+             if 'description' in df.columns
+             else pd.Series([''] * len(df), index=df.index))
+    brands = []
+    categories = []
+    tiers = []
+    models = []
+    buy_lows = []
+    buy_highs = []
+    confs = []
+    auth_required = []
+    auth_scores = []
+    auth_red_summaries = []
+    auth_green_summaries = []
+    stylized_flags = []
+    stylized_phrases = []
+    for t, d in zip(titles, descs):
+        match = _BOLO_MATCHER.match(t, d)
+        # Run the stylized/replica detector on EVERY row, not just BOLO
+        # matches — a "Rolex style watch" lot might not match our BOLO
+        # for Rolex but still has the contamination problem in comps.
+        # The flag downstream gates whether comps actually run.
+        stylized = _detect_stylized_replica(t, d)
+        stylized_flags.append(stylized is not None)
+        stylized_phrases.append(stylized or "")
+        if match:
+            brands.append(match.get('brand'))
+            categories.append(match.get('category'))
+            tiers.append(match.get('tier'))
+            models.append(match.get('matched_model'))
+            buy_lows.append(match.get('target_buy_low'))
+            buy_highs.append(match.get('target_buy_high'))
+            confs.append(match.get('confidence'))
+            auth_req = bool(match.get('auth_required'))
+            auth_required.append(auth_req)
+            # Description-based authenticity scoring runs only on
+            # auth-required brands (tier 3 luxury + Polo sublines).
+            # The other tiers don't have a counterfeit-market problem
+            # worth scoring against, and analyze_description for them
+            # would return scores skewed by green-flag noise.
+            if auth_req:
+                auth = _auth_analyze_description(t, d, match)
+                auth_scores.append(auth['auth_score'] if auth else None)
+                # Compress red/green hits into compact strings for the
+                # results-table column. Full lists live on the match
+                # dict if we ever want richer surfacing.
+                auth_red_summaries.append(
+                    ", ".join(auth['red_flags']) if auth and auth.get('red_flags') else ""
+                )
+                auth_green_summaries.append(
+                    ", ".join(auth['green_flags']) if auth and auth.get('green_flags') else ""
+                )
+            else:
+                auth_scores.append(None)
+                auth_red_summaries.append("")
+                auth_green_summaries.append("")
+        else:
+            brands.append(None)
+            categories.append(None)
+            tiers.append(None)
+            models.append(None)
+            buy_lows.append(None)
+            buy_highs.append(None)
+            confs.append(None)
+            auth_required.append(False)
+            auth_scores.append(None)
+            auth_red_summaries.append("")
+            auth_green_summaries.append("")
+    df = df.copy()
+    df['bolo_brand'] = brands
+    df['bolo_category'] = categories
+    df['bolo_tier'] = tiers
+    df['bolo_model'] = models
+    df['bolo_target_buy_low'] = buy_lows
+    df['bolo_target_buy_high'] = buy_highs
+    df['bolo_confidence'] = confs
+    df['bolo_auth_required'] = auth_required
+    df['bolo_auth_score'] = auth_scores
+    df['bolo_auth_red'] = auth_red_summaries
+    df['bolo_auth_green'] = auth_green_summaries
+    df['is_stylized_replica'] = stylized_flags
+    df['stylized_phrase'] = stylized_phrases
+    return df
+
+
+def _compute_bolo_columns_chunked(df: pd.DataFrame, chunk_size: int = 2000,
+                                  progress_callback=None) -> pd.DataFrame:
+    """Same output as _compute_bolo_columns, but processes in chunks of
+    `chunk_size` rows so the UI can show running progress.
+
+    progress_callback signature: (current, total, hits_so_far, top_brands_dict) -> None
+    Called after every chunk so the caller can refresh a progress bar
+    plus a live "X matches so far, top brands: Trifari, Pyrex, …" line.
+
+    Falls back to the unchunked path when df is small (≤ chunk_size).
+    """
+    if df is None or len(df) == 0 or 'title' not in df.columns:
+        return df
+    n = len(df)
+    if n <= chunk_size:
+        out = _compute_bolo_columns(df)
+        if progress_callback is not None:
+            hits = (
+                int(out['bolo_brand'].notna().sum())
+                if 'bolo_brand' in out.columns else 0
+            )
+            top = (
+                out.loc[out['bolo_brand'].notna(), 'bolo_brand']
+                .value_counts().head(8).to_dict()
+                if 'bolo_brand' in out.columns else {}
+            )
+            progress_callback(n, n, hits, top)
+        return out
+
+    parts: list = []
+    hits_so_far = 0
+    from collections import Counter
+    brand_counter: Counter = Counter()
+    for start in range(0, n, chunk_size):
+        end = min(start + chunk_size, n)
+        chunk = _compute_bolo_columns(df.iloc[start:end])
+        parts.append(chunk)
+        if 'bolo_brand' in chunk.columns:
+            chunk_brands = chunk['bolo_brand'].dropna()
+            hits_so_far += len(chunk_brands)
+            brand_counter.update(chunk_brands.tolist())
+        if progress_callback is not None:
+            top = dict(brand_counter.most_common(8))
+            progress_callback(end, n, hits_so_far, top)
+    return pd.concat(parts, ignore_index=False)
 
 # --- Persistent discovery-result cache ---
 # Streamlit session state is wiped on browser refresh / app restart, which
@@ -386,6 +588,29 @@ if 'comps_exclude_hard' not in st.session_state:
     st.session_state.comps_exclude_hard = True
 if 'comps_only_img_promoted' not in st.session_state:
     st.session_state.comps_only_img_promoted = False
+if 'comps_pc_check_stylized' not in st.session_state:
+    st.session_state.comps_pc_check_stylized = True
+# Mercari scraper has had a 0% success rate across thousands of
+# lookups in production — defaults OFF so we don't burn ScrapingBee
+# credits on a dead source. User can flip on to retest periodically.
+if 'comps_use_mercari' not in st.session_state:
+    st.session_state.comps_use_mercari = False
+# When True, the comp run uses ONLY free curated sources
+# (GoCollect + PriceCharting) and skips eBay/Mercari for every
+# row. Set by clicking "🆓 Free comps only" at the credit gate.
+# Per-auction (cleared on every new auction load).
+if '_comps_free_only_mode' not in st.session_state:
+    st.session_state._comps_free_only_mode = False
+# When True, the next fetch_lots completion will trigger a
+# multi-auction BOLO scan: filter all fetched lots to BOLO
+# matches and load that subset as a synthetic "🎯 BOLO scan"
+# analysis view. Set by the sidebar "Scan all for BOLO" button.
+if '_bolo_scan_all_pending' not in st.session_state:
+    st.session_state._bolo_scan_all_pending = False
+# Stash for the multi-auction scan summary (count/auctions/etc.)
+# rendered in the analysis-view header.
+if '_bolo_scan_summary' not in st.session_state:
+    st.session_state._bolo_scan_summary = None
 if 'comps_chunk_size' not in st.session_state:
     # Process eligible lots N at a time. The pipeline hides the results
     # table between chunks (cooking screen), so multi-chunk runs feel
@@ -557,6 +782,20 @@ def _load_auction_for_analysis(auction_name, auction_df):
     # Each auction gets its own explicit confirmation before the comp
     # run burns ScrapingBee credits.
     st.session_state.pop('_comps_credit_confirmed', None)
+    # Reset the audit-scope chooser. Big auctions (>500 lots) with at
+    # least one BOLO match get a "full vs BOLO-only" pre-audit gate so
+    # the user doesn't accidentally burn Claude API + ScrapingBee
+    # credits on 11k irrelevant lots when 30 are real.
+    st.session_state.pop('_audit_scope', None)
+    st.session_state.pop('_audit_scope_total_lots', None)
+    # Reset the free-only-mode flag — each auction's credit gate
+    # makes its own free-vs-paid decision.
+    st.session_state._comps_free_only_mode = False
+    # Clear any pending multi-auction BOLO-scan state so a
+    # subsequent single-auction click doesn't accidentally re-enter
+    # scan mode on the next fetch.
+    st.session_state._bolo_scan_all_pending = False
+    st.session_state._bolo_scan_summary = None
     # Reset all "in-progress" flags. These get set by their respective
     # buttons and cleared in `finally` blocks inside the analysis view —
     # but if the user refreshed mid-run, the analysis branch never
@@ -596,8 +835,169 @@ def _load_auction_for_analysis(auction_name, auction_df):
 # rarely changes them.
 discover_running = st.session_state.get('discover_running', False)
 fetch_lots_running = st.session_state.get('fetch_lots_running', False)
-any_running = discover_running or fetch_lots_running
+_audit_running = st.session_state.get('audit_running', False)
+_comps_running = st.session_state.get('comps_running', False)
+_img_enrich_running = st.session_state.get('img_enrich_running', False)
+
+# First-page-open detection: if there's no cached discovery on disk AND
+# auto-discover hasn't been triggered yet, we're about to fire one
+# (handled further down in the flow). Treat that pending state as if
+# discovery were already running so the sticky banner + sidebar empty-
+# state reflect "Loading auctions…" on the very first render — without
+# this the user sees an empty UI for ~50-200ms before the auto-rerun
+# kicks in and the banner appears.
+_first_open_pending_discover = (
+    not st.session_state.get('_auto_discover_triggered', False)
+    and not st.session_state.get('auction_candidates')
+    and st.session_state.phase1_leads.empty
+    and not discover_running
+    and not fetch_lots_running
+)
+if _first_open_pending_discover:
+    discover_running = True  # Show the banner now; the actual rerun
+                             # at line ~1247 fires the real fetch.
+
+any_running = (
+    discover_running or fetch_lots_running
+    or _audit_running or _comps_running or _img_enrich_running
+)
 _restored_at = st.session_state.get('_discovery_restored_from')
+
+# --- STICKY TOP-OF-PAGE STATUS BANNER ---
+# When ANY long-running operation is in flight, render a banner pinned to
+# the top of the viewport that names the current phase. The detailed
+# st.status panels below still drive minute-by-minute progress; this is
+# a single-line "what is the algorithm doing right now" indicator the
+# user can rely on regardless of scroll position.
+#
+# Special "just kicked off" branch: when the user just clicked the
+# scan button, we render an extra-prominent variant for the first
+# few seconds (before phase status panels have caught up) so the
+# click is unambiguously confirmed. Detected via the
+# _scan_just_started marker stamped at click time.
+_scan_kickoff = st.session_state.get('_scan_just_started')
+if _scan_kickoff:
+    try:
+        _kick_age = (
+            datetime.now()
+            - datetime.fromisoformat(_scan_kickoff.get('started_at', ''))
+        ).total_seconds()
+    except (ValueError, TypeError):
+        _kick_age = 999
+    # Keep the kickoff banner up for ~6 seconds; after that the regular
+    # phase banner takes over. Either way clear the marker once Phase 2
+    # is well underway so it doesn't linger.
+    if _kick_age > 6 or not any_running:
+        st.session_state.pop('_scan_just_started', None)
+        _scan_kickoff = None
+
+if any_running or _scan_kickoff:
+    # CSS animation — pulse the left border so the banner reads as
+    # "actively working" even without scrolling.
+    st.markdown(
+        """
+        <style>
+        @keyframes hto_pulse {
+            0%   { border-left-color: #fbbf24; box-shadow: 0 0 0 0 rgba(251,191,36,0.5); }
+            50%  { border-left-color: #f59e0b; box-shadow: 0 0 12px 4px rgba(251,191,36,0.25); }
+            100% { border-left-color: #fbbf24; box-shadow: 0 0 0 0 rgba(251,191,36,0.5); }
+        }
+        .hto-running-banner {
+            position: sticky; top: 0; z-index: 999;
+            background: linear-gradient(90deg, #1e3a8a 0%, #1e40af 100%);
+            color: white; padding: 12px 18px; border-radius: 6px;
+            margin-bottom: 12px; font-size: 14px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+            border-left: 5px solid #fbbf24;
+            animation: hto_pulse 1.6s ease-in-out infinite;
+        }
+        .hto-kickoff-banner {
+            position: sticky; top: 0; z-index: 1000;
+            background: linear-gradient(90deg, #166534 0%, #15803d 60%, #16a34a 100%);
+            color: white; padding: 14px 20px; border-radius: 8px;
+            margin-bottom: 12px; font-size: 15px;
+            box-shadow: 0 4px 16px rgba(22,163,74,0.35);
+            border-left: 6px solid #facc15;
+            animation: hto_pulse 1s ease-in-out infinite;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    if _scan_kickoff:
+        # Loud "click landed, scan starting" confirmation. Renders for
+        # the first ~6 seconds after the button click, then yields
+        # to the regular phase banner.
+        _ac = _scan_kickoff.get('auction_count', 0)
+        _lc = _scan_kickoff.get('lot_count', 0)
+        _eta = _scan_kickoff.get('eta', '')
+        st.markdown(
+            f"""
+            <div class="hto-kickoff-banner">
+                <div style="font-weight: 700; font-size: 16px;">
+                    🚀 BOLO scan kicked off — fetching {_ac} auctions ({_lc:,} lots)
+                </div>
+                <div style="font-size: 13px; opacity: 0.95; margin-top: 4px;">
+                    ETA {_eta}. Phase 1 (HiBid GraphQL fetch) starting now —
+                    detailed progress panel will appear below momentarily.
+                    Don't refresh the page.
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    else:
+        if discover_running:
+            if _first_open_pending_discover:
+                _phase_label = "🔍 Loading auctions — first-time fetch from HiBid"
+                _phase_detail = (
+                    "No cached discovery found, so we're pulling the full "
+                    "open-auction list now. This runs once per session "
+                    "(~10–20s). The list will populate the sidebar as soon "
+                    "as it lands."
+                )
+            else:
+                _phase_label = "🔍 Phase 1 of 5: Discovering open auctions on HiBid"
+                _phase_detail = "Querying nationwide + local listings, filtering by closing date…"
+        elif fetch_lots_running:
+            _scan_all = st.session_state.get('_bolo_scan_all_pending', False)
+            if _scan_all:
+                _phase_label = "📥 Phase 2 of 5: Fetching every lot for BOLO scan"
+                _phase_detail = (
+                    "Pulling all lots from HiBid GraphQL in batches of 20 "
+                    "(free, no ScrapingBee credits). BOLO regex match runs "
+                    "next once lots are in."
+                )
+            else:
+                _phase_label = "📥 Phase 2 of 5: Fetching lots for selected auctions"
+                _phase_detail = "Pulling lot data from HiBid GraphQL (free, no credits)…"
+        elif _img_enrich_running:
+            _phase_label = "🖼️ Phase 3 of 5: Image enrichment (Claude vision)"
+            _phase_detail = "Asking Claude to read photos for higher-confidence titles…"
+        elif _audit_running:
+            _phase_label = "🧠 Phase 4 of 5: AI condition audit"
+            _phase_detail = "Claude reviewing each lot's title/description for verdicts + red flags…"
+        elif _comps_running:
+            _phase_label = "💰 Phase 5 of 5: Price comps + sell-through rate"
+            _phase_detail = (
+                "Fetching eBay sold comps + STR (uses ScrapingBee credits). "
+                "PriceCharting/GoCollect routed lots are free."
+            )
+        else:
+            _phase_label = "⏳ Working…"
+            _phase_detail = ""
+        st.markdown(
+            f"""
+            <div class="hto-running-banner">
+                <div style="font-weight: 600;">{_phase_label}</div>
+                <div style="font-size: 12px; opacity: 0.9; margin-top: 2px;">
+                    {_phase_detail}
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
 # Refresh-button context: when the user has drilled into an auction, the
 # button should re-fetch JUST that auction (not re-run discovery against
@@ -655,10 +1055,12 @@ with header_title_col:
     st.markdown("## 🛰️ Auction Intelligence Dashboard")
 
 with header_actions_col:
-    # Three slots: Sourcing popover, Memory popover, and a sidebar
-    # toggle that's always reachable so the user can manually reopen
-    # the auction list after the auto-collapse fires.
-    pop_sourcing, pop_memory, btn_sidebar = st.columns(3)
+    # Four slots: Sourcing popover, Memory popover, BOLO Suggestions
+    # popover (mines the cache for brand candidates not yet on the
+    # watch list), and a sidebar toggle that's always reachable so
+    # the user can manually reopen the auction list after the
+    # auto-collapse fires.
+    pop_sourcing, pop_memory, pop_bolo, btn_sidebar = st.columns(4)
 
     with pop_sourcing:
         with st.popover("📍 Sourcing", use_container_width=True):
@@ -762,6 +1164,125 @@ with header_actions_col:
                 removed = _AUCTION_CACHE.clear_all()
                 st.success(f"Cleared {removed} cached auction(s).")
                 st.rerun()
+
+    with pop_bolo:
+        with st.popover("🔭 BOLO Suggestions", use_container_width=True):
+            # Mines every cached auction for brand candidates not
+            # already on the BOLO list, ranked by occurrences ×
+            # avg_resale × log(avg_comps + 1). Free — no API calls,
+            # just regex over the cached pickles.
+            from scraper.bolo_suggester import (
+                suggest_from_cache,
+                to_bolo_entry_scaffold,
+                format_scaffold_json,
+                scan_cache as _suggester_scan_cache,
+            )
+            st.caption(
+                "Mines your cached audit history for brand candidates "
+                "that **comp well but aren't yet on the BOLO list**. "
+                "Use this quarterly to graduate winners into "
+                "`data/clothing_brand_bolo.json` or "
+                "`data/household_parts_bolo.json`."
+            )
+            sugg_c1, sugg_c2, sugg_c3 = st.columns(3)
+            with sugg_c1:
+                sb_min_resale = st.number_input(
+                    "Min est_resale", value=20.0, min_value=0.0, step=5.0,
+                    key="bolo_sugg_min_resale",
+                )
+            with sugg_c2:
+                sb_min_comps = st.number_input(
+                    "Min comps", value=3, min_value=1, step=1,
+                    key="bolo_sugg_min_comps",
+                )
+            with sugg_c3:
+                sb_min_occur = st.number_input(
+                    "Min occurrences", value=2, min_value=1, step=1,
+                    key="bolo_sugg_min_occur",
+                    help="How many cached lots a brand candidate has to "
+                         "appear in before it surfaces. Higher = less "
+                         "noise, fewer suggestions.",
+                )
+            cache_total = len(_suggester_scan_cache())
+            st.caption(
+                f"Scanning **{cache_total:,}** lots across all cached "
+                "auctions."
+            )
+            sugg_df = suggest_from_cache(
+                _BOLO_MATCHER,
+                min_resale=float(sb_min_resale),
+                min_comps=int(sb_min_comps),
+                min_occurrences=int(sb_min_occur),
+                max_results=30,
+            )
+            if sugg_df is None or sugg_df.empty:
+                st.info(
+                    "No suggestions yet — either the cache is empty, "
+                    "the thresholds are too tight, or every well-comping "
+                    "brand is already on the BOLO list."
+                )
+            else:
+                # Render as a tight table. Sample titles + auctions
+                # are list-typed so we render them as comma-separated
+                # strings for st.dataframe.
+                disp = sugg_df.copy()
+                disp['sample_titles'] = disp['sample_titles'].apply(
+                    lambda L: " · ".join(s[:50] for s in (L or []))
+                )
+                disp['auctions_seen'] = disp['auctions_seen'].apply(
+                    lambda L: " · ".join((L or [])[:2])
+                )
+                st.dataframe(
+                    disp[[
+                        'brand_candidate', 'occurrences',
+                        'avg_resale', 'max_resale',
+                        'avg_comps', 'avg_str', 'score',
+                        'sample_titles',
+                    ]],
+                    use_container_width=True,
+                    column_config={
+                        'brand_candidate': st.column_config.TextColumn("Candidate"),
+                        'occurrences': st.column_config.NumberColumn("Hits", format="%d"),
+                        'avg_resale': st.column_config.NumberColumn("Avg $", format="$%.2f"),
+                        'max_resale': st.column_config.NumberColumn("Max $", format="$%.2f"),
+                        'avg_comps': st.column_config.NumberColumn("Avg comps", format="%.1f"),
+                        'avg_str': st.column_config.NumberColumn("Avg STR", format="%.0f%%"),
+                        'score': st.column_config.NumberColumn("Score", format="%d"),
+                        'sample_titles': st.column_config.TextColumn(
+                            "Sample lot titles", width="large",
+                        ),
+                    },
+                    hide_index=True,
+                )
+
+                # JSON scaffolding for one selected candidate
+                st.markdown("---")
+                st.markdown("**Generate JSON scaffold for a candidate**")
+                pick_idx = st.selectbox(
+                    "Candidate",
+                    options=list(range(len(sugg_df))),
+                    format_func=lambda i: (
+                        f"{sugg_df.iloc[i]['brand_candidate']}  "
+                        f"(×{sugg_df.iloc[i]['occurrences']}, "
+                        f"avg ${sugg_df.iloc[i]['avg_resale']:.0f})"
+                    ),
+                    key="bolo_sugg_pick",
+                )
+                picked = sugg_df.iloc[pick_idx]
+                scaffold = to_bolo_entry_scaffold(
+                    brand_candidate=picked['brand_candidate'],
+                    sample_titles=picked['sample_titles'],
+                    avg_resale=float(picked['avg_resale'] or 0),
+                    max_resale=float(picked['max_resale'] or 0),
+                )
+                st.code(format_scaffold_json(scaffold), language="json")
+                st.caption(
+                    "Copy → fill in TODO fields → paste into the "
+                    "`brands` array in the appropriate BOLO file → "
+                    "save. The matcher hot-reloads on file mtime "
+                    "change, so the next render picks up the new "
+                    "brand without restart."
+                )
 
     # The Refresh / Discover button moved to the top of the sidebar
     # auction list (see _render_sidebar_refresh_button below) so it's
@@ -921,13 +1442,77 @@ _PREFER_KEYWORDS = (
     'vintage',
 )
 
+# Auctioneer-template / AI-generated listing copy patterns. When >30%
+# of sample lot titles contain one of these phrases, the auction is
+# almost certainly a dropship operation (mass-uploaded fake-vintage
+# inventory with computer-generated descriptions). Real auctioneer
+# descriptions don't have boilerplate phrases like "Hook Discover Item
+# Details Age" repeated across dozens of lots.
+#
+# Confirmed examples observed in the wild:
+# - 'Vintage & Collectible Sale — Medals, Porcelain' had "Uncommon
+#   Vintage" in 46% of titles + "Hook Discover" in 31%
+# - 'New Pokemon Cards 03-05-2026' had "Pokemon Cards English" template
+#   with auction-marketing adjectives in 100% of titles
+_DROPSHIP_TEMPLATE_PHRASES = (
+    'uncommon vintage',
+    'rare vintage',
+    'unique vintage',
+    'hook discover',
+    'item details age',
+    'item details type',
+    'introduction discover',
+    'introduction elevate',
+    'introduction add',
+    'introduction this',
+    'a rare find',
+    'why this item',
+    'step item details',
+    'pokemon cards english',
+    'cards english',
+)
+_DROPSHIP_THRESHOLD_RATIO = 0.30  # 30% of sample titles → flag as dropship
 
-def _auction_signal(name, items, closes_dt, last_run_dt):
+
+def _detect_dropship_signal(sample_titles):
+    """Return (is_dropship, ratio, top_phrase) for a list of sample titles.
+
+    Computes the fraction of titles containing ANY of the auctioneer-
+    template phrases. When the fraction crosses _DROPSHIP_THRESHOLD_RATIO,
+    we flag the auction as a dropship/AI-listing operation.
+
+    Returns:
+        (False, 0.0, None) when sample is empty or below threshold
+        (True, ratio_as_float, top_matching_phrase) when at/above threshold
+    """
+    titles = [t for t in (sample_titles or []) if isinstance(t, str)]
+    if len(titles) < 5:  # need a meaningful sample to flag confidently
+        return False, 0.0, None
+    lower = [t.lower() for t in titles]
+    matched_titles = 0
+    phrase_counts = {}
+    for title in lower:
+        hit_in_this_title = False
+        for phrase in _DROPSHIP_TEMPLATE_PHRASES:
+            if phrase in title:
+                phrase_counts[phrase] = phrase_counts.get(phrase, 0) + 1
+                hit_in_this_title = True
+        if hit_in_this_title:
+            matched_titles += 1
+    ratio = matched_titles / len(titles)
+    if ratio < _DROPSHIP_THRESHOLD_RATIO:
+        return False, ratio, None
+    top_phrase = max(phrase_counts.items(), key=lambda kv: kv[1])[0] if phrase_counts else None
+    return True, ratio, top_phrase
+
+
+def _auction_signal(name, items, closes_dt, last_run_dt, sample_titles=None):
     """Return (rank, reason) where rank is 'good' | 'caution' | 'avoid'.
 
     Heuristics, ranked first-match-wins:
-      - 'avoid': name matches commoditized-source keywords, lot count
-        > 1500, or closing in <2 hours (comp run wouldn't finish).
+      - 'avoid': name matches commoditized-source keywords, dropship
+        template language detected in lot titles, lot count > 1500,
+        or closing in <2 hours (comp run wouldn't finish).
       - 'caution': already analyzed in the last 24h, or outside the
         100-500 lot sweet spot but otherwise fine.
       - 'good': in the sweet spot, optionally with a 'prefer' keyword.
@@ -936,6 +1521,24 @@ def _auction_signal(name, items, closes_dt, last_run_dt):
     for kw in _AVOID_KEYWORDS:
         if kw in nm:
             return 'avoid', f"Name contains '{kw}' — base prices typically too compressed for arbitrage"
+    # Dropship / AI-generated listing detector. Runs on the cat_samples
+    # titles passed in by the sidebar builder. Catches auctions where
+    # >30% of titles share auctioneer-template / dropship boilerplate
+    # like "Uncommon Vintage" + "Hook Discover" — these are almost
+    # always low-quality sourcing (Asian decor reproductions, niche
+    # militaria, AI-generated descriptions).
+    if sample_titles:
+        is_dropship, ratio, top_phrase = _detect_dropship_signal(sample_titles)
+        if is_dropship:
+            pct = int(round(ratio * 100))
+            reason = (
+                f"Dropship signals: {pct}% of sample titles contain "
+                f"auctioneer-template language"
+            )
+            if top_phrase:
+                reason += f" (e.g. '{top_phrase}')"
+            reason += " — likely AI-generated listings, low-quality inventory"
+            return 'avoid', reason
     if items > 1500:
         return 'avoid', f"{items:,} lots — too expensive at current credit rates"
     if closes_dt:
@@ -1033,13 +1636,54 @@ def _render_sidebar_auction_list():
         _render_sidebar_refresh_button()
         st.markdown("### 📋 Auctions")
         if not candidates:
-            st.caption(
-                "Nothing discovered yet. Click **🔍 Discover** above "
-                "to fetch the open-auction list."
-            )
+            if discover_running:
+                # Show a friendly loading state instead of "click discover" —
+                # we're already discovering. A spinning emoji + text is a
+                # cheap way to communicate "the algorithm is working" in
+                # the sidebar (where the user is most likely looking)
+                # without needing JS animations.
+                st.markdown(
+                    """
+                    <div style="
+                        padding: 14px 12px;
+                        background: rgba(59,130,246,0.1);
+                        border-left: 3px solid #3b82f6;
+                        border-radius: 4px;
+                        font-size: 13px;
+                    ">
+                        <div style="font-weight: 600; margin-bottom: 4px;">
+                            ⏳ Loading auctions…
+                        </div>
+                        <div style="font-size: 12px; opacity: 0.85;">
+                            Fetching the open-auction list from HiBid.
+                            The sidebar will populate in a few seconds.
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+                # Streamlit's built-in spinner gives the user a small
+                # animated indicator on top of the text card.
+                with st.spinner("Querying HiBid…"):
+                    # Empty placeholder — the spinner shows for as long as
+                    # discover_running is True. Streamlit auto-cleans it
+                    # up when the script finishes / reruns.
+                    st.empty()
+            else:
+                st.caption(
+                    "Nothing discovered yet. Click **🔍 Discover** above "
+                    "to fetch the open-auction list."
+                )
             return
 
-        st.caption(f"**{len(candidates)}** open auction(s)")
+        # Aggregate lot count across all open auctions. The filtered
+        # subtotal + ETA are recomputed AFTER filters are applied
+        # (further down) so the scan button reflects what's visible.
+        _total_lots_all = sum(int(c.get('lot_count') or 0) for c in candidates)
+        st.caption(
+            f"**{len(candidates)}** open auctions · "
+            f"~**{_total_lots_all:,}** total lots (pre-filter)"
+        )
 
         # Compact search + sort
         sb_search = st.text_input(
@@ -1051,6 +1695,7 @@ def _render_sidebar_auction_list():
         sb_sort = st.selectbox(
             "Sort",
             options=[
+                "🎯 Most BOLO hits first",
                 "🎯 Best fit first",
                 "💸 Highest PC % first",
                 "💸 Lowest credit cost first",
@@ -1066,16 +1711,49 @@ def _render_sidebar_auction_list():
             "Hide 🔴 avoid",
             key="sidebar_hide_avoid",
             help="Filter out auctions flagged as low-priority: name "
-                 "contains 'liquidation'/'overstock'/'pallet'/etc., lot "
-                 "count > 1500, or closing in <2 hours.",
+                 "contains 'liquidation'/'overstock'/'pallet'/etc., "
+                 ">30% of sample titles use dropship/AI template "
+                 "language ('Uncommon Vintage', 'Hook Discover'), "
+                 "lot count > 1500, or closing in <2 hours.",
         )
         sb_hide_local_pickup = st.checkbox(
-            "Hide 📦 local pickup",
+            "Hide 📦 ALL local pickup",
             key="sidebar_hide_local_pickup",
-            help="Filter out auctions whose source is Local Pickup — "
-                 "these require physically driving to the auction "
-                 "house to retrieve items. Uncheck to include them.",
+            help="Filter out every Local Pickup auction, even ones "
+                 "within your sourcing radius. Off by default — leave "
+                 "off to keep nearby pickups visible.",
         )
+        sb_hide_remote_pickup = st.checkbox(
+            "Hide 📦 remote pickup-only (outside radius)",
+            value=True,
+            key="sidebar_hide_remote_pickup",
+            help="Hide auctions that came in through the nationwide "
+                 "search BUT are actually pickup-only at a remote "
+                 "location (Lubbock TX, Boise ID, etc.). Detected via "
+                 "explicit 'pickup only' / 'no shipping' language in "
+                 "the auction name + summary. Default ON — driving "
+                 "500 mi for a pickup-only auction is rarely worth it. "
+                 "Uncheck if you're traveling to that area.",
+        )
+        sb_only_bolo = st.checkbox(
+            f"🎯 Only BOLO matches ({_BOLO_MATCHER.brand_count} brands)",
+            key="sidebar_only_bolo",
+            disabled=not _BOLO_MATCHER.loaded,
+            help="Show only auctions with at least one lot matching the "
+                 "brand BOLO list. Loads two files: "
+                 "data/clothing_brand_bolo.json and "
+                 "data/household_parts_bolo.json. For cached auctions "
+                 "the count comes from a full scan; for uncached "
+                 "auctions we scan the auction name + sample lot "
+                 "titles, so it's a hint, not a guarantee. Replace the "
+                 "JSON files quarterly to refresh the lists.",
+        )
+
+        # Scan-all-for-BOLO button placeholder — the actual button is
+        # rendered below, AFTER all visibility filters are applied to
+        # `rows`, so its label + scope reflect exactly what the user
+        # sees in the picker (not the unfiltered candidate list).
+        _bolo_scan_button_slot = st.empty()
 
         # Build display rows. Reuse the same parsing/closing-time logic
         # the in-page picker uses, kept lightweight.
@@ -1122,6 +1800,43 @@ def _render_sidebar_auction_list():
             pc_pct, est_credits = _estimate_auction_cost(
                 int(c.get('lot_count') or 0), sample_payload,
             )
+            # Pickup-only override: HiBid auctions found via the
+            # nationwide search get source='Ship' by default, but the
+            # auction house can still be physically pickup-only at a
+            # remote location (Lubbock TX, Boise ID, etc.). Detect
+            # explicit pickup-only / no-shipping language in the
+            # auction name + summary and re-classify so the
+            # "Hide local pickup" filter catches them.
+            raw_source = c.get('source') or ''
+            text_for_pickup_check = (
+                f"{c.get('name', '')} {summary or ''}"
+            ).lower()
+            pickup_phrases = (
+                'pickup only',
+                'pick up only',
+                'pick-up only',
+                'local pickup only',
+                'no shipping',
+                'shipping not available',
+                'shipping unavailable',
+                'buyer must pick up',
+                'buyer to pick up',
+                'must be picked up',
+                'in-person pickup',
+            )
+            if any(p in text_for_pickup_check for p in pickup_phrases):
+                effective_source = 'Local Pickup'
+            else:
+                effective_source = raw_source
+            # Extract sample titles for the dropship-detector. Empty
+            # list when no sample payload exists — _auction_signal
+            # gracefully short-circuits in that case.
+            sample_titles_for_signal = []
+            if isinstance(sample_payload, dict):
+                raw_titles = sample_payload.get('titles') or []
+                sample_titles_for_signal = [
+                    str(t) for t in raw_titles if t
+                ][:50]
             rows.append({
                 'auction_id': aid,
                 'name': c.get('name') or '(unnamed)',
@@ -1129,9 +1844,11 @@ def _render_sidebar_auction_list():
                 'closes_fmt': closing_fmt or '—',
                 'closes_dt': closes_dt,
                 'summary': summary or '',
-                'source': c.get('source') or '',
+                'source': effective_source,
+                'raw_source': raw_source,  # for debug / future use
                 'pc_pct': pc_pct,
                 'est_credits': est_credits,
+                'sample_titles': sample_titles_for_signal,
             })
 
         # Filter + sort
@@ -1158,6 +1875,7 @@ def _render_sidebar_auction_list():
         # nothing.
         last_run_map = {}
         green_map = {}
+        bolo_cached_map = {}
         try:
             for entry in _AUCTION_CACHE.list_all(ttl_days=365):
                 ts_raw = entry.get('cached_at') or ''
@@ -1174,8 +1892,44 @@ def _render_sidebar_auction_list():
                         entry.get('green_count'),
                         entry.get('total_count'),
                     )
+                bc = entry.get('bolo_count')
+                if bc is not None:
+                    bolo_cached_map[entry.get('auction_id')] = bc
         except Exception:
             pass  # Cache read failure shouldn't break the picker
+
+        # For each auction, compute a bolo_hint count:
+        #   - cached auctions: the persisted full-scan count (authoritative)
+        #   - uncached auctions: count of brand hits in name + sample
+        #     lot titles. Less complete than a full lot scan, but free
+        #     and good enough to surface "this auction probably has
+        #     Lululemon / Patagonia / etc. inside" as a heads-up.
+        # The flag distinguishes the two so the UI can label hints
+        # differently from full scans (badge color/wording).
+        bolo_hint_map = {}  # aid -> (count, is_full_scan)
+        if _BOLO_MATCHER.loaded:
+            for c in candidates:
+                aid_local = c['auction_id']
+                cached_count = bolo_cached_map.get(aid_local)
+                if cached_count is not None:
+                    bolo_hint_map[aid_local] = (int(cached_count), True)
+                    continue
+                # Fallback: scan auction name + sample titles.
+                hits = 0
+                seen = set()
+                if _BOLO_MATCHER.match(c.get('name') or '', None):
+                    hits += 1
+                    seen.add('__name__')
+                raw = cat_samples.get(aid_local) or {}
+                titles = raw.get('titles') if isinstance(raw, dict) else []
+                for t in (titles or [])[:50]:  # cap to first 50 sample titles
+                    if t in seen:
+                        continue
+                    if _BOLO_MATCHER.match(t, None):
+                        hits += 1
+                        seen.add(t)
+                if hits:
+                    bolo_hint_map[aid_local] = (hits, False)
 
         def _format_last_run(when):
             """Compact relative timestamp for the per-row label."""
@@ -1191,11 +1945,13 @@ def _render_sidebar_auction_list():
             return f"{delta.days}d ago"
 
         # Compute the triage signal for every row using auction-name
-        # heuristics + lot count + closing time + last-run age.
+        # heuristics + lot count + closing time + last-run age + a
+        # dropship-detector that runs against the sample lot titles.
         for row in rows:
             rank, reason = _auction_signal(
                 row['name'], row['items'], row['closes_dt'],
                 last_run_map.get(row['auction_id']),
+                sample_titles=row.get('sample_titles'),
             )
             row['signal_rank'] = rank
             row['signal_reason'] = reason
@@ -1205,12 +1961,134 @@ def _render_sidebar_auction_list():
             rows = [r for r in rows if r['signal_rank'] != 'avoid']
         # Hide local-pickup-only auctions when the toggle is on. Compare
         # against the source string ('Local Pickup' / 'Ship') populated
-        # in pass1.py.
+        # in pass1.py + the post-discovery override.
         if sb_hide_local_pickup:
             rows = [
                 r for r in rows
                 if (r.get('source') or '').strip().lower() != 'local pickup'
             ]
+        # Hide REMOTE pickup-only — auctions whose raw_source was 'Ship'
+        # (i.e., found via nationwide search, outside the sourcing
+        # radius) but our pickup-only language detector re-classified
+        # them to 'Local Pickup'. These are the "drive 500 mi" trap.
+        # On by default; "Hide ALL local pickup" supersedes it.
+        if sb_hide_remote_pickup and not sb_hide_local_pickup:
+            rows = [
+                r for r in rows
+                if not (
+                    (r.get('raw_source') or '').strip().lower() == 'ship'
+                    and (r.get('source') or '').strip().lower() == 'local pickup'
+                )
+            ]
+        # Filter to BOLO matches when the toggle is on. Keeps any auction
+        # with at least one cached match OR at least one sample-title
+        # match. Intentionally permissive on the hint side — sample
+        # titles are a small slice, so a missing match doesn't mean the
+        # auction has zero BOLO lots.
+        if sb_only_bolo and _BOLO_MATCHER.loaded:
+            rows = [r for r in rows if bolo_hint_map.get(r['auction_id'])]
+
+        # Stash the BOLO match count on each row so the sort below
+        # (and any future label decoration) can read it directly.
+        # is_full = True means a cached full-scan count; False means
+        # a sample-titles hint. We sort on the raw count regardless,
+        # but tie-break by full-scan first since those are higher
+        # signal.
+        for r in rows:
+            entry = bolo_hint_map.get(r['auction_id'])
+            if entry:
+                r['bolo_count'] = int(entry[0])
+                r['bolo_full'] = bool(entry[1])
+            else:
+                r['bolo_count'] = 0
+                r['bolo_full'] = False
+
+        # 🎯 Render the Scan-all-for-BOLO button NOW that all visibility
+        # filters have been applied to `rows`. The button's scope is
+        # exactly the visible auction list — toggling "Hide local
+        # pickup" / "Hide remote pickup" / "Only BOLO matches" /
+        # search shrinks the scan to match. This was the #1 footgun of
+        # the previous build: the button ignored filters and hammered
+        # HiBid for auctions the user had explicitly hidden.
+        if _BOLO_MATCHER.loaded and len(rows) >= 2:
+            _filtered_lots = sum(int(r.get('items') or 0) for r in rows)
+            _filtered_mega = sum(
+                1 for r in rows if int(r.get('items') or 0) > 1000
+            )
+            _filtered_batches = max(1, (len(rows) + 19) // 20)
+            _filtered_eta_sec = _filtered_batches * 4 + _filtered_mega * 3
+            _filtered_eta_str = (
+                f"~{_filtered_eta_sec}s"
+                if _filtered_eta_sec < 60
+                else f"~{_filtered_eta_sec // 60}m {_filtered_eta_sec % 60:02d}s"
+            )
+            _scan_disabled = (
+                discover_running
+                or fetch_lots_running
+                or st.session_state.get('audit_running', False)
+                or st.session_state.get('comps_running', False)
+            )
+            _filtered_count = len(rows)
+            _hidden_count = len(candidates) - _filtered_count
+            _hidden_suffix = (
+                f" · {_hidden_count} hidden by filters"
+                if _hidden_count > 0 else ""
+            )
+            with _bolo_scan_button_slot.container():
+                if st.button(
+                    f"🎯 Scan {_filtered_count} visible auctions "
+                    f"({_filtered_lots:,} lots, {_filtered_eta_str})",
+                    key="bolo_scan_all_btn",
+                    disabled=_scan_disabled,
+                    use_container_width=True,
+                    help=(
+                        f"Scans the {_filtered_count} auctions currently "
+                        f"visible in your sidebar — respects every filter "
+                        f"(search, hide local pickup, hide remote pickup, "
+                        f"only-BOLO, hide avoid).{_hidden_suffix}. "
+                        f"Estimated scope: {_filtered_lots:,} total lots, "
+                        f"~{_filtered_batches} concurrent fetch batches, "
+                        f"ETA {_filtered_eta_str}. Free (HiBid GraphQL — "
+                        f"no ScrapingBee credits). BOLO regex match runs "
+                        f"after fetch, then audit + comps run on the "
+                        f"matched subset (credits gate fires before any "
+                        f"ScrapingBee spend)."
+                    ),
+                ):
+                    # Use the FILTERED list of auction IDs — not the raw
+                    # `candidates` — so hidden auctions stay hidden.
+                    st.session_state._selected_auction_ids = [
+                        r['auction_id'] for r in rows
+                    ]
+                    st.session_state.current_auction = None
+                    st.session_state.selected_leads = pd.DataFrame()
+                    st.session_state.phase1_leads = pd.DataFrame()
+                    st.session_state.audit_results = {}
+                    st.session_state._bolo_scan_all_pending = True
+                    st.session_state.fetch_lots_running = True
+                    # Stash a "scan just kicked off" marker so the next
+                    # render (post-rerun) can pop a prominent banner +
+                    # toast confirming the click landed. The marker
+                    # carries scope info so the banner shows scope
+                    # before phase status panels start rendering.
+                    st.session_state._scan_just_started = {
+                        "started_at": datetime.now().isoformat(),
+                        "auction_count": len(rows),
+                        "lot_count": _filtered_lots,
+                        "eta": _filtered_eta_str,
+                    }
+                    # st.toast renders on the NEXT script run (post-
+                    # rerun), so this is the right place to fire it —
+                    # the user sees the confirmation pop in the top-
+                    # right immediately on rerun, before any heavy
+                    # work starts.
+                    st.toast(
+                        f"🎯 BOLO scan kicked off — "
+                        f"{len(rows)} auctions, {_filtered_lots:,} lots, "
+                        f"ETA {_filtered_eta_str}",
+                        icon="🚀",
+                    )
+                    st.rerun()
 
         # Sort. "Best fit first" uses the signal as the primary key
         # (good > caution > avoid), then est_credits ascending, then
@@ -1220,6 +2098,17 @@ def _render_sidebar_auction_list():
             rows.sort(key=lambda r: (
                 _rank_order.get(r['signal_rank'], 3),
                 r['est_credits'],
+                r['closes_dt'] or datetime.max,
+            ))
+        elif sb_sort.startswith("🎯 Most BOLO"):
+            # Most BOLO hits first. Full-scan counts beat sample-hint
+            # counts at the same numeric value (full=False sorts after
+            # full=True via the tiebreak), and ties break by closing
+            # soonest so a 5-hit auction ending tonight floats above
+            # a 5-hit auction ending Friday.
+            rows.sort(key=lambda r: (
+                -int(r.get('bolo_count') or 0),
+                0 if r.get('bolo_full') else 1,
                 r['closes_dt'] or datetime.max,
             ))
         elif sb_sort.startswith("💸 Highest PC"):
@@ -1285,12 +2174,32 @@ def _render_sidebar_auction_list():
                     elif gp is not None:
                         green_bits = f" · 🟢 **{gp:g}%**"
                 footer = f"\n\n🕒 _Last analyzed: {last_run_str}_{green_bits}"
-            # Shipping-source badge: 📦 for local pickup (driving
-            # required), 🚚 for ship. Visible even when the filter is
-            # off so the user can spot pickup-only auctions at a glance.
+
+            # 🎯 BOLO badge — surfaces both confirmed (full-scan) and
+            # heuristic (sample-title) matches. Different wording so
+            # the user can distinguish "this auction definitely has N
+            # BOLO lots" from "we spotted N BOLO hits in the sample,
+            # there are probably more".
+            bolo_badge = ""
+            bolo_entry = bolo_hint_map.get(aid)
+            if bolo_entry:
+                bcount, is_full = bolo_entry
+                if is_full:
+                    bolo_badge = f" · 🎯 **{bcount} BOLO**"
+                else:
+                    bolo_badge = f" · 🎯 ~{bcount} BOLO hint"
+            # Shipping-source badge: distinguishes nearby pickup
+            # (within sourcing radius) from remote pickup (re-classified
+            # from a nationwide-search 'Ship' result via pickup-only
+            # language detection). Remote pickup gets a ⚠️ marker so
+            # the user can spot the "drive 500 mi" trap even when the
+            # corresponding hide-filter is off.
             _src = (row.get('source') or '').strip().lower()
-            if _src == 'local pickup':
-                source_badge = " · 📦 pickup"
+            _raw_src = (row.get('raw_source') or '').strip().lower()
+            if _src == 'local pickup' and _raw_src == 'ship':
+                source_badge = " · 📦 pickup ⚠️ remote"
+            elif _src == 'local pickup':
+                source_badge = " · 📦 pickup nearby"
             elif _src == 'ship':
                 source_badge = " · 🚚 ships"
             else:
@@ -1298,7 +2207,7 @@ def _render_sidebar_auction_list():
             label = (
                 f"{icon}**{row['name']}**\n\n"
                 f"{row['items']:,} lots · {row['closes_fmt']}{source_badge}\n\n"
-                f"💸 {credits_label}{pc_label}"
+                f"💸 {credits_label}{pc_label}{bolo_badge}"
                 f"{footer}"
             )
             # Tooltip combines the auction summary with the triage
@@ -1409,7 +2318,7 @@ if st.session_state.get('discover_running'):
     _keep_screen_awake()
     discover_error = None
     discover_result_msg = None
-    with st.status("🔍 Discovering auctions…", expanded=True) as status_box:
+    with st.status("🔍 Phase 1 of 5: Discovering open auctions…", expanded=True) as status_box:
         try:
             cfg = st.session_state.get('_sourcing_cfg', {})
             scraper = Phase1Scraper(config_path="config.json")
@@ -1527,7 +2436,12 @@ if st.session_state.get('fetch_lots_running'):
     _keep_screen_awake()
     fetch_error = None
     fetch_result_msg = None
-    with st.status("📥 Fetching lots for selected auctions…", expanded=True) as status_box:
+    _scan_all_label = (
+        "📥 Phase 2 of 5: Fetching every lot for BOLO scan…"
+        if st.session_state.get('_bolo_scan_all_pending')
+        else "📥 Phase 2 of 5: Fetching lots for selected auctions…"
+    )
+    with st.status(_scan_all_label, expanded=True) as status_box:
         try:
             candidates = st.session_state.get('auction_candidates', [])
             sel_ids = set(st.session_state.get('_selected_auction_ids', []))
@@ -1588,8 +2502,9 @@ if st.session_state.get('fetch_lots_running'):
             scraper.category_filter = cfg.get("category_filter", [])
 
             fetch_progress = st.progress(0, text="Fetching lots…")
+            fetch_live_detail = st.empty()
 
-            def fetch_prog(current, total, label=""):
+            def fetch_prog(current, total, label="", extras=None):
                 if total == 0:
                     pct, text = 0.0, (label or "Done")
                 else:
@@ -1597,6 +2512,26 @@ if st.session_state.get('fetch_lots_running'):
                     text = (f"{label} — {current}/{total} auctions"
                             if label else f"{current}/{total}")
                 fetch_progress.progress(min(pct, 1.0), text=text)
+                # Live detail line: running lot count + names of the
+                # auctions just completed this batch + any errors so far
+                if extras:
+                    running = extras.get('running_kept', 0)
+                    batch_lots = extras.get('batch_lots', 0)
+                    batch_names = extras.get('batch_names') or []
+                    errs = extras.get('errors_so_far', 0)
+                    name_preview = ", ".join(
+                        n[:30] for n in batch_names[:3]
+                    )
+                    if len(batch_names) > 3:
+                        name_preview += f" + {len(batch_names) - 3} more"
+                    err_bit = (
+                        f" · ⚠️ {errs} errors so far" if errs else ""
+                    )
+                    fetch_live_detail.markdown(
+                        f"📦 **{running:,}** lots fetched so far · "
+                        f"+{batch_lots:,} from this batch · "
+                        f"just finished: {name_preview}{err_bit}"
+                    )
 
             df = run_async(
                 scraper.fetch_lots_for_selected(
@@ -1604,6 +2539,7 @@ if st.session_state.get('fetch_lots_running'):
                 )
             )
             fetch_progress.empty()
+            fetch_live_detail.empty()
 
             st.session_state.phase1_leads = df
 
@@ -1798,20 +2734,40 @@ def _save_current_auction_to_cache():
     ar = st.session_state.get('audit_results')
     if not isinstance(ar, pd.DataFrame) or ar.empty:
         return
+    auction_name = st.session_state.get('current_auction') or ""
+    # Skip cache writes for synthetic multi-auction views (BOLO scan
+    # across all auctions). The lots come from many different auction
+    # IDs, so a single cache key isn't meaningful — and re-loading
+    # would need to be triggered by the scan button, not by clicking
+    # a cached entry.
+    if auction_name.startswith("🎯 BOLO scan"):
+        return
     auction_id = _extract_auction_id(ar)
     if auction_id is None:
         return
-    auction_name = st.session_state.get('current_auction') or ""
     closing_date = ""
     if 'closing_date' in ar.columns and not ar.empty:
         closing_date = str(ar['closing_date'].iloc[0])
     green_pct, green_count, total_count = _compute_green_stats(ar)
+    # Compute BOLO match count using the current brand list. Cheap
+    # regex pass over titles + descriptions; result persists in the
+    # cache payload so the sidebar can show "🎯 N BOLO" badges
+    # without rehydrating every auction's lots on each render.
+    bolo_count = 0
+    try:
+        if 'title' in ar.columns:
+            bolo_df = _compute_bolo_columns(ar)
+            if 'bolo_brand' in bolo_df.columns:
+                bolo_count = int(bolo_df['bolo_brand'].notna().sum())
+    except Exception:
+        bolo_count = 0
     try:
         _AUCTION_CACHE.save(
             auction_id, auction_name, ar, closing_date,
             green_pct=green_pct,
             green_count=green_count,
             total_count=total_count,
+            bolo_count=bolo_count,
         )
     except Exception as e:
         # Don't crash the app over a cache write failure
@@ -1890,6 +2846,86 @@ def _get_auditor(model_name: str):
     return Phase2Scraper(model_name=model_name)
 
 
+# Words/phrases that indicate something MIGHT be wrong with a lot,
+# even if it's a tier-1 BOLO match. If any of these appear in the
+# title or description, the lot does NOT qualify for the audit-skip
+# fast path — it must run through the real audit. We compile each as
+# a word-boundaried regex so "stain" matches "stain"/"stains"/"stained"
+# but NOT "stainless", and "rip" matches "rip"/"rips"/"ripped" but NOT
+# "stripe"/"grip"/"trip".
+_AUDIT_SKIP_RED_FLAG_PATTERN = re.compile(
+    r"\b("
+    # Damage / breakage. Each verb enumerates explicit conjugations so
+    # word-boundary anchors fire correctly — `stain\w*` would gobble
+    # "stainless", `chip\w*` would match "chipset", etc. Stick to
+    # specific conjugated forms wrapped in \b.
+    r"broken|break|breaks|damage|damages|damaged|"
+    r"crack|cracks|cracked|"
+    r"chip|chipped|"
+    r"dent|dents|dented|"
+    r"scratch|scratches|scratched|scratching|"
+    r"stain|stains|stained|staining|"
+    r"rip|rips|ripped|tear|tears|torn|"
+    # Functionality issues
+    r"untested|not\s+working|doesn'?t\s+work|does\s+not\s+work|"
+    r"no\s+power|won'?t\s+turn\s+on|won'?t\s+work|needs\s+repair|"
+    # Cleaning / contamination
+    r"smoke|moldy|mildew|water\s+damage|pet\s+hair|stinks|"
+    r"needs\s+cleaning|"
+    # Counterfeit / replica
+    r"replica|counterfeit|knockoff|knock\s+off|not\s+authentic|"
+    r"fake|reproduction|repro|"
+    # Auction-house "as-is" code phrases
+    r"as[-\s]is|as[-\s]found|for\s+parts|parts\s+only|missing"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _qualifies_for_audit_skip(row) -> bool:
+    """Return True when a lot can skip the AI audit — tier-1 BOLO
+    match + clean specific title + no red-flag phrases in description.
+
+    The skip path saves ~$0.001-0.005 per lot in Anthropic tokens
+    (text-API tier) or up to $0.01 (image-API tier on lots with
+    short descriptions). On a 1,200-lot BOLO scan that's $1-4 per
+    run — modest but free if we can do it without sacrificing
+    accuracy.
+
+    Criteria (all must hold):
+      1. BOLO tier == 1 (curated highest-value brands we trust)
+      2. NOT HARD logistics (those get auto-flagged anyway)
+      3. NOT a stylized replica candidate (the matcher would mark it)
+      4. Title is "specific" — has year / model # / or 3+ informative
+         words. _is_generic_title is the existing heuristic.
+      5. Description (if present) doesn't contain any red-flag
+         phrase from _AUDIT_SKIP_RED_FLAG_PHRASES.
+      6. Title doesn't contain any red-flag phrase either.
+
+    We're intentionally conservative: when in doubt, fall through to
+    the real audit. False positives here mean a broken/damaged lot
+    gets through with a "Looks good" verdict — that's a wasted comp
+    spend later (~10× more expensive than the audit we just skipped).
+    Net is still positive but only if the skip rate is high AND
+    error rate stays low.
+    """
+    bolo_tier = row.get('bolo_tier')
+    if bolo_tier != 1 and bolo_tier != "1":
+        return False
+    if str(row.get('logistics_ease') or '').upper() == 'HARD':
+        return False
+    if bool(row.get('is_stylized_replica')):
+        return False
+    title = str(row.get('title') or '')
+    if _is_generic_title(title):
+        return False
+    desc = str(row.get('description') or '')
+    haystack = f"{title} {desc}"
+    if _AUDIT_SKIP_RED_FLAG_PATTERN.search(haystack):
+        return False
+    return True
+
+
 def _run_ai_audit(leads_df, on_progress=None):
     """Run Phase 2 AI condition audit with detailed phase-by-phase status."""
     from scraper import Phase2Scraper
@@ -1897,7 +2933,61 @@ def _run_ai_audit(leads_df, on_progress=None):
     total = len(leads_df)
     workers = int(st.session_state.get('audit_workers', 8))
 
-    with st.status("🧠 Running AI Condition Audit…", expanded=True) as status:
+    with st.status("🧠 Phase 4 of 5: AI Condition Audit (Claude)…", expanded=True) as status:
+        # ---- Pre-pass: tier-1 BOLO clean-title fast path ----
+        # Identify rows that qualify for an audit-skip — tier-1 BOLO
+        # matches with specific titles + no red-flag phrases. These
+        # get a synthetic "Looks good" verdict without an API call;
+        # everything else goes through the normal three-tier flow.
+        skip_mask = pd.Series(False, index=leads_df.index)
+        if 'bolo_tier' in leads_df.columns:
+            skip_mask = leads_df.apply(
+                _qualifies_for_audit_skip, axis=1
+            ).fillna(False).astype(bool)
+        n_skip = int(skip_mask.sum())
+        n_audit = total - n_skip
+
+        if n_skip > 0:
+            st.write(
+                f"⚡ **Audit-skip fast path:** {n_skip} of {total} lots "
+                f"qualify for the BOLO clean-skip "
+                f"({100 * n_skip / total:.0f}%). These are tier-1 BOLO "
+                f"matches with specific titles + clean descriptions — "
+                f"synthesizing a 'Looks good' verdict without an API call. "
+                f"Estimated savings: ~${n_skip * 0.0025:.2f} in Claude "
+                f"tokens. Remaining {n_audit} lots run through the "
+                f"normal three-tier audit."
+            )
+
+        # Build the synthetic-verdict df for skipped rows. Mirrors the
+        # column shape Phase2Scraper.batch_audit produces so downstream
+        # code (comps gate, results table) doesn't need to special-case.
+        if n_skip > 0:
+            skipped_df = leads_df[skip_mask].copy()
+            skipped_df['enriched_title'] = skipped_df.get('title', '')
+            skipped_df['verdict'] = "Looks good (BOLO tier-1 fast path)"
+            skipped_df['confidence'] = 90.0
+            skipped_df['red_flag'] = False
+            skipped_df['audit_source'] = "skip_bolo_clean"
+        else:
+            skipped_df = None
+
+        # If everything qualified, no need to run the auditor at all.
+        if n_audit == 0:
+            status.update(
+                label=(
+                    f"⚡ Audit fast-skipped: all {n_skip} lots are clean "
+                    f"tier-1 BOLO matches"
+                ),
+                state="complete", expanded=False,
+            )
+            return skipped_df.reset_index(drop=True)
+
+        # Otherwise narrow leads_df to just the rows that need real audit.
+        audit_target_df = (
+            leads_df[~skip_mask].copy() if n_skip > 0 else leads_df
+        )
+
         # Phase 1: pre-flight
         auditor = _get_auditor(Phase2Scraper.DEFAULT_MODEL)
         # If the cached Phase2Scraper instance has api_key=None but the
@@ -1923,12 +3013,15 @@ def _run_ai_audit(leads_df, on_progress=None):
         # Pre-count how many lots will be pre-filtered (HARD logistics) so
         # the user sees the savings up front.
         hard_preview = 0
-        if 'logistics_ease' in leads_df.columns:
-            hard_preview = int((leads_df['logistics_ease'] == 'HARD').sum())
+        if 'logistics_ease' in audit_target_df.columns:
+            hard_preview = int((audit_target_df['logistics_ease'] == 'HARD').sum())
 
         st.write(
             f"**🔎 Step 1/2 — Three-tier condition classification** "
-            f"on {total} items."
+            f"on {n_audit} items"
+            + (f" (after fast-skipping {n_skip} clean tier-1 BOLO matches)"
+               if n_skip > 0 else "")
+            + "."
         )
         st.caption(
             "**Tier 1 — keyword regex** over the description (instant, free): "
@@ -1945,7 +3038,7 @@ def _run_ai_audit(leads_df, on_progress=None):
                 "(mattresses, vehicles, furniture, real estate, etc.) — "
                 "auto-flagged as Unshippable, no API call needed."
             )
-        progress_bar = st.progress(0, text=f"Starting — 0/{total}")
+        progress_bar = st.progress(0, text=f"Starting — 0/{n_audit}")
         current_item_placeholder = st.empty()
 
         def ai_progress(current, total_items):
@@ -1954,7 +3047,7 @@ def _run_ai_audit(leads_df, on_progress=None):
             # show the most recently processed row instead.
             try:
                 preview_idx = min(max(current - 1, 0), total_items - 1)
-                row = leads_df.iloc[preview_idx]
+                row = audit_target_df.iloc[preview_idx]
                 title_preview = str(row.get('title', ''))[:70]
             except Exception:
                 title_preview = ""
@@ -1969,20 +3062,41 @@ def _run_ai_audit(leads_df, on_progress=None):
 
         # Live callback: every batch boundary, push the partial df into
         # session_state and notify the caller (which throttles UI refresh).
+        # We merge the in-progress audit subset back with the skipped
+        # subset so the live UI sees BOTH the synthetic clean rows AND
+        # whatever's been audited so far — otherwise the table would
+        # show only the in-progress half during the run.
         def _audit_live_cb(processed, total_items, partial_df):
             try:
-                st.session_state.audit_results = partial_df
+                if skipped_df is not None:
+                    merged = pd.concat(
+                        [skipped_df, partial_df], ignore_index=False
+                    ).sort_index()
+                else:
+                    merged = partial_df
+                st.session_state.audit_results = merged
                 if on_progress is not None:
                     on_progress(processed, total_items)
             except Exception:
                 pass
 
         results_df = auditor.batch_audit(
-            leads_df,
+            audit_target_df,
             progress_callback=ai_progress,
             batch_size=workers,
             live_callback=_audit_live_cb,
         )
+
+        # Merge skipped-clean rows back so downstream code sees one
+        # coherent results df. Preserve original row order via
+        # sorted-index concat.
+        if skipped_df is not None:
+            audit_attrs = dict(results_df.attrs or {})
+            results_df = pd.concat(
+                [skipped_df, results_df], ignore_index=False
+            ).sort_index()
+            results_df.attrs.update(audit_attrs)
+            results_df.attrs['audit_skipped_bolo_clean'] = n_skip
 
         # Phase 2: summarize (counts + per-tier breakdown)
         good = int((~results_df['red_flag']).sum()) if 'red_flag' in results_df.columns else 0
@@ -1990,6 +3104,7 @@ def _run_ai_audit(leads_df, on_progress=None):
         skipped_hard = int(results_df.attrs.get('audit_skipped_hard', 0) or 0)
         skipped_collectible = int(results_df.attrs.get('audit_skipped_collectible', 0) or 0)
         skipped_empty = int(results_df.attrs.get('audit_skipped_empty', 0) or 0)
+        skipped_bolo_clean = int(results_df.attrs.get('audit_skipped_bolo_clean', 0) or 0)
         keyword_hits = int(results_df.attrs.get('audit_keyword_hits', 0) or 0)
         text_api_calls = int(results_df.attrs.get('audit_text_api_calls', 0) or 0)
         image_api_calls = int(results_df.attrs.get('audit_image_api_calls', 0) or 0)
@@ -1998,6 +3113,11 @@ def _run_ai_audit(leads_df, on_progress=None):
         no_signal = int(results_df.attrs.get('audit_no_signal', 0) or 0)
 
         summary_parts = [f"✅ {good} good-condition", f"⚠️ {flagged} red-flagged"]
+        if skipped_bolo_clean > 0:
+            summary_parts.append(
+                f"⚡ {skipped_bolo_clean} BOLO clean-skip "
+                f"(saved ~${skipped_bolo_clean * 0.0025:.2f})"
+            )
         if skipped_hard > 0:
             summary_parts.append(f"🚚 {skipped_hard} HARD-logistics (pre-filtered)")
         if skipped_collectible > 0:
@@ -2148,9 +3268,9 @@ def _run_image_enrichment(audit_df, min_bid: float = 5.0):
     eligible_count = len(eligible_ids)
 
     status_label = (
-        f"🖼️ Enriching {eligible_count} titles via image search…"
+        f"🖼️ Phase 3 of 5: Image enrichment — {eligible_count} titles via Claude vision…"
         if has_claude_fallback
-        else f"🖼️ Enriching {eligible_count} titles via eBay image_search…"
+        else f"🖼️ Phase 3 of 5: Image enrichment — {eligible_count} titles via eBay image_search…"
     )
     with st.status(status_label, expanded=True) as status:
         st.write(
@@ -2261,6 +3381,95 @@ def _apply_comps_filters(good_df):
     df = good_df.copy()
     reasons = []
 
+    # Free-only mode: route every NON-BOLO row through the PC-only
+    # path (eBay/Mercari skipped, zero credits). BOLO matches DO get
+    # full eBay/Mercari comps because those are exactly the lots
+    # where the comp spend is worth it — the brand is on the watch
+    # list specifically because the user wants real resale data on
+    # them. Same per-row mechanism used for stylized lots.
+    free_only = bool(st.session_state.get('_comps_free_only_mode', False))
+    # Saturated-BOLO mode: when "every eligible lot is a BOLO match"
+    # (multi-auction scan-all), the user can opt into truly-free
+    # comps that skip eBay/Mercari for BOLO too. The flag is set at
+    # the credit gate's Free button when _is_bolo_saturated.
+    free_skip_bolo = bool(st.session_state.get('_comps_free_skip_bolo', False))
+    if free_only:
+        if free_skip_bolo:
+            # Genuinely free: every row goes PC/GoCollect-only,
+            # including BOLO matches. Used in BOLO-saturated runs
+            # where running eBay on every BOLO hit would equal
+            # a full paid run.
+            df['_pc_only_stylized'] = True
+            reasons.append(
+                f"all {len(df)} → PC + GoCollect only "
+                "(saturated BOLO free mode)"
+            )
+        else:
+            # Compute BOLO matches inline. The comp pipeline runs before
+            # the results-table render that normally adds bolo_brand,
+            # so we have to do this here. Cheap regex pass.
+            title_col_for_bolo = 'enriched_title' if 'enriched_title' in df.columns else 'title'
+            desc_col_for_bolo = 'description' if 'description' in df.columns else None
+            if title_col_for_bolo in df.columns and _BOLO_MATCHER.loaded:
+                def _has_bolo(r):
+                    t = str(r.get(title_col_for_bolo) or '')
+                    d = str(r.get(desc_col_for_bolo) or '') if desc_col_for_bolo else ''
+                    return _BOLO_MATCHER.match(t, d) is not None
+                has_bolo_mask = df.apply(_has_bolo, axis=1)
+                df['_pc_only_stylized'] = ~has_bolo_mask
+                bolo_count = int(has_bolo_mask.sum())
+                pc_only_count = int((~has_bolo_mask).sum())
+                reasons.append(
+                    f"free mode: {bolo_count} BOLO → full comps, "
+                    f"{pc_only_count} → PC + GoCollect only"
+                )
+            else:
+                # No BOLO available — every row goes PC-only
+                df['_pc_only_stylized'] = True
+                reasons.append(f"all {len(df)} → PC + GoCollect only (free mode)")
+
+    # Stylized/replica handling — running eBay comps on a "Gucci style
+    # hat" returns authentic-Gucci sold-comps that DO NOT apply to the
+    # lot. Two policies based on `comps_pc_check_stylized`:
+    #
+    #   On (default):  KEEP stylized lots, mark them with _pc_only_stylized
+    #                  = True so the comp lookup skips eBay/Mercari but
+    #                  still runs PriceCharting (curated, free, no
+    #                  contamination risk). PC will return None for lots
+    #                  it doesn't cover (handbags, jewelry, etc.) which
+    #                  is the correct outcome.
+    #
+    #   Off:           DROP stylized lots from eligible entirely — no
+    #                  comp data of any kind is gathered for them.
+    # Skip per-row stylized detection when free_only is already True
+    # for everything — saves a regex pass and avoids overwriting the
+    # all-True _pc_only_stylized column with a stylized-only mask.
+    pc_check_stylized = bool(st.session_state.get('comps_pc_check_stylized', True))
+    title_col_for_filter = 'enriched_title' if 'enriched_title' in df.columns else 'title'
+    desc_col_for_filter = 'description' if 'description' in df.columns else None
+    if not free_only and title_col_for_filter in df.columns:
+        def _is_stylized(r):
+            t = r.get(title_col_for_filter) or ''
+            d = r.get(desc_col_for_filter) if desc_col_for_filter else ''
+            return _detect_stylized_replica(str(t), str(d) if d else None) is not None
+        stylized_mask = df.apply(_is_stylized, axis=1)
+        n_stylized = int(stylized_mask.sum())
+        if n_stylized:
+            if pc_check_stylized:
+                # Keep them in eligible but mark — the lookup phase
+                # will route to PC-only for these rows.
+                df['_pc_only_stylized'] = stylized_mask
+                reasons.append(
+                    f"{n_stylized} stylized/replica → PC-only "
+                    "(eBay/Mercari skipped, free PC check)"
+                )
+            else:
+                df = df[~stylized_mask]
+                reasons.append(
+                    f"{n_stylized} stylized/replica skipped entirely "
+                    "(comps_pc_check_stylized off)"
+                )
+
     # Exclude HARD logistics
     if st.session_state.get('comps_exclude_hard', True) and 'logistics_ease' in df.columns:
         before = len(df)
@@ -2327,19 +3536,22 @@ def _run_ebay_comps(results_df):
     cfg = load_config()
     pc_token = (cfg.get("pricecharting") or {}).get("token") or None
     pc_client = PriceChartingLookup(pc_token)
-    gc_key = (cfg.get("gocollect") or {}).get("api_key") or None
-    gc_client = GoCollectLookup(gc_key)
+    gc_cfg = cfg.get("gocollect") or {}
+    gc_key = gc_cfg.get("api_key") or None
+    gc_approved = bool(gc_cfg.get("approved", False))
+    gc_client = GoCollectLookup(gc_key, approved=gc_approved)
     sb_key = (cfg.get("scrapingbee") or {}).get("api_key") or None
     ebay = EbayPriceLookup(
         cfg["ebay"]["app_id"], cfg["ebay"]["cert_id"],
         pricecharting=pc_client,
         scrapingbee_key=sb_key,
         gocollect=gc_client,
+        mercari_enabled=bool(st.session_state.get('comps_use_mercari', False)),
     )
 
     total = len(eligible_df)
 
-    with st.status("💰 Running Price Comps & STR…", expanded=True) as status:
+    with st.status("💰 Phase 5 of 5: Price Comps & Sell-Through Rate…", expanded=True) as status:
         if total == 0:
             st.warning(
                 "No items matched the pre-comps filters. Loosen the filters above and try again."
@@ -2520,13 +3732,15 @@ def _run_ebay_comps_chunk(audit_df, chunk_size: int = 200, on_lot_priced=None):
     from scraper.config_loader import load_config
     cfg = load_config()
     pc_token = (cfg.get("pricecharting") or {}).get("token") or None
-    gc_key = (cfg.get("gocollect") or {}).get("api_key") or None
+    gc_cfg = cfg.get("gocollect") or {}
+    gc_key = gc_cfg.get("api_key") or None
+    gc_approved = bool(gc_cfg.get("approved", False))
     sb_key = (cfg.get("scrapingbee") or {}).get("api_key") or None
     ebay = EbayPriceLookup(
         cfg["ebay"]["app_id"], cfg["ebay"]["cert_id"],
         pricecharting=PriceChartingLookup(pc_token),
         scrapingbee_key=sb_key,
-        gocollect=GoCollectLookup(gc_key),
+        gocollect=GoCollectLookup(gc_key, approved=gc_approved),
     )
 
     label = f"💰 Comping next {len(chunk)} of {total_pending} pending lot(s)…"
@@ -2933,6 +4147,33 @@ def _compute_resale_confidence(row):
     except (TypeError, ValueError):
         pass
 
+    # Authenticity gate: when the BOLO matcher flagged this as
+    # auth_required AND the description-based auth check produced a
+    # low score, halve resale confidence. The eBay sold-comps for
+    # luxury are flooded with replicas, so a low auth_score means
+    # our est_resale is probably already mixing real-and-fake comps.
+    # Even if the est is "right" for the contaminated market, the
+    # user can't realize it without authenticating, so the practical
+    # confidence in the resale is lower.
+    if row.get('bolo_auth_required'):
+        auth_score = row.get('bolo_auth_score')
+        try:
+            auth_score = float(auth_score) if auth_score is not None else None
+        except (TypeError, ValueError):
+            auth_score = None
+        if auth_score is not None:
+            if auth_score < 30:
+                base_score *= 0.3       # strong red flags → near-zero usable confidence
+            elif auth_score < 50:
+                base_score *= 0.55
+            elif auth_score < 70:
+                base_score *= 0.8
+            # 70+ : description supports authenticity, no penalty
+        else:
+            # Auth-required but no score (no description text to
+            # analyze) — treat as ambiguous, mild discount.
+            base_score *= 0.7
+
     return int(round(base_score * 100))
 
 
@@ -2972,12 +4213,39 @@ def _render_results_table(results_df):
     # --- Recompute max_bid with current target (dynamic) ---
     working = _compute_max_bid(results_df, target_roi_val)
 
+    # --- Tag every row with brand-BOLO matches.  Free regex pass so
+    #     it's safe to rerun on every render — picks up changes to
+    #     the underlying clothing_brand_bolo.json file mid-session. ---
+    working = _compute_bolo_columns(working)
+    bolo_total = int(working['bolo_brand'].notna().sum()) if 'bolo_brand' in working.columns else 0
+
     # --- Sort by ROI descending ---
     if 'est_roi' in working.columns:
         working['_roi_sort'] = pd.to_numeric(working['est_roi'], errors='coerce')
         working = working.sort_values(
             '_roi_sort', ascending=False, na_position='last'
         ).drop(columns=['_roi_sort']).reset_index(drop=True)
+
+    # --- "🎯 BOLO matches only" filter. Toggle hides every row whose
+    #     title/description didn't hit the brand list. Disabled when
+    #     there are no matches at all so the user can see why. ---
+    bolo_only = False
+    if _BOLO_MATCHER.loaded and bolo_total > 0:
+        bolo_only = st.checkbox(
+            f"🎯 Show only BOLO matches ({bolo_total} of {len(working)})",
+            key="results_bolo_only",
+            help="Filter the table to lots whose title/description "
+                 "matched a brand on data/clothing_brand_bolo.json. "
+                 "Useful for quickly triaging clothing-heavy auctions.",
+        )
+    elif _BOLO_MATCHER.loaded:
+        st.caption(
+            f"🎯 BOLO: 0 matches in this auction "
+            f"({_BOLO_MATCHER.brand_count} brands loaded across "
+            "clothing + household-parts watch lists)."
+        )
+    if bolo_only:
+        working = working[working['bolo_brand'].notna()].reset_index(drop=True)
 
     # --- Threshold masks (for highlight + status counts) ---
     # When STR data is unavailable for the entire auction (e.g. coin
@@ -3023,7 +4291,270 @@ def _render_results_table(results_df):
         if has_str:
             avg_str = pd.to_numeric(working['ebay_str'], errors='coerce').mean()
             status_bits.append(f"avg STR **{avg_str:.0f}%**")
+    if bolo_total > 0:
+        status_bits.append(f"🎯 **{bolo_total}** BOLO match{'es' if bolo_total != 1 else ''}")
+    # Stylized/replica count — independent of BOLO matching, since
+    # "Rolex style watch" might not even hit the BOLO matcher but
+    # still has the contaminated-comps problem.
+    if 'is_stylized_replica' in working.columns:
+        stylized_total = int(working['is_stylized_replica'].fillna(False).astype(bool).sum())
+        if stylized_total > 0:
+            status_bits.append(f"⚠️ **{stylized_total}** stylized/replica")
+    # Auth-required count: how many of the BOLO matches are tier-3
+    # luxury or Polo sublines that need authentication. Surfacing
+    # this here helps the user gauge how much of the auction needs
+    # extra scrutiny before bidding.
+    if 'bolo_auth_required' in working.columns:
+        auth_req_total = int(working['bolo_auth_required'].fillna(False).astype(bool).sum())
+        if auth_req_total > 0:
+            low_auth = 0
+            if 'bolo_auth_score' in working.columns:
+                low_auth = int(
+                    (pd.to_numeric(working['bolo_auth_score'], errors='coerce') < 30).sum()
+                )
+            piece = f"🛡️ **{auth_req_total}** auth-required"
+            if low_auth:
+                piece += f" ({low_auth} low-score)"
+            status_bits.append(piece)
     st.caption(" · ".join(status_bits))
+
+    # Stylized/replica banner — shown unconditionally whenever there's
+    # at least one such lot, because these are NEVER eligible for
+    # authentic-brand comps and the user benefits from seeing them
+    # called out distinctly from auth-ambiguous-but-real lots.
+    if 'is_stylized_replica' in working.columns:
+        stylized_mask = working['is_stylized_replica'].fillna(False).astype(bool)
+        n_stylized = int(stylized_mask.sum())
+        if n_stylized:
+            sample_phrases = (
+                working.loc[stylized_mask, 'stylized_phrase']
+                .dropna().astype(str).unique().tolist()[:5]
+            )
+            phrase_str = ", ".join(f"'{p}'" for p in sample_phrases if p)
+            pc_check_on = bool(st.session_state.get('comps_pc_check_stylized', True))
+            mode_caption = (
+                "**eBay/Mercari are skipped** for these (authentic-brand "
+                "comps don't apply to a stylized/inspired piece) but "
+                "**PriceCharting still runs** — free curated catalog "
+                "lookup, no contamination risk. PC returns nothing for "
+                "products it doesn't cover (handbags / jewelry / "
+                "decorative sculpture), which is the safe outcome."
+                if pc_check_on else
+                "All comp sources are skipped for these (no est_resale "
+                "data will populate). Toggle the *Run PC on stylized "
+                "lots* checkbox in comp settings to enable free PC "
+                "fallback."
+            )
+            st.error(
+                f"⚠️ **{n_stylized} lot(s)** contain stylized/replica "
+                f"language ({phrase_str}). {mode_caption}"
+            )
+
+    # Inline warning banner: when any auth-required lot has score < 30,
+    # the auction is contaminated by replica-market comps and the user
+    # should know before they look at ROI numbers. Placed right above
+    # the threshold inputs so it's the first thing they see.
+    if 'bolo_auth_required' in working.columns and 'bolo_auth_score' in working.columns:
+        scores = pd.to_numeric(working['bolo_auth_score'], errors='coerce')
+        very_low = (
+            working['bolo_auth_required'].fillna(False).astype(bool)
+            & scores.notna()
+            & (scores < 30)
+        )
+        n_very_low = int(very_low.sum())
+        if n_very_low:
+            st.warning(
+                f"🛡️ **{n_very_low} lot(s)** are flagged auth-required with "
+                "auth_score < 30 (auctioneer used 'as-is' / 'designer-style' / "
+                "no-auth language). For luxury BOLO matches, eBay sold-comps "
+                "are flooded with replicas — est_resale on these lots is "
+                "almost certainly mixing real-and-fake comps. **Do not bid "
+                "without independent authentication.**"
+            )
+        else:
+            # Softer info banner when there are auth-required lots but
+            # nothing is flagrantly red. Reminds the user that even
+            # neutral-scored luxury lots need authentication before
+            # bidding — replica markets are big and the eBay sold-
+            # comp pool is contaminated regardless of how nice the
+            # auctioneer's description sounds.
+            auth_req_total_for_banner = int(
+                working['bolo_auth_required'].fillna(False).astype(bool).sum()
+            )
+            if auth_req_total_for_banner > 0:
+                ambiguous = int(
+                    (
+                        working['bolo_auth_required'].fillna(False).astype(bool)
+                        & scores.notna()
+                        & (scores < 60)
+                    ).sum()
+                )
+                if ambiguous:
+                    st.info(
+                        f"🛡️ **{auth_req_total_for_banner} auth-required lot(s)** "
+                        f"({ambiguous} with ambiguous score < 60). The "
+                        "eBay sold-comp pool for tier-3 luxury is heavily "
+                        "contaminated by replicas, so est_resale is best "
+                        "treated as 'what the contaminated market clears at,' "
+                        "not 'what an authenticated piece is worth.' Use the "
+                        "🛡️ Photo authentication panel below to spot-check "
+                        "specific lots before bidding."
+                    )
+
+    # ---- Photo-based verification panel ----
+    # When the auction has auth-required BOLO matches, expose a popover
+    # that lets the user pick a specific lot and run Claude vision on
+    # its photo against the brand's era_markers checklist. One vision
+    # call per lot (~$0.005 with claude-haiku-4-5), explicit rather
+    # than auto so the user controls the spend.
+    if 'bolo_auth_required' in working.columns:
+        auth_lots = working[
+            working['bolo_auth_required'].fillna(False).astype(bool)
+        ]
+        if len(auth_lots) > 0 and 'thumbnail_url' in auth_lots.columns:
+            with st.expander(
+                f"🛡️ Photo authentication ({len(auth_lots)} auth-required lot(s) — "
+                "one Claude vision call per click, ~$0.005 each)",
+                expanded=False,
+            ):
+                st.caption(
+                    "Pick a lot and click **Verify**. Claude will look at the "
+                    "photo against the brand's era_markers checklist and report "
+                    "what it can/can't see plus any obvious red flags. This is "
+                    "NOT a replacement for professional authentication — but it "
+                    "catches the obvious fakes (off-center monogram, wrong "
+                    "hardware color, blurry heat-stamp) that experienced eyes "
+                    "would also flag."
+                )
+                # Build a label list: brand · model · est_resale · current_bid
+                lot_labels = []
+                for _, lot_row in auth_lots.iterrows():
+                    brand = lot_row.get('bolo_brand') or '?'
+                    model = lot_row.get('bolo_model') or ''
+                    title_short = (str(lot_row.get('title') or '')[:60])
+                    bid = lot_row.get('current_bid') or 0
+                    label = (f"{brand} · {title_short}"
+                             f" — bid ${bid}")
+                    lot_labels.append(label)
+                pick = st.selectbox(
+                    "Pick a lot to verify",
+                    options=list(range(len(lot_labels))),
+                    format_func=lambda i: lot_labels[i],
+                    key="auth_verify_pick",
+                )
+                picked_row = auth_lots.iloc[pick]
+                # Store per-lot results in session_state keyed by lot_id
+                # so re-clicking the popover doesn't re-fire the API call.
+                lot_id = picked_row.get('lot_id')
+                cache_key = f"_auth_photo_result_{lot_id}"
+                vc1, vc2 = st.columns([1, 1])
+                with vc1:
+                    if st.button(
+                        "🔍 Verify with Claude vision",
+                        key=f"auth_verify_btn_{lot_id}",
+                        type="primary",
+                        use_container_width=True,
+                        help="Spends one Claude API call. Result is cached "
+                             "per-lot for the rest of the session.",
+                    ):
+                        # Pull the API key from config
+                        from scraper.config_loader import load_config
+                        try:
+                            _cfg = load_config()
+                            ant_cfg = _cfg.get('anthropic') or {}
+                            ant_key = ant_cfg.get('api_key')
+                            ant_model = ant_cfg.get('model') or 'claude-haiku-4-5'
+                        except Exception:
+                            ant_key = None
+                            ant_model = 'claude-haiku-4-5'
+
+                        if not ant_key:
+                            st.error(
+                                "No Anthropic API key in config.json. "
+                                "Add `anthropic.api_key` to enable photo "
+                                "verification."
+                            )
+                        else:
+                            # Pull image URL — prefer fullsize then HD then
+                            # plain thumbnail. Smaller images = lower
+                            # signal but still usable for obvious fakes.
+                            img_url = (
+                                picked_row.get('fullsize_url')
+                                or picked_row.get('hd_thumbnail_url')
+                                or picked_row.get('thumbnail_url')
+                            )
+                            # Reconstruct the brand_match dict from the
+                            # row's BOLO columns so analyze_photo has
+                            # era_markers + notes to work with.
+                            brand_match = _BOLO_MATCHER.match(
+                                str(picked_row.get('title') or ''),
+                                str(picked_row.get('description') or ''),
+                            )
+                            with st.spinner("Asking Claude to look at the photo…"):
+                                result = _auth_analyze_photo(
+                                    img_url, brand_match, ant_key, model=ant_model
+                                )
+                            st.session_state[cache_key] = result or {
+                                'auth_score': None,
+                                'photo_notes': '(no result returned — check API key / image URL)',
+                                'red_flags': [], 'green_flags': [],
+                                'era_seen': [], 'era_missing': [],
+                            }
+                            st.rerun()
+                with vc2:
+                    if st.button(
+                        "🗑️ Clear result",
+                        key=f"auth_clear_btn_{lot_id}",
+                        use_container_width=True,
+                        disabled=cache_key not in st.session_state,
+                    ):
+                        st.session_state.pop(cache_key, None)
+                        st.rerun()
+
+                # Render the cached result if present
+                if cache_key in st.session_state:
+                    result = st.session_state[cache_key]
+                    score = result.get('auth_score')
+                    quality = result.get('image_quality') or 'n/a'
+                    rc1, rc2, rc3 = st.columns(3)
+                    with rc1:
+                        st.metric(
+                            "Photo auth score",
+                            f"{score}" if score is not None else "n/a",
+                            help="0-100, Claude's confidence based on photo only",
+                        )
+                    with rc2:
+                        st.metric("Image quality", quality)
+                    with rc3:
+                        # Merge with description-based score for a
+                        # combined view if both exist.
+                        desc_score = picked_row.get('bolo_auth_score')
+                        if desc_score is not None and score is not None:
+                            try:
+                                merged = int(round(0.6 * float(score) + 0.4 * float(desc_score)))
+                            except (TypeError, ValueError):
+                                merged = None
+                            st.metric(
+                                "Merged score",
+                                f"{merged}" if merged is not None else "n/a",
+                                help="0.6 × photo + 0.4 × description",
+                            )
+
+                    if result.get('photo_notes'):
+                        st.caption(f"📝 {result['photo_notes']}")
+
+                    rf = result.get('red_flags') or []
+                    gf = result.get('green_flags') or []
+                    es = result.get('era_seen') or []
+                    em = result.get('era_missing') or []
+                    if rf:
+                        st.error("🚩 **Red flags Claude saw:**\n\n- " + "\n- ".join(rf))
+                    if gf:
+                        st.success("✅ **Supports authenticity:**\n\n- " + "\n- ".join(gf))
+                    if es:
+                        st.markdown("**Era markers visible:**\n\n- " + "\n- ".join(es))
+                    if em:
+                        st.markdown("**Era markers NOT visible (need to verify in person):**\n\n- " + "\n- ".join(em))
 
     filtered_df = working
 
@@ -3052,12 +4583,45 @@ def _render_results_table(results_df):
     )
     if show_original:
         display_cols.append('title')
-    # auction_link removed from per-row display — we surface a single
-    # auction-name link at the top of the analysis view instead.
+    # 🎯 BOLO match column — only added when at least one row in the
+    # current auction matched the brand list. Shows the brand name
+    # (with tier emoji) so the user can scan for premium hits without
+    # opening individual lots. The target-buy ceiling lives next to
+    # current_bid so the comparison is one glance.
+    if bolo_total > 0 and 'bolo_brand' in filtered_df.columns:
+        display_cols.append('bolo_brand')
+    # 🛡️ Auth Score column — only when the auction has at least one
+    # auth-required (tier-3 luxury / Polo subline) BOLO match. Below
+    # 30 is "do not bid without authentication"; surfaces the same
+    # red/green flag detail in the column tooltip.
+    auth_required_count = (
+        int(filtered_df['bolo_auth_required'].fillna(False).astype(bool).sum())
+        if 'bolo_auth_required' in filtered_df.columns else 0
+    )
+    if auth_required_count > 0 and 'bolo_auth_score' in filtered_df.columns:
+        display_cols.append('bolo_auth_score')
+    # Multi-auction BOLO scan: when lots come from many auctions,
+    # surface the auction name + a per-row link so the user can
+    # navigate to each lot's source. Single-auction views keep the
+    # one-time auction link at the top of the page (cleaner).
+    is_multi_auction_view = (
+        'auction' in filtered_df.columns
+        and int(filtered_df['auction'].nunique()) > 1
+    )
+    if is_multi_auction_view:
+        if 'auction' in filtered_df.columns:
+            display_cols.append('auction')
+        if 'auction_link' in filtered_df.columns:
+            display_cols.append('auction_link')
     display_cols += ['category', 'current_bid']
     if 'next_bid' in filtered_df.columns:
         display_cols.append('next_bid')
     display_cols.append('est_cost')
+    # Target-buy ceiling sits next to est_cost so the user can see at a
+    # glance whether the current bid has already crossed the BOLO's
+    # recommended max. Only shown when matches exist.
+    if bolo_total > 0 and 'bolo_target_buy_high' in filtered_df.columns:
+        display_cols.append('bolo_target_buy_high')
     col_config = {
         "thumbnail_url": st.column_config.ImageColumn(
             "📷",
@@ -3094,6 +4658,38 @@ def _render_results_table(results_df):
                  "This is what you'd pay if you won at the minimum next bid.",
         ),
         "bid_count": st.column_config.NumberColumn("Bids", format="%d"),
+        "bolo_brand": st.column_config.TextColumn(
+            "🎯 BOLO",
+            help="Brand match against data/clothing_brand_bolo.json. "
+                 "Tier 1 = high sell-through, Tier 2 = vintage/heritage, "
+                 "Tier 3 = luxury/situational. Hover the row's "
+                 "bolo_target_buy_high to see the recommended max bid.",
+        ),
+        "bolo_target_buy_high": st.column_config.NumberColumn(
+            "Target Buy ≤", format="$%.0f",
+            help="Highest price you should pay for this lot to maintain "
+                 "the target ROI. Pulled from target_buy_usd.high in "
+                 "the BOLO file.",
+        ),
+        "bolo_tier": st.column_config.NumberColumn(
+            "Tier", format="%d",
+            help="1 = athleisure / outdoor / boho contemporary "
+                 "(reliable sell-through). 2 = vintage denim / heritage. "
+                 "3 = luxury / sneakers / high-volume mid-luxury "
+                 "(highest ceiling, lowest STR).",
+        ),
+        "bolo_auth_score": st.column_config.ProgressColumn(
+            "🛡️ Auth",
+            min_value=0, max_value=100, format="%d",
+            help="Description-based authenticity score (0-100) for "
+                 "auth-required BOLO matches. <30 = do not bid without "
+                 "authentication (auctioneer used 'as-is' or 'designer-"
+                 "style' or similar disclaimer). 30-60 = ambiguous, "
+                 "inspect carefully. 60+ = description supports "
+                 "authenticity (made-in tag cited, dust bag mentioned, "
+                 "estate provenance, etc.). Resale confidence is "
+                 "automatically discounted when this score is low.",
+        ),
     }
 
     if 'est_resale' in filtered_df.columns:
@@ -3313,6 +4909,13 @@ def _render_results_table(results_df):
         'est_roi': 'ROI %',
         'max_bid': 'Max Bid',
         'low_comp_confidence': 'Low Conf. (legacy)',
+        'bolo_brand': '🎯 BOLO Brand',
+        'bolo_tier': '🎯 BOLO Tier',
+        'bolo_target_buy_high': '🎯 Target Buy',
+        'bolo_model': '🎯 BOLO Model',
+        'bolo_auth_score': '🛡️ Auth Score',
+        'bolo_auth_red': '🛡️ Auth Red Flags',
+        'bolo_auth_green': '🛡️ Auth Green Flags',
     }
     # Persist user picks across reruns. Key includes a fingerprint of
     # the current column set so a different auction's columns don't
@@ -3458,6 +5061,247 @@ if (
     and not st.session_state.get('current_auction')
 ):
     _df = st.session_state.phase1_leads
+
+    # Multi-auction BOLO-scan path: filter every fetched lot
+    # against the BOLO matcher and load just the matches as a
+    # synthetic "🎯 BOLO scan" auction. The standard analysis
+    # pipeline (audit → comps → results table) takes over from
+    # there — same code path, just with a pre-filtered subset.
+    if st.session_state.get('_bolo_scan_all_pending') and _BOLO_MATCHER.loaded:
+        # Stage 2 of the multi-auction BOLO scan: regex-match every fetched
+        # lot title/description against the loaded BOLO list. Cheap (regex
+        # only), but we surface a visible status panel so the user knows
+        # WHY the page seems to pause between fetch and audit.
+        with st.status(
+            "🎯 Phase 3 of 5: Matching lots against BOLO list…",
+            expanded=True,
+        ) as _bolo_match_status:
+            n_total = len(_df)
+            n_brands = _BOLO_MATCHER.brand_count
+            st.write(
+                f"Scanning **{n_total:,}** fetched lots against "
+                f"**{n_brands}** BOLO brands…"
+            )
+            # Chunked match with a live progress bar + running brand
+            # tally + a live pie chart. Chunk size 2000 gives ~20
+            # progress ticks for a 40K-lot scan — visible motion without
+            # spamming reruns.
+            _bolo_progress = st.progress(0.0, text="Starting…")
+            _bolo_eta_label = st.empty()
+            _bolo_live_stats = st.empty()
+            # Pie chart placeholder. Lives above the brand-tally text
+            # so the user sees the visual update first. Empty when
+            # plotly isn't available — the markdown summary still
+            # renders below as the fallback.
+            _bolo_live_pie = st.empty() if _HAS_PLOTLY else None
+            _bolo_pie_throttle = {"last_n": 0}
+            # ETA tracking: stamp the start time before the first chunk
+            # callback fires. Each chunk reports elapsed seconds and a
+            # linear projection of the remaining time. Linear projection
+            # is fine here because regex match cost is essentially flat
+            # per row — there's no warm-up curve like there is for
+            # ScrapingBee.
+            _bolo_start_ts = datetime.now()
+
+            def _fmt_secs(s: float) -> str:
+                if s < 1:
+                    return "<1s"
+                if s < 60:
+                    return f"{s:.0f}s"
+                m, s = divmod(int(s), 60)
+                return f"{m}m {s:02d}s"
+
+            def _bolo_chunk_cb(current, total, hits, top_brands):
+                pct = current / total if total else 1.0
+                _elapsed = (datetime.now() - _bolo_start_ts).total_seconds()
+                # Project remaining time from rate-so-far. Guard against
+                # divide-by-zero on the first chunk (current can equal 0
+                # in pathological cases).
+                _rate = current / max(_elapsed, 0.001)  # rows/sec
+                _remaining = (total - current) / _rate if _rate > 0 else 0
+                _bolo_progress.progress(
+                    min(pct, 1.0),
+                    text=f"Matching… {current:,} / {total:,} lots scanned "
+                         f"· {hits:,} BOLO hits so far",
+                )
+                # Separate line for elapsed + ETA so the progress bar
+                # text stays readable. Once we're at 99%+ progress, the
+                # ETA isn't meaningful — show "wrapping up…" instead.
+                if pct >= 0.99:
+                    _bolo_eta_label.markdown(
+                        f"⏱️ Elapsed: **{_fmt_secs(_elapsed)}** · "
+                        f"wrapping up…"
+                    )
+                else:
+                    _bolo_eta_label.markdown(
+                        f"⏱️ Elapsed: **{_fmt_secs(_elapsed)}** · "
+                        f"ETA remaining: **{_fmt_secs(_remaining)}** · "
+                        f"rate: ~{_rate:,.0f} lots/sec"
+                    )
+                if top_brands:
+                    _summary = " · ".join(
+                        f"**{b}** ({c})" for b, c in top_brands.items()
+                    )
+                    _bolo_live_stats.markdown(
+                        f"🔥 Top brands so far: {_summary}"
+                    )
+                # Re-render the pie chart only when the brand counts
+                # have actually moved meaningfully. Streamlit's plotly
+                # render is the most expensive part of each chunk
+                # callback — throttle to every ~5% of progress OR when
+                # a new brand crosses 5+ hits.
+                if _bolo_live_pie is not None and top_brands:
+                    n_new = sum(top_brands.values())
+                    pct_jump = (
+                        (n_new - _bolo_pie_throttle["last_n"]) / max(1, n_new)
+                    )
+                    if pct_jump >= 0.05 or pct >= 0.99:
+                        _bolo_pie_throttle["last_n"] = n_new
+                        # Build over the full top_brands dict (already
+                        # capped at 8 by the chunk callback). Pass to
+                        # _build_brand_pie which adds 'Other' bucketing.
+                        fig = _build_brand_pie(
+                            dict(top_brands),
+                            title=f"🔥 BOLO matches by brand "
+                                  f"({hits:,} so far)",
+                        )
+                        if fig is not None:
+                            _bolo_live_pie.plotly_chart(
+                                fig,
+                                use_container_width=True,
+                                key=f"bolo_live_pie_{current}",
+                            )
+
+            _scan_df = _compute_bolo_columns_chunked(
+                _df, chunk_size=2000, progress_callback=_bolo_chunk_cb,
+            )
+            # Stash the final elapsed time so we can show "completed
+            # in Xs" in the closing summary instead of just "done".
+            _bolo_total_secs = (
+                datetime.now() - _bolo_start_ts
+            ).total_seconds()
+            _bolo_progress.empty()
+            _bolo_eta_label.empty()
+            _bolo_live_stats.empty()
+            if _bolo_live_pie is not None:
+                _bolo_live_pie.empty()
+
+            if 'bolo_brand' in _scan_df.columns:
+                _bolo_subset = _scan_df[_scan_df['bolo_brand'].notna()].copy()
+            else:
+                _bolo_subset = _scan_df.iloc[0:0]
+            n_matches = len(_bolo_subset)
+            n_auctions = (
+                int(_df['auction'].nunique())
+                if 'auction' in _df.columns else 1
+            )
+            n_match_auctions = (
+                int(_bolo_subset['auction'].nunique())
+                if 'auction' in _bolo_subset.columns and not _bolo_subset.empty
+                else 0
+            )
+            _match_pct = (100 * n_matches / n_total) if n_total else 0.0
+            st.write(
+                f"✅ **{n_matches:,}** BOLO matches found "
+                f"({_match_pct:.1f}% hit rate) across "
+                f"**{n_match_auctions}** of **{n_auctions}** auctions."
+            )
+            if n_matches > 0:
+                _top_brands = (
+                    _bolo_subset['bolo_brand']
+                    .value_counts()
+                    .head(10)
+                    .to_dict()
+                )
+                _brand_summary = " · ".join(
+                    f"**{b}** ({c})" for b, c in _top_brands.items()
+                )
+                st.write(f"Top brands hit: {_brand_summary}")
+
+                # Per-category breakdown so the user knows what tiers are coming
+                if 'bolo_category' in _bolo_subset.columns:
+                    _cat_breakdown = (
+                        _bolo_subset['bolo_category']
+                        .fillna('(uncategorized)')
+                        .value_counts()
+                        .head(8)
+                        .to_dict()
+                    )
+                    _cat_summary = " · ".join(
+                        f"{c} ({n})" for c, n in _cat_breakdown.items()
+                    )
+                    st.write(f"By category: {_cat_summary}")
+
+                # Top auctions by BOLO match count — surface where the
+                # densest BOLO-friendly inventory lives
+                if 'auction' in _bolo_subset.columns:
+                    _top_auctions = (
+                        _bolo_subset['auction']
+                        .value_counts()
+                        .head(5)
+                        .to_dict()
+                    )
+                    _auc_summary = " · ".join(
+                        f"*{a[:40]}* ({n})" for a, n in _top_auctions.items()
+                    )
+                    st.write(f"🏆 Densest BOLO auctions: {_auc_summary}")
+
+                st.write(
+                    "Loading the matched subset into the analysis view; "
+                    "audit + price comps run next."
+                )
+            else:
+                st.write(
+                    "No BOLO matches in this batch. Check that BOLO files "
+                    "are loaded and that auction titles look reasonable."
+                )
+            _bolo_match_status.update(
+                label=(
+                    f"✅ Phase 3 of 5: {n_matches:,} BOLO matches "
+                    f"across {n_match_auctions} auctions "
+                    f"(completed in {_fmt_secs(_bolo_total_secs)})"
+                ),
+                state="complete", expanded=False,
+            )
+        scan_label = (
+            f"🎯 BOLO scan — {n_matches} matches across "
+            f"{n_match_auctions} of {n_auctions} auctions"
+        )
+        # Stash the summary before _load_auction_for_analysis (which
+        # clears the flag). The synthetic-auction load path mirrors
+        # the standard one but skips cache lookups since the auction_id
+        # space is mixed across many auctions.
+        st.session_state._bolo_scan_summary = {
+            'total_lots': n_total,
+            'matches': n_matches,
+            'auctions': n_auctions,
+            'match_auctions': n_match_auctions,
+        }
+        # Load directly without going through _load_auction_for_analysis
+        # (which would try to merge cached data keyed by a single
+        # auction_id — wrong for a multi-auction frame).
+        st.session_state.selected_leads = _bolo_subset.reset_index(drop=True)
+        st.session_state.current_auction = scan_label
+        st.session_state.audit_results = {}
+        # Reset all the auto-pipeline / scope flags so the standard
+        # post-load flow (audit → credit gate → comps) fires fresh.
+        st.session_state.pop('_comps_has_more', None)
+        st.session_state.pop('_comps_auction_str_map', None)
+        st.session_state.pop('_comps_stats', None)
+        st.session_state.pop('_comps_credit_confirmed', None)
+        st.session_state.pop('_audit_scope', None)
+        st.session_state.pop('_audit_scope_total_lots', None)
+        st.session_state._comps_free_only_mode = False
+        st.session_state.audit_running = False
+        st.session_state.comps_running = False
+        st.session_state.img_enrich_running = False
+        st.session_state.pop('_auto_pipeline_attempts', None)
+        # Clear the flag — single-auction loads from here on don't
+        # re-enter scan mode unless the button is clicked again.
+        st.session_state._bolo_scan_all_pending = False
+        st.rerun()
+
+    # Standard single-auction load (default behavior)
     if 'auction' in _df.columns and len(_df):
         _auction_name = _df['auction'].iloc[0]
         _auction_df = _df[_df['auction'] == _auction_name].reset_index(drop=True)
@@ -3519,8 +5363,13 @@ if current_auction and not st.session_state.selected_leads.empty:
         # auction page. Replaces the per-row 'Auction' column we used
         # to render in the results table — the auction is the same
         # for every row, so one link at the top is plenty.
+        # EXCEPT for multi-auction BOLO scans, where lots come from
+        # many sources — show a plain title and let the per-row
+        # Auction column handle navigation.
         _auction_url = None
-        if 'auction_link' in leads_df.columns and not leads_df.empty:
+        is_multi_auction = current_auction.startswith("🎯 BOLO scan")
+        if (not is_multi_auction
+                and 'auction_link' in leads_df.columns and not leads_df.empty):
             link_val = leads_df['auction_link'].dropna().head(1)
             if not link_val.empty:
                 _auction_url = str(link_val.iloc[0]).strip() or None
@@ -3538,6 +5387,152 @@ if current_auction and not st.session_state.selected_leads.empty:
         else:
             st.subheader(f"🔬 {current_auction}")
         caption_bits = [f"{len(leads_df)} items loaded"]
+
+        # Scope marker: when the user picked "BOLO only" on a big
+        # auction, the loaded leads are a filtered subset. Make that
+        # explicit so the user understands why the count looks low.
+        _scope = st.session_state.get('_audit_scope')
+        _scope_total = st.session_state.get('_audit_scope_total_lots')
+        if _scope == 'bolo' and _scope_total:
+            caption_bits.append(
+                f"🎯 BOLO-only scope ({len(leads_df)} of {_scope_total:,} lots)"
+            )
+        # Free-mode marker: signals to the user that est_resale data
+        # only comes from PC + GoCollect for non-BOLO lots — empty
+        # est_resale on most non-BOLO rows is expected (not a
+        # comp-failure to investigate). BOLO lots get the full
+        # eBay/Mercari treatment so they aren't affected.
+        if st.session_state.get('_comps_free_only_mode'):
+            caption_bits.append(
+                "🆓 Free + BOLO comps "
+                "(non-BOLO: PC + GoCollect only · BOLO: full eBay/Mercari)"
+            )
+
+        # Multi-auction BOLO scan: when the loaded leads came from a
+        # consolidated scan across every discovered auction, surface
+        # the breadth (X auctions had at least one BOLO match out of
+        # Y discovered, scanned Z total lots). Helps the user gauge
+        # how thoroughly their watch list is being matched.
+        scan_summary = st.session_state.get('_bolo_scan_summary')
+        if scan_summary and current_auction.startswith("🎯 BOLO scan"):
+            caption_bits.append(
+                f"📡 scanned {scan_summary['total_lots']:,} total lots "
+                f"({scan_summary['match_auctions']} of "
+                f"{scan_summary['auctions']} auctions had matches)"
+            )
+
+        # Persistent interactive brand pie chart. Renders for any view
+        # where the leads_df has BOLO brand data (single auction or
+        # multi-auction scan). Clicking a slice filters an inline lot
+        # preview below — doesn't touch the main results table, so it
+        # works without disrupting audit/comps state.
+        if (
+            _HAS_PLOTLY
+            and 'bolo_brand' in leads_df.columns
+            and leads_df['bolo_brand'].notna().sum() >= 2
+        ):
+            with st.expander(
+                "🥧 BOLO brand pie chart "
+                "(click a slice to preview matching lots)",
+                expanded=False,
+            ):
+                _brand_counts_full = (
+                    leads_df['bolo_brand']
+                    .dropna()
+                    .value_counts()
+                    .to_dict()
+                )
+                _pie_fig = _build_brand_pie(
+                    _brand_counts_full,
+                    title=(
+                        f"BOLO matches by brand "
+                        f"({sum(_brand_counts_full.values())} total)"
+                    ),
+                )
+                if _pie_fig is not None:
+                    # `on_select="rerun"` makes the chart return the
+                    # user's current selection so we can react to slice
+                    # clicks. Plotly stores the clicked slice in
+                    # selection.points[0]['label'].
+                    _pie_event = st.plotly_chart(
+                        _pie_fig,
+                        use_container_width=True,
+                        key="bolo_persistent_pie",
+                        on_select="rerun",
+                        selection_mode="points",
+                    )
+                    _selected_brand = None
+                    try:
+                        _sel_points = (
+                            _pie_event.selection.get('points')
+                            if _pie_event and hasattr(_pie_event, 'selection')
+                            else None
+                        )
+                        if _sel_points:
+                            _selected_brand = _sel_points[0].get('label')
+                    except (AttributeError, KeyError, IndexError, TypeError):
+                        _selected_brand = None
+
+                    if _selected_brand:
+                        # The "Other (N brands)" slice aggregates the
+                        # tail; clicking it shows everything outside
+                        # the top 11.
+                        if _selected_brand.startswith("Other ("):
+                            _top_11 = sorted(
+                                _brand_counts_full.items(),
+                                key=lambda kv: kv[1], reverse=True,
+                            )[:11]
+                            _top_brands_set = {b for b, _ in _top_11}
+                            _slice_df = leads_df[
+                                leads_df['bolo_brand'].notna()
+                                & ~leads_df['bolo_brand'].isin(_top_brands_set)
+                            ].copy()
+                            _slice_label = (
+                                f"Other tail brands "
+                                f"({len(_slice_df)} lots)"
+                            )
+                        else:
+                            _slice_df = leads_df[
+                                leads_df['bolo_brand'] == _selected_brand
+                            ].copy()
+                            _slice_label = (
+                                f"{_selected_brand} ({len(_slice_df)} lots)"
+                            )
+                        st.markdown(f"### 📌 {_slice_label}")
+                        # Compact preview columns. Fall back gracefully
+                        # if the analysis hasn't run yet (no est_resale).
+                        _preview_cols = [
+                            c for c in (
+                                'auction', 'title', 'current_bid',
+                                'est_resale', 'est_roi', 'verdict',
+                                'bolo_tier', 'bolo_category',
+                                'lot_link',
+                            ) if c in _slice_df.columns
+                        ]
+                        if _preview_cols:
+                            _preview_df = _slice_df[_preview_cols].head(50)
+                            st.dataframe(
+                                _preview_df,
+                                use_container_width=True,
+                                hide_index=True,
+                                column_config={
+                                    "lot_link": st.column_config.LinkColumn(
+                                        "Link",
+                                        display_text="open ↗",
+                                    ) if 'lot_link' in _preview_df.columns
+                                    else None,
+                                },
+                            )
+                            if len(_slice_df) > 50:
+                                st.caption(
+                                    f"Showing first 50 of "
+                                    f"{len(_slice_df)} matching lots."
+                                )
+                        st.caption(
+                            "Click anywhere on the pie to change "
+                            "selection, or click the same slice again "
+                            "to deselect."
+                        )
 
         # If the current analysis came from cache, indicate that + when.
         auction_id = _extract_auction_id(leads_df)
@@ -3557,6 +5552,34 @@ if current_auction and not st.session_state.selected_leads.empty:
                     age_str = "earlier"
                 caption_bits.append(f"💾 cached analysis from {age_str} · current bids refreshed")
         st.caption(" · ".join(caption_bits))
+
+        # When in BOLO-only scope, expose a one-click "↗ expand to full"
+        # button that re-fetches the auction from Phase 1 and resets
+        # the scope to None so the chooser fires again. The user gets
+        # a fresh dataset; the BOLO-only audit work doesn't carry over
+        # (Phase 1 doesn't save partial audits to the cache yet) but
+        # current bids are fresh and they can pick "full" this time.
+        if _scope == 'bolo':
+            if st.button(
+                "↗ Expand to full auction",
+                key="expand_to_full_scope",
+                help="Re-fetch the entire auction's lots and re-run the "
+                     "scope chooser. Use this if the BOLO subset turned "
+                     "up promising signal and you now want to comp the "
+                     "rest of the auction too.",
+            ):
+                aid_for_expand = _extract_auction_id(leads_df)
+                if aid_for_expand is not None:
+                    st.session_state._selected_auction_ids = [aid_for_expand]
+                    st.session_state.current_auction = None
+                    st.session_state.selected_leads = pd.DataFrame()
+                    st.session_state.phase1_leads = pd.DataFrame()
+                    st.session_state.audit_results = {}
+                    st.session_state.pop('_audit_scope', None)
+                    st.session_state.pop('_audit_scope_total_lots', None)
+                    st.session_state.pop('_auto_pipeline_attempts', None)
+                    st.session_state.fetch_lots_running = True
+                    st.rerun()
 
     has_audit = (
         isinstance(st.session_state.get('audit_results'), pd.DataFrame)
@@ -3649,6 +5672,116 @@ if current_auction and not st.session_state.selected_leads.empty:
                     generic_count += 1
             needs_image_enrich = generic_count >= 1
 
+    # ================================================================
+    # AUDIT-SCOPE CHOOSER (pre-audit gate for big auctions)
+    # When an auction has > BIG_AUCTION_THRESHOLD lots AND at least one
+    # BOLO match AND no audit has run yet, block the auto-audit and ask
+    # the user whether to analyze the full auction or just the BOLO
+    # subset. Solves the "11000 lots but only 30 BOLOs" cost-blowup
+    # case the user flagged: running Claude audit on 11000 generic
+    # estate-sale lots burns API budget without finding the brand
+    # hits any faster than scoping straight to BOLO.
+    # ================================================================
+    BIG_AUCTION_THRESHOLD = 500
+    audit_scope = st.session_state.get('_audit_scope')
+    # Multi-auction BOLO scan-all loads `selected_leads` already pre-
+    # filtered to BOLO matches — there is no "full auction" inside this
+    # view to expand to (you'd have to drill into individual auctions
+    # via the per-row links). The scope chooser shouldn't fire because
+    # both choices would point at the same dataset. Detect via the
+    # synthetic-auction name prefix the BOLO scan uses.
+    _is_multi_auction_bolo_scan = bool(
+        current_auction
+        and isinstance(current_auction, str)
+        and current_auction.startswith("🎯 BOLO scan")
+    )
+    needs_scope_choice = (
+        not has_audit
+        and not audit_running
+        and audit_scope is None
+        and len(leads_df) > BIG_AUCTION_THRESHOLD
+        and _BOLO_MATCHER.loaded
+        and not _is_multi_auction_bolo_scan
+    )
+    # Multi-auction scan-all path: auto-mark the scope as 'bolo' so
+    # downstream gates (the audit's `_audit_scope` checks, the comps
+    # credit gate's BOLO-aware spend estimate) treat the data correctly.
+    if (
+        _is_multi_auction_bolo_scan
+        and audit_scope is None
+        and not has_audit
+    ):
+        st.session_state._audit_scope = 'bolo'
+        st.session_state._audit_scope_total_lots = len(leads_df)
+        audit_scope = 'bolo'
+
+    # Compute BOLO count on the loaded lots once so both the chooser
+    # and the in-place filter share the same number. Cheap (regex).
+    if needs_scope_choice or audit_scope == 'bolo':
+        _scope_df = _compute_bolo_columns(leads_df)
+        _bolo_match_count = int(_scope_df['bolo_brand'].notna().sum()) \
+            if 'bolo_brand' in _scope_df.columns else 0
+    else:
+        _scope_df = None
+        _bolo_match_count = 0
+
+    # Render the chooser as a card and st.stop() until the user picks.
+    # Only show it when there's actually something to choose between
+    # — zero BOLO matches means the only sensible scope is the full
+    # auction, so we auto-select 'full' instead of asking.
+    if needs_scope_choice:
+        if _bolo_match_count == 0:
+            st.session_state._audit_scope = 'full'
+            st.session_state._audit_scope_total_lots = len(leads_df)
+            st.rerun()
+        st.markdown("---")
+        st.markdown("### 🎯 Big auction — pick a scope before running audit")
+        st.caption(
+            f"This auction has **{len(leads_df):,}** lots. Running audit "
+            "on the whole thing burns Claude API on every generic estate-"
+            f"sale lot. The BOLO matcher already spotted **"
+            f"{_bolo_match_count}** lot(s) matching a brand on your watch "
+            "list — analyzing just those is much cheaper if the rest of "
+            "the auction is unlikely to have premium items."
+        )
+        sc1, sc2 = st.columns([1, 1])
+        with sc1:
+            if st.button(
+                f"🎯 BOLO only — analyze {_bolo_match_count:,} matching lot(s)",
+                type="primary",
+                use_container_width=True,
+                key="audit_scope_bolo",
+                help="Filter selected_leads down to BOLO-matched lots, "
+                     "then run audit + comps only on those. Cheapest "
+                     "path. You can switch to the full auction later "
+                     "via the analysis-view header.",
+            ):
+                # Filter selected_leads in place so all downstream
+                # steps see only the BOLO subset. Save the original
+                # lot count for the header caption.
+                st.session_state._audit_scope = 'bolo'
+                st.session_state._audit_scope_total_lots = len(leads_df)
+                st.session_state.selected_leads = (
+                    _scope_df[_scope_df['bolo_brand'].notna()]
+                    .reset_index(drop=True)
+                )
+                st.rerun()
+        with sc2:
+            if st.button(
+                f"🌐 Full auction — analyze all {len(leads_df):,} lots",
+                use_container_width=True,
+                key="audit_scope_full",
+                help="Run audit + comps across every lot. Choose this "
+                     "when the auction's mix is unknown or you want "
+                     "the BOLO matcher to confirm against post-audit "
+                     "enriched titles.",
+            ):
+                st.session_state._audit_scope = 'full'
+                st.session_state._audit_scope_total_lots = len(leads_df)
+                st.rerun()
+        st.markdown("---")
+        st.stop()
+
     if not (audit_running or comps_running or img_enrich_running):
         # Stale-audit retry: if the cached audit columns are mostly
         # `no_api_key` and we now DO have a key, re-fire the audit so
@@ -3711,9 +5844,166 @@ if current_auction and not st.session_state.selected_leads.empty:
         and not st.session_state.get('_comps_credit_confirmed', False)
     )
     if needs_credit_confirmation:
-        ar_for_estimate = st.session_state.get('audit_results')
+        ar_for_estimate_raw = st.session_state.get('audit_results')
+
+        # ---- Spend-cap knobs ----
+        # Surface trim controls right at the gate so the user can dial
+        # cost down BEFORE confirming. Three knobs:
+        #   - Min bid floor: drop lots below $X (kills cheap junk)
+        #   - Tier 1 BOLO only: drop tier 2/3 BOLO matches
+        #   - Top-N cap: only comp the N highest-bid lots
+        # Each knob is wired to session_state so it persists across
+        # reruns within the same gate. Defaults are the existing
+        # session values when the user has set them previously.
+        ar_for_estimate = ar_for_estimate_raw
+
+        # Apply BOLO column for tier filtering
+        ar_with_bolo = (
+            _compute_bolo_columns(ar_for_estimate_raw)
+            if isinstance(ar_for_estimate_raw, pd.DataFrame)
+            and not ar_for_estimate_raw.empty
+            else None
+        )
+
+        # Detect "100% BOLO saturation" — typical of the multi-auction
+        # scan-all flow where every loaded lot is already a BOLO match.
+        # In that mode the "BOLO subset" framing is misleading because
+        # subset == full set; we adjust labeling and offer different
+        # cost-cutting knobs (tier filter + bid floor + top-N cap).
+        if ar_with_bolo is not None and 'bolo_brand' in ar_with_bolo.columns:
+            _bolo_saturation_pct = (
+                ar_with_bolo['bolo_brand'].notna().sum()
+                / max(len(ar_with_bolo), 1)
+            )
+        else:
+            _bolo_saturation_pct = 0.0
+        _is_bolo_saturated = _bolo_saturation_pct >= 0.98
+
+        # Draw the cap controls in an expander so users who want the
+        # default behavior aren't slowed down — but BOLO-saturated runs
+        # auto-expand it because we know the spend is potentially huge.
+        with st.expander(
+            "🎚️ Spend caps — optional filters before confirming",
+            expanded=_is_bolo_saturated,
+        ):
+            cap_c1, cap_c2, cap_c3 = st.columns(3)
+            with cap_c1:
+                _gate_min_bid = st.number_input(
+                    "Min bid floor ($)",
+                    min_value=0.0,
+                    value=float(
+                        st.session_state.get('_gate_min_bid_filter', 0.0)
+                    ),
+                    step=1.0, format="%.2f",
+                    key="_gate_min_bid_filter",
+                    help="Skip lots whose current bid is below this. "
+                         "Cheap-junk filter — at low bids the comp spend "
+                         "rarely pays back. Try $5–10.",
+                )
+            with cap_c2:
+                _gate_top_n = st.number_input(
+                    "Cap to top N by bid (0 = no cap)",
+                    min_value=0,
+                    value=int(
+                        st.session_state.get('_gate_top_n_filter', 0)
+                    ),
+                    step=50,
+                    key="_gate_top_n_filter",
+                    help="Sort eligible lots by current bid, descending, "
+                         "and keep only the top N. Set to e.g. 200 to "
+                         "spend on the highest-value lots first; the "
+                         "long tail can be re-run later if needed.",
+                )
+            with cap_c3:
+                _has_tier_data = (
+                    ar_with_bolo is not None
+                    and 'bolo_tier' in ar_with_bolo.columns
+                    and ar_with_bolo['bolo_tier'].notna().any()
+                )
+                _gate_tier1_only = st.checkbox(
+                    "Tier 1 BOLO only",
+                    value=bool(
+                        st.session_state.get('_gate_tier1_only_filter', False)
+                    ),
+                    key="_gate_tier1_only_filter",
+                    disabled=not _has_tier_data,
+                    help="Restrict to tier-1 BOLO matches (the curated "
+                         "highest-resale brands). Drops tier 2/3 hits "
+                         "for cheaper, higher-quality runs.",
+                )
+
+        # Build the post-cap dataframe used for cost estimates and for
+        # the actual comp run. Cap state is stashed so the comps run
+        # below knows to apply the same trim.
+        if isinstance(ar_for_estimate_raw, pd.DataFrame) and not ar_for_estimate_raw.empty:
+            _capped = ar_for_estimate_raw.copy()
+            _trim_reasons = []
+
+            if _gate_min_bid > 0 and 'current_bid' in _capped.columns:
+                _before = len(_capped)
+                _capped = _capped[
+                    pd.to_numeric(_capped['current_bid'], errors='coerce')
+                    .fillna(0) >= _gate_min_bid
+                ]
+                _cut = _before - len(_capped)
+                if _cut:
+                    _trim_reasons.append(
+                        f"{_cut} dropped below ${_gate_min_bid:.2f} bid"
+                    )
+
+            if _gate_tier1_only and ar_with_bolo is not None:
+                _before = len(_capped)
+                _capped_ids = set(_capped.index)
+                _tier1_ids = set(
+                    ar_with_bolo[ar_with_bolo['bolo_tier'] == 1].index
+                )
+                _capped = _capped[_capped.index.isin(_tier1_ids)]
+                _cut = _before - len(_capped)
+                if _cut:
+                    _trim_reasons.append(
+                        f"{_cut} non-tier-1 BOLO dropped"
+                    )
+
+            if (_gate_top_n > 0 and len(_capped) > _gate_top_n
+                    and 'current_bid' in _capped.columns):
+                _before = len(_capped)
+                _capped = _capped.sort_values(
+                    'current_bid', ascending=False
+                ).head(_gate_top_n)
+                _cut = _before - len(_capped)
+                _trim_reasons.append(f"trimmed to top {_gate_top_n} by bid")
+
+            if _trim_reasons:
+                st.success(
+                    f"✂️ Caps applied: {' · '.join(_trim_reasons)}"
+                )
+            ar_for_estimate = _capped
+        # Stash the caps so the actual comp run picks them up.
+        # `comps_max_lots` already exists in the comps pipeline; the
+        # min-bid + tier1-only filters are applied here at the gate
+        # by replacing audit_results with the capped df at confirm time.
+        if _gate_top_n > 0:
+            st.session_state.comps_max_lots = int(_gate_top_n)
+
         eligible_count, est_credits, pc_pct = _estimate_comp_cost_for_audit(
             ar_for_estimate
+        )
+
+        bolo_subset_count = 0
+        bolo_subset_credits = 0
+        bolo_subset_pc_pct = 0.0
+        if (ar_with_bolo is not None and 'bolo_brand' in ar_with_bolo.columns):
+            bolo_only_df = ar_with_bolo[ar_with_bolo['bolo_brand'].notna()]
+            if not bolo_only_df.empty:
+                bolo_subset_count, bolo_subset_credits, bolo_subset_pc_pct = (
+                    _estimate_comp_cost_for_audit(bolo_only_df)
+                )
+
+        offer_bolo_scope = (
+            bolo_subset_count > 0
+            and eligible_count > BIG_AUCTION_THRESHOLD
+            and bolo_subset_count < eligible_count
+            and not _is_bolo_saturated
         )
 
         # Live ScrapingBee usage. Cached 5 min so we don't ping it
@@ -3792,32 +6082,226 @@ if current_auction and not st.session_state.selected_leads.empty:
             "free; only the ScrapingBee-routed scrapes consume credits."
         )
 
-        cb1, cb2 = st.columns([1, 1])
-        with cb1:
-            if st.button(
-                f"✅ Confirm and run comps (~{est_credits:,} credits)",
-                type="primary", use_container_width=True,
-                disabled=not affordable or eligible_count == 0,
-                key="confirm_comp_credits",
-            ):
-                st.session_state._comps_credit_confirmed = True
-                st.rerun()
-        with cb2:
-            if st.button(
-                "🚫 Skip — view audit results only",
-                use_container_width=True,
-                key="skip_comp_credits",
-                help="Bail on the comp run for this auction. The audit "
-                     "results render below; you can still hit the "
-                     "🔄 Re-run comps button later if you change your "
-                     "mind.",
-            ):
-                # Mark "skipped" by adding to auto_attempts so the
-                # auto-pipeline doesn't re-trigger, but DON'T set the
-                # confirmed flag — manual re-run still requires
-                # confirmation.
-                auto_attempts.add('comps_first')
-                st.rerun()
+        if offer_bolo_scope:
+            st.info(
+                f"🎯 **BOLO scope available**: {bolo_subset_count} of "
+                f"{eligible_count} eligible lots match the brand watch "
+                f"list. Comping just those costs **~{bolo_subset_credits:,} "
+                f"credits** vs **~{est_credits:,}** for the full set "
+                f"(saves ~{est_credits - bolo_subset_credits:,})."
+            )
+
+        # Compute BOLO count + cost for the Free button label and
+        # for the preview banner below. Must be defined BEFORE the
+        # preview-banner conditional reads it. When offer_bolo_scope
+        # already computed bolo_subset_count/credits, reuse those;
+        # otherwise compute from the BOLO-tagged audit_results.
+        free_bolo_count = bolo_subset_count if offer_bolo_scope else 0
+        free_bolo_credits = bolo_subset_credits if offer_bolo_scope else 0
+        if not offer_bolo_scope and ar_with_bolo is not None:
+            bolo_only_df = ar_with_bolo[ar_with_bolo['bolo_brand'].notna()]
+            if not bolo_only_df.empty:
+                free_bolo_count, free_bolo_credits, _ = (
+                    _estimate_comp_cost_for_audit(bolo_only_df)
+                )
+
+        # Free-mode preview — shown whenever there's a credit gate so the
+        # user knows it's available. Estimate which lots WOULD get
+        # est_resale via PC/GoCollect: any lot whose title classifies as
+        # tcg / video_game / comic via the PriceCharting classifier, or
+        # has a recognized grading callout for GoCollect.
+        if pc_pct > 0 or free_bolo_count > 0:
+            covered = int(round(pc_pct * eligible_count))
+            if _is_bolo_saturated:
+                # All eligible lots are BOLO matches (multi-auction
+                # scan-all flow). The "Free + BOLO" framing is wrong
+                # here because BOLO subset == full set — re-running
+                # eBay/Mercari on every BOLO match equals "full". So
+                # we surface the genuinely-free option clearly.
+                st.info(
+                    f"🆓 **Genuinely-free mode available**: every "
+                    f"eligible lot is already a BOLO match, so "
+                    f"'Free + BOLO' would equal 'Full'. Click the "
+                    f"**🆓 Free comps only** button below for a true "
+                    f"zero-credit run — only ~{covered} lots will get "
+                    f"prices (those covered by PriceCharting / "
+                    f"GoCollect curated catalogs); the rest stay "
+                    f"un-comped. Use the spend caps above (top N by "
+                    f"bid, tier 1 only, min bid floor) to right-size "
+                    f"a paid run before confirming."
+                )
+            else:
+                bolo_clause = (
+                    f" Plus full eBay/Mercari comps on **{free_bolo_count} "
+                    f"BOLO match(es)** (~{free_bolo_credits:,} credits)."
+                    if free_bolo_count > 0 else ""
+                )
+                st.info(
+                    f"🆓 **Free + BOLO mode available**: ~{covered} of "
+                    f"{eligible_count} eligible lots are likely covered "
+                    "by PriceCharting / GoCollect (curated catalogs, free)."
+                    + bolo_clause
+                )
+
+        # Button layout grows with the available scopes:
+        #   - Always: 🆓 Free+BOLO / 🌐 Full / 🚫 Skip
+        #   - Plus 🎯 BOLO-only when offer_bolo_scope is True
+        # 🆓 Free+BOLO mode runs PC + GoCollect for non-BOLO lots
+        # (zero credits) AND full eBay/Mercari for BOLO matches
+        # (because those are exactly the lots where the comp spend
+        # is worth it — they're on the watch list for a reason).
+        # When there are no BOLO matches, this is functionally a
+        # "0 credits" run.
+        free_help = (
+            "Run free curated sources (PriceCharting + GoCollect) on "
+            "every lot, AND full eBay/Mercari comps on BOLO matches "
+            "specifically. BOLO matches are on the watch list because "
+            "you want real resale data on them — those still get the "
+            "full treatment. Everything else: PC + GoCollect only "
+            "(lots they cover get est_resale; the rest stay empty). "
+            f"Cost: ~{free_bolo_credits:,} ScrapingBee credits "
+            f"({free_bolo_count} BOLO × ~50 cr each)."
+        )
+        if offer_bolo_scope:
+            cb_bolo, cb_free, cb_full, cb_skip = st.columns([1, 1, 1, 0.6])
+            with cb_bolo:
+                if st.button(
+                    f"🎯 BOLO ({bolo_subset_count} lots, "
+                    f"~{bolo_subset_credits:,} cr)",
+                    type="primary", use_container_width=True,
+                    disabled=not affordable or bolo_subset_count == 0,
+                    key="confirm_comp_credits_bolo",
+                    help="Scope to BOLO-matched lots only. Cheapest "
+                         "paid path. Use ↗ Expand to full auction in "
+                         "the header to comp the rest later.",
+                ):
+                    bolo_filtered = ar_with_bolo[
+                        ar_with_bolo['bolo_brand'].notna()
+                    ].reset_index(drop=True)
+                    st.session_state.audit_results = bolo_filtered
+                    st.session_state.selected_leads = bolo_filtered.copy()
+                    st.session_state._audit_scope = 'bolo'
+                    st.session_state._audit_scope_total_lots = (
+                        st.session_state.get('_audit_scope_total_lots')
+                        or len(ar_for_estimate)
+                    )
+                    st.session_state._comps_credit_confirmed = True
+                    st.rerun()
+            with cb_free:
+                free_label = (
+                    f"🆓 Free + BOLO (~{free_bolo_credits:,} cr)"
+                    if free_bolo_count > 0
+                    else f"🆓 Free ({eligible_count} lots, 0 cr)"
+                )
+                if st.button(
+                    free_label,
+                    use_container_width=True,
+                    disabled=eligible_count == 0,
+                    key="confirm_comp_credits_free",
+                    help=free_help,
+                ):
+                    if isinstance(ar_for_estimate, pd.DataFrame):
+                        st.session_state.audit_results = ar_for_estimate
+                        st.session_state.selected_leads = ar_for_estimate.copy()
+                    st.session_state._comps_free_only_mode = True
+                    st.session_state._comps_free_skip_bolo = False
+                    st.session_state._comps_credit_confirmed = True
+                    st.rerun()
+            with cb_full:
+                if st.button(
+                    f"🌐 Full ({eligible_count} lots, ~{est_credits:,} cr)",
+                    use_container_width=True,
+                    disabled=not affordable or eligible_count == 0,
+                    key="confirm_comp_credits_full",
+                ):
+                    if isinstance(ar_for_estimate, pd.DataFrame):
+                        st.session_state.audit_results = ar_for_estimate
+                        st.session_state.selected_leads = ar_for_estimate.copy()
+                    st.session_state._comps_credit_confirmed = True
+                    st.rerun()
+            with cb_skip:
+                if st.button(
+                    "🚫 Skip",
+                    use_container_width=True,
+                    key="skip_comp_credits",
+                ):
+                    auto_attempts.add('comps_first')
+                    st.rerun()
+        else:
+            cb_free, cb_full, cb_skip = st.columns([1, 1.3, 0.7])
+            with cb_free:
+                # When BOLO-saturated, "Free + BOLO" is misleading —
+                # treat it as a true zero-credit run by ALSO setting
+                # the BOLO-eBay-skip flag the comp run picks up. When
+                # not saturated, free mode runs full eBay/Mercari on
+                # BOLO matches (the original behavior).
+                if _is_bolo_saturated:
+                    free_label = (
+                        f"🆓 Free comps only ({eligible_count} lots, 0 cr)"
+                    )
+                else:
+                    free_label = (
+                        f"🆓 Free + BOLO comps (~{free_bolo_credits:,} cr)"
+                        if free_bolo_count > 0
+                        else f"🆓 Free comps only ({eligible_count} lots, 0 cr)"
+                    )
+                if st.button(
+                    free_label,
+                    use_container_width=True,
+                    disabled=eligible_count == 0,
+                    key="confirm_comp_credits_free",
+                    help=(
+                        "Zero-credit run — PriceCharting + GoCollect only. "
+                        "Skips eBay/Mercari entirely (including on BOLO "
+                        "matches) because every eligible lot is already "
+                        "BOLO-matched and running eBay on all of them "
+                        "would equal a full paid run."
+                        if _is_bolo_saturated
+                        else free_help
+                    ),
+                ):
+                    # Commit the capped df so the comp run sees only
+                    # the trimmed subset.
+                    if isinstance(ar_for_estimate, pd.DataFrame):
+                        st.session_state.audit_results = ar_for_estimate
+                        st.session_state.selected_leads = ar_for_estimate.copy()
+                    st.session_state._comps_free_only_mode = True
+                    if _is_bolo_saturated:
+                        # In saturated mode, "Free" really means free —
+                        # skip BOLO eBay/Mercari too. The comp run reads
+                        # _comps_free_skip_bolo to decide whether to
+                        # exempt BOLO matches from the free-only filter.
+                        st.session_state._comps_free_skip_bolo = True
+                    else:
+                        st.session_state._comps_free_skip_bolo = False
+                    st.session_state._comps_credit_confirmed = True
+                    st.rerun()
+            with cb_full:
+                if st.button(
+                    f"✅ Confirm and run comps (~{est_credits:,} credits)",
+                    type="primary", use_container_width=True,
+                    disabled=not affordable or eligible_count == 0,
+                    key="confirm_comp_credits",
+                ):
+                    # Commit the capped df so the comp run respects
+                    # min-bid / tier-1 / top-N caps.
+                    if isinstance(ar_for_estimate, pd.DataFrame):
+                        st.session_state.audit_results = ar_for_estimate
+                        st.session_state.selected_leads = ar_for_estimate.copy()
+                    st.session_state._comps_credit_confirmed = True
+                    st.rerun()
+            with cb_skip:
+                if st.button(
+                    "🚫 Skip",
+                    use_container_width=True,
+                    key="skip_comp_credits",
+                    help="Bail on the comp run for this auction. The audit "
+                         "results render below; you can still hit the "
+                         "🔄 Re-run comps button later if you change your "
+                         "mind.",
+                ):
+                    auto_attempts.add('comps_first')
+                    st.rerun()
 
         st.markdown("---")
         st.stop()  # Don't render results panel until confirmed
@@ -4363,6 +6847,32 @@ if current_auction and not st.session_state.selected_leads.empty:
                              "you've already run image enrichment.",
                     )
                     st.checkbox(
+                        "Run PC on stylized/replica lots (free, no credits)",
+                        key="comps_pc_check_stylized",
+                        value=True,
+                        help="Stylized lots ('Gucci style hat', 'inspired by') "
+                             "are skipped from eBay/Mercari comps because the "
+                             "scraped sold-listings would return authentic-brand "
+                             "prices that don't apply. PriceCharting matches "
+                             "against curated product catalogs (no replica "
+                             "contamination), so it's safe to run AND it's free. "
+                             "Off = stylized lots get zero comp data; on = PC "
+                             "still tries (and naturally returns nothing for "
+                             "lots PC doesn't cover, like handbags/jewelry).",
+                    )
+                    st.checkbox(
+                        "Try Mercari (currently broken — 0% hit rate)",
+                        key="comps_use_mercari",
+                        help="Mercari's scraper has returned ZERO comps across "
+                             "7,700+ lookups in production — likely a JSON-shape "
+                             "change on their end or a hard ScrapingBee block. "
+                             "Each Mercari call still costs ~25 ScrapingBee "
+                             "credits. Defaults OFF to save credits. Flip on "
+                             "if you want to retest periodically (their site "
+                             "changes might re-enable the scraper in a future "
+                             "patch).",
+                    )
+                    st.checkbox(
                         "Fast STR (sample 3 lots per auction)",
                         key="comps_use_auction_str",
                         help="STR is a marketplace signal, not per-lot. Sampling "
@@ -4464,6 +6974,18 @@ else:
     if st.session_state.get("auction_candidates"):
         st.info("""👈 Pick an auction from the sidebar to analyze.
 Audit + price comps run automatically once you click one.""")
+    elif discover_running:
+        # First-page-open auto-discovery is in flight. The sticky banner
+        # at the top already announces this, but a center-of-page card
+        # gives the user something to look at while the sidebar loads —
+        # otherwise they're staring at empty space.
+        st.info(
+            "⏳ **Loading auctions…**\n\n"
+            "Fetching the open-auction list from HiBid. This typically "
+            "takes 10–20 seconds on first open. The sidebar will "
+            "populate automatically when the list arrives — no further "
+            "action needed."
+        )
     else:
         st.info(
             "No auctions discovered yet. Click 🔍 Discover in the top right "

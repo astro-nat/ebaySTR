@@ -1,0 +1,556 @@
+{
+  "schema_version": "1.0",
+  "domain": "camera_equipment",
+  "last_updated": "2026-05-04",
+  "summary": "Cameras, lenses, lighting, drones, and photography accessories. Trend data (May 2026): 'sell used camera equipment' is a top query (interest 100), 'used photography equipment' at 81 — the resale demand is structural. KEH, MPB, Adorama are the major used-photo retailers (their pricing sets the market floor). Camera body resale is heavily generation-dependent (a Canon R5 holds value; a 5D Mark II is a thrift-tier item). Lenses age more gracefully — a 1990s Canon 70-200 f/2.8L still sells well. Vintage film cameras have a dedicated collector ecosystem (Contax, Leica M, Mamiya). Drones (DJI specifically) hold value remarkably well due to FAA-registration friction.",
+  "field_workflow": [
+    "ALWAYS verify shutter count for DSLRs (camera body life is rated 100k-400k actuations)",
+    "Lenses: check for fungus (lens-fungus is a deal-killer), separation, scratches on front element",
+    "Sensor cleanliness: check with sensor-loupe photo against blank wall",
+    "Original box / cables / charger / battery / strap = +20-30%",
+    "Mounting standard matters: Canon EF ≠ Canon RF, Sony E ≠ Sony A-mount",
+    "Test all features: AF, IBIS, EVF, manual focus rings smooth, aperture blades clean",
+    "Lens elements: front + rear + internal — use a flashlight to spot dust/fungus",
+    "DJI: registered to seller's account = friction; confirm unbinding before purchase"
+  ],
+  "skip_list": [
+    "Polaroid 600 instant (mass-market consumer)",
+    "Canon Powershot ELPH (commodity P&S)",
+    "Sony Cyber-shot (commodity P&S)",
+    "Nikon Coolpix (commodity P&S)",
+    "Fisher-Price camera",
+    "GoPro 1 / 2 / 3 (too old, no app support)",
+    "Webcam / streaming camera (commodity)",
+    "DSLR with fungus",
+    "Lens with separation",
+    "Cracked LCD",
+    "Stuck shutter mechanism"
+  ],
+  "brands": [
+    {
+      "brand": "Canon Cameras + Lenses",
+      "category": "camera_canon",
+      "tier": 1,
+      "models": [
+        "EOS R5", "EOS R5 Mark II", "EOS R6", "EOS R6 Mark II",
+        "EOS R3", "EOS R7", "EOS R8", "EOS R10", "EOS R50", "EOS R100",
+        "EOS R", "EOS RP", "EOS Ra",
+        "5D Mark IV", "5D Mark III", "5D Mark II", "5DSR",
+        "6D Mark II", "6D",
+        "7D Mark II", "7D",
+        "1DX Mark III", "1DX Mark II",
+        "80D", "90D", "70D",
+        "M50 Mark II", "M50", "M6 Mark II",
+        "RF 24-70 f/2.8", "RF 70-200 f/2.8", "RF 70-200 f/4",
+        "RF 100-500", "RF 24-105 f/4",
+        "RF 50 f/1.2", "RF 85 f/1.2", "RF 35 f/1.8",
+        "RF 15-35 f/2.8", "RF 600 f/4",
+        "EF 24-70 f/2.8L", "EF 70-200 f/2.8L", "EF 70-200 f/4L",
+        "EF 16-35 f/2.8L", "EF 24-105 f/4L",
+        "EF 50 f/1.2L", "EF 85 f/1.2L", "EF 100 macro",
+        "EF 100-400L", "EF 400 f/2.8L"
+      ],
+      "era_markers": [
+        "Canon EOS branding with model number",
+        "RF mount (mirrorless 2018+) vs EF mount (DSLR legacy)",
+        "L-series red ring on lens = pro tier",
+        "USM (Ultrasonic Motor) vs STM (Stepping Motor) — USM premium",
+        "Made in Japan stamping (older premium)",
+        "Original box, charger, battery, strap, manual = +20-30%",
+        "Shutter count <50k = like-new"
+      ],
+      "comp_ranges_usd": [
+        {"item": "EOS R5 Mark II / R5 body", "low": 2200, "high": 3800},
+        {"item": "EOS R6 Mark II / R6 body", "low": 1300, "high": 2200},
+        {"item": "5D Mark IV body", "low": 700, "high": 1200},
+        {"item": "5D Mark III body (legacy)", "low": 350, "high": 600},
+        {"item": "RF 24-70 f/2.8 L IS USM", "low": 1500, "high": 2400},
+        {"item": "RF 70-200 f/2.8 L IS USM", "low": 1700, "high": 2700},
+        {"item": "EF 70-200 f/2.8L IS II/III USM", "low": 800, "high": 1600},
+        {"item": "EF 24-70 f/2.8L II USM", "low": 850, "high": 1500},
+        {"item": "RF 50 f/1.2L USM", "low": 1500, "high": 2300},
+        {"item": "EF 50 f/1.4 USM", "low": 200, "high": 350}
+      ],
+      "target_buy_usd": {"low": 30, "high": 600},
+      "platform_primary": "eBay",
+      "platform_secondary": "KEH",
+      "comp_query_template": "canon {model} {variant}",
+      "ship_class": "small_box",
+      "notes": "L-series lenses (red ring) are the resale champions — they hold value across decades. Bodies depreciate faster than lenses. R-mount RF lenses (mirrorless) are current-gen; EF lenses (DSLR) still sell strongly because Canon ships an EF→RF adapter. The 70-200 f/2.8L is an icon — sells consistently across all generations.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Nikon Cameras + Lenses",
+      "category": "camera_nikon",
+      "tier": 1,
+      "models": [
+        "Z9", "Z8", "Z7 II", "Z7", "Z6 III", "Z6 II", "Z6", "Z5",
+        "Z fc", "Zf", "Z50", "Z30",
+        "D6", "D850", "D810", "D800", "D750", "D780",
+        "D500", "D7500", "D7200", "D7100",
+        "D5", "D4S", "D4",
+        "Df",
+        "Z 24-70 f/2.8 S", "Z 70-200 f/2.8 S",
+        "Z 24-120 f/4 S", "Z 14-30 f/4 S",
+        "Z 50 f/1.8 S", "Z 85 f/1.8 S",
+        "Z 100-400", "Z 400 f/2.8",
+        "AF-S Nikkor 24-70 f/2.8E", "AF-S 70-200 f/2.8E",
+        "AF-S 14-24 f/2.8", "AF-S 24-70 f/2.8G",
+        "AF-S 70-200 f/2.8G VR II", "AF-S 50 f/1.4G",
+        "AF-S 85 f/1.4G", "AF-S 200 f/2", "AF-S 600 f/4"
+      ],
+      "era_markers": [
+        "Nikon branding + Z mount (mirrorless 2018+) or F mount (DSLR)",
+        "S-series Z lenses = pro tier (premium over standard Z)",
+        "Gold ring on F-mount Nikkor lenses = pro tier",
+        "VR (Vibration Reduction) marker premium",
+        "Made in Japan stamping",
+        "Original box, charger, battery, strap, manual = +20-30%",
+        "Shutter count <50k for D-series (D850 rated ~200k)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Z9 body", "low": 3500, "high": 5500},
+        {"item": "Z8 body", "low": 2800, "high": 4000},
+        {"item": "Z7 II / Z6 II body", "low": 1200, "high": 2200},
+        {"item": "D850 body", "low": 1300, "high": 2200},
+        {"item": "D750 / D780 body", "low": 600, "high": 1100},
+        {"item": "Z 70-200 f/2.8 S", "low": 1900, "high": 2700},
+        {"item": "AF-S 70-200 f/2.8E FL ED VR", "low": 1500, "high": 2300},
+        {"item": "Z 50 f/1.8 S", "low": 380, "high": 600},
+        {"item": "AF-S 50 f/1.4G", "low": 280, "high": 480}
+      ],
+      "target_buy_usd": {"low": 30, "high": 700},
+      "platform_primary": "eBay",
+      "platform_secondary": "KEH",
+      "comp_query_template": "nikon {model}",
+      "ship_class": "small_box",
+      "notes": "Nikon's transition to Z-mount has been slower than Canon's RF transition — the F-mount lens ecosystem still has massive aftermarket value. AF-S Nikkor pro-glass (gold ring) is a perpetual seller. Z lenses are smaller market but premium tier.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Sony Alpha Cameras + Lenses",
+      "category": "camera_sony",
+      "tier": 1,
+      "models": [
+        "a1", "a1 II", "a9 III", "a9 II", "a9",
+        "a7R V", "a7R IV", "a7R III", "a7R II",
+        "a7 IV", "a7 III", "a7 II", "a7",
+        "a7S III", "a7S II", "a7S",
+        "a7C", "a7C II", "a7C R", "a7CR",
+        "a6700", "a6600", "a6500", "a6400", "a6300", "a6000",
+        "ZV-E10", "ZV-E10 II", "ZV-1", "ZV-1F",
+        "FX3", "FX30",
+        "FE 24-70 f/2.8 GM II", "FE 24-70 f/2.8 GM",
+        "FE 70-200 f/2.8 GM OSS II", "FE 70-200 f/2.8 GM",
+        "FE 70-200 f/4", "FE 24-105 f/4",
+        "FE 16-35 f/2.8 GM II", "FE 16-35 f/2.8 GM",
+        "FE 50 f/1.2 GM", "FE 50 f/1.4 GM", "FE 85 f/1.4 GM",
+        "FE 35 f/1.4 GM", "FE 90 f/2.8 macro",
+        "FE 100-400 GM", "FE 200-600 G",
+        "G Master", "GM lens", "G lens"
+      ],
+      "era_markers": [
+        "Sony Alpha (a-prefix) cameras",
+        "Sony FE = full-frame mirrorless lens line",
+        "Sony E = APS-C crop lens line",
+        "G Master (GM) = pro-tier lenses (orange G logo on lens)",
+        "Original Sony retail packaging + battery + strap + body cap"
+      ],
+      "comp_ranges_usd": [
+        {"item": "a1 / a1 II body", "low": 4000, "high": 6500},
+        {"item": "a9 III body", "low": 3500, "high": 5800},
+        {"item": "a7R V / a7R IV body", "low": 1800, "high": 3200},
+        {"item": "a7 IV body", "low": 1500, "high": 2400},
+        {"item": "a7 III body", "low": 900, "high": 1500},
+        {"item": "a7C / a7C II body", "low": 1000, "high": 2000},
+        {"item": "a6700 body", "low": 1100, "high": 1700},
+        {"item": "FE 24-70 f/2.8 GM II", "low": 1700, "high": 2300},
+        {"item": "FE 70-200 f/2.8 GM OSS II", "low": 1900, "high": 2700},
+        {"item": "FE 50 f/1.2 GM", "low": 1700, "high": 2300}
+      ],
+      "target_buy_usd": {"low": 50, "high": 800},
+      "platform_primary": "eBay",
+      "platform_secondary": "KEH",
+      "comp_query_template": "sony alpha {model} {variant}",
+      "ship_class": "small_box",
+      "notes": "Sony's E-mount system is currently the most-active mirrorless ecosystem. a7-series is the workhorse line; a1 is the tournament-tier flagship. G Master lenses are the resale standouts (each sells for $1,500-$2,500 used).",
+      "condition_critical": true
+    },
+    {
+      "brand": "Fujifilm Cameras + Lenses",
+      "category": "camera_fuji",
+      "tier": 1,
+      "models": [
+        "X-T5", "X-T4", "X-T3", "X-T30 II", "X-T30", "X-T20",
+        "X-T50", "X-S20", "X-S10", "X-H2S", "X-H2",
+        "X-Pro3", "X-Pro2", "X100VI", "X100V", "X100F",
+        "X-E4", "X-E3",
+        "GFX 100 II", "GFX 100S II", "GFX 100S", "GFX 100",
+        "GFX 50S II", "GFX 50R", "GFX 50S",
+        "X-Trans CMOS",
+        "XF 16-55 f/2.8", "XF 18-55", "XF 50-140 f/2.8",
+        "XF 23 f/1.4", "XF 23 f/2", "XF 35 f/1.4",
+        "XF 56 f/1.2", "XF 90 f/2",
+        "GF 32-64", "GF 50 f/3.5", "GF 80 f/1.7",
+        "GF 110 f/2", "GF 250 f/4"
+      ],
+      "era_markers": [
+        "Fujifilm / Fuji branding with X-series or GFX line",
+        "X-Trans CMOS sensor = APS-C series (X-T, X-Pro, X100, X-H)",
+        "GFX = medium format digital",
+        "Original Fuji packaging (bright orange + black)",
+        "X100V / X100VI fixed-lens compact (cult favorite)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "GFX 100 II body", "low": 5500, "high": 8000},
+        {"item": "GFX 100S II / 100S body", "low": 4500, "high": 6500},
+        {"item": "GFX 50R / 50S II body", "low": 1800, "high": 3200},
+        {"item": "X-T5 / X-H2 body", "low": 1300, "high": 2000},
+        {"item": "X-T4 / X-T3 body", "low": 700, "high": 1300},
+        {"item": "X100VI / X100V (cult)", "low": 1500, "high": 2500},
+        {"item": "X-Pro3 / X-Pro2 body", "low": 700, "high": 1500},
+        {"item": "XF 16-55 f/2.8", "low": 700, "high": 1100},
+        {"item": "XF 56 f/1.2", "low": 600, "high": 950}
+      ],
+      "target_buy_usd": {"low": 40, "high": 700},
+      "platform_primary": "eBay",
+      "platform_secondary": "KEH",
+      "comp_query_template": "fujifilm {model}",
+      "ship_class": "small_box",
+      "notes": "X100V / X100VI (fixed-lens compact) is a cult favorite — discontinued + waitlisted models trade at retail-plus pricing. GFX medium format is the secondary-market alternative to Hasselblad. X-Trans sensor + Fuji film simulations are the core appeal.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Leica",
+      "category": "camera_leica",
+      "tier": 1,
+      "models": [
+        "Q3", "Q2", "Q",
+        "M11", "M11-P", "M10", "M10-R", "M10-P", "M10 Monochrom",
+        "M9", "M8", "M Monochrom",
+        "M-A", "M-P", "M6", "M3", "M4", "M5", "M7",
+        "SL3", "SL2", "SL2-S", "SL",
+        "CL", "TL2", "T",
+        "D-Lux 7", "D-Lux 8", "C-Lux", "V-Lux",
+        "Summicron", "Summilux", "Summarit", "Elmarit",
+        "APO-Summicron", "APO-Summicron-M",
+        "Noctilux", "Noctilux f/0.95"
+      ],
+      "era_markers": [
+        "Leica red dot logo (essential for authentication)",
+        "Made in Germany / Wetzlar stamping",
+        "M-mount rangefinder = bayonet mount",
+        "Lens designation: Summicron (f/2), Summilux (f/1.4), Elmarit (f/2.8), Noctilux (f/0.95-1.0)",
+        "Original Leica box + leather pouch + cap = +30-40%",
+        "Black paint vs chrome (collector premium for black paint)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "M11 / M11-P body", "low": 7000, "high": 9000},
+        {"item": "M10 / M10-R / M10 Monochrom", "low": 4000, "high": 7500},
+        {"item": "M9 (CCD sensor cult)", "low": 2500, "high": 4500},
+        {"item": "Q3 / Q2", "low": 4000, "high": 6500},
+        {"item": "Vintage M6 (film)", "low": 3500, "high": 6500},
+        {"item": "Summicron 35 / 50 modern", "low": 2500, "high": 4500},
+        {"item": "Summilux 35 / 50 modern", "low": 4000, "high": 7500},
+        {"item": "Noctilux 50 f/0.95", "low": 7500, "high": 13000}
+      ],
+      "target_buy_usd": {"low": 200, "high": 2500},
+      "platform_primary": "eBay",
+      "platform_secondary": "Leica Store consignment",
+      "comp_query_template": "leica {model}",
+      "ship_class": "small_box",
+      "notes": "Leica is the photography blue-chip brand — values appreciate over time, especially for film M-bodies and discontinued lenses. Counterfeits exist for older models (M3 / M4 era); verify serial number against Leica's records. Always inspect rangefinder calibration on M-bodies.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Hasselblad",
+      "category": "camera_hasselblad",
+      "tier": 1,
+      "models": [
+        "X2D 100C", "X1D II 50C", "X1D 50C",
+        "907X 100C", "907X 50C",
+        "H6D-400c", "H6D-100c", "H6D-50c", "H5D",
+        "503CW", "503CX", "501CM", "500C",
+        "500C/M", "201F", "203FE", "205FCC",
+        "Carl Zeiss Planar 80", "Carl Zeiss Distagon 50",
+        "Sonnar 150", "Sonnar 250"
+      ],
+      "era_markers": [
+        "Hasselblad branding (Sweden) with model series",
+        "V-System = 6x6 medium format film (500-series)",
+        "H-System = digital + film medium format",
+        "X-System = mirrorless medium format (current digital)",
+        "Carl Zeiss lenses on V-system (red T* coating premium)",
+        "Hasselblad-marked / Phase One backs"
+      ],
+      "comp_ranges_usd": [
+        {"item": "X2D 100C body", "low": 5500, "high": 8000},
+        {"item": "X1D II 50C body", "low": 3000, "high": 5000},
+        {"item": "907X 100C kit", "low": 4500, "high": 6500},
+        {"item": "503CW / 503CX kit", "low": 2500, "high": 5000},
+        {"item": "500C/M body only", "low": 700, "high": 1500},
+        {"item": "Zeiss Planar 80 f/2.8 CF/CFE", "low": 700, "high": 1500}
+      ],
+      "target_buy_usd": {"low": 80, "high": 1200},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "hasselblad {model}",
+      "ship_class": "small_box",
+      "notes": "V-system 500-series film cameras have a sustained collector + working-photographer market. X-system (mirrorless medium format) is the current digital line. Always verify dark-slide function on V-system bodies.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Sigma lenses",
+      "category": "camera_lens",
+      "tier": 2,
+      "models": [
+        "Sigma 24-70 f/2.8 Art DG DN", "Sigma 24-70 Art",
+        "Sigma 35 f/1.4 Art", "Sigma 35 f/1.2 Art",
+        "Sigma 50 f/1.4 Art", "Sigma 85 f/1.4 Art", "Sigma 85 f/1.4 DG DN",
+        "Sigma 105 f/1.4 Art", "Sigma 14 f/1.8 Art", "Sigma 20 f/1.4 Art",
+        "Sigma 100-400 Sport", "Sigma 150-600 Sport", "Sigma 60-600 Sport",
+        "Sigma 120-300 Sport",
+        "Sigma 18-35 f/1.8 Art", "Sigma 50-100 f/1.8 Art",
+        "Sigma fp", "Sigma fp L", "Sigma BF"
+      ],
+      "era_markers": [
+        "Sigma branding with Art / Sport / Contemporary line",
+        "DG DN designation = mirrorless full-frame native",
+        "Mount tag (Sony E / Canon RF / Nikon Z / L-mount / Canon EF / Nikon F)",
+        "Hyper Sonic Motor (HSM) marker",
+        "Original lens hood + pouch + caps = +10-15%"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Sigma 24-70 f/2.8 Art DG DN", "low": 700, "high": 1100},
+        {"item": "Sigma 35 / 50 / 85 f/1.4 Art", "low": 450, "high": 800},
+        {"item": "Sigma 18-35 f/1.8 Art (APS-C)", "low": 380, "high": 600},
+        {"item": "Sigma 150-600 Sport", "low": 700, "high": 1300},
+        {"item": "Sigma fp body", "low": 800, "high": 1500}
+      ],
+      "target_buy_usd": {"low": 25, "high": 250},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "sigma {model}",
+      "ship_class": "small_box",
+      "notes": "Sigma Art lenses are the consensus best-third-party glass. Mount-specific (Sony E version sells differently from Canon RF). 18-35 f/1.8 is the unique APS-C zoom that has no first-party equivalent — sustained demand.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Tamron lenses",
+      "category": "camera_lens",
+      "tier": 2,
+      "models": [
+        "Tamron 28-75 f/2.8", "Tamron 28-75 G2",
+        "Tamron 17-28 f/2.8", "Tamron 70-180 f/2.8",
+        "Tamron 35-150 f/2-2.8", "Tamron 50-400",
+        "Tamron 150-500", "Tamron 70-300",
+        "Tamron 24 f/2.8", "Tamron 35 f/2.8", "Tamron 20 f/2.8",
+        "Tamron SP 70-200 f/2.8 G2", "Tamron SP 24-70 f/2.8 G2"
+      ],
+      "era_markers": [
+        "Tamron branding",
+        "G2 designation = generation 2 (premium over original)",
+        "SP = Superior Performance line (older legacy)",
+        "Mount-specific (Sony E / Canon EF / Nikon F)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Tamron 28-75 G2 / 17-28 / 70-180 (Sony E)", "low": 500, "high": 800},
+        {"item": "Tamron 35-150 f/2-2.8", "low": 1100, "high": 1700},
+        {"item": "Tamron SP 70-200 f/2.8 G2 (DSLR)", "low": 600, "high": 900}
+      ],
+      "target_buy_usd": {"low": 20, "high": 200},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "tamron {model}",
+      "ship_class": "small_box",
+      "notes": "Tamron 28-75 f/2.8 is the famous lightweight Sony-E alternative to the Sony FE 24-70 GM at half the price. The 35-150 f/2-2.8 is a unique focal range — no first-party equivalent. Strong third-party glass.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Zeiss lenses",
+      "category": "camera_lens",
+      "tier": 2,
+      "models": [
+        "Zeiss Otus", "Zeiss Otus 28", "Zeiss Otus 55", "Zeiss Otus 85", "Zeiss Otus 100",
+        "Zeiss Milvus", "Zeiss Milvus 35", "Zeiss Milvus 50", "Zeiss Milvus 85",
+        "Zeiss Loxia", "Zeiss Loxia 21", "Zeiss Loxia 35", "Zeiss Loxia 50",
+        "Zeiss Batis", "Zeiss Batis 25", "Zeiss Batis 40", "Zeiss Batis 85",
+        "Zeiss Touit", "Zeiss Touit 32",
+        "Zeiss Distagon", "Zeiss Planar", "Zeiss Sonnar"
+      ],
+      "era_markers": [
+        "Zeiss branding (Carl Zeiss for older / Zeiss for current)",
+        "Otus = manual focus flagship",
+        "Milvus = manual focus DSLR (Canon EF / Nikon F)",
+        "Loxia = manual focus Sony E full-frame",
+        "Batis = autofocus Sony E full-frame",
+        "T* coating marker (red star)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Otus 55 / 85", "low": 2000, "high": 3200},
+        {"item": "Milvus 35 / 50 / 85", "low": 800, "high": 1500},
+        {"item": "Batis 85 f/1.8 Sony E", "low": 700, "high": 1200},
+        {"item": "Loxia 35 / 50", "low": 700, "high": 1200}
+      ],
+      "target_buy_usd": {"low": 50, "high": 400},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "zeiss {model}",
+      "ship_class": "small_box",
+      "notes": "Zeiss is the premium third-party glass tier. Otus is uncompromising flagship MF; Milvus is Otus-derived DSLR; Loxia/Batis are Sony E mirrorless. Smaller market than Sigma but rabid collector following.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Olympus + OM SYSTEM",
+      "category": "camera_olympus",
+      "tier": 2,
+      "models": [
+        "OM-1", "OM-1 Mark II", "OM-5", "OM-3",
+        "OM-D E-M1 III", "OM-D E-M1 II", "OM-D E-M5 III",
+        "PEN-F", "PEN E-PL10", "PEN E-PL9",
+        "OM 1n", "OM 2n", "OM 3", "OM 4",
+        "M.Zuiko 12-40 f/2.8 PRO", "M.Zuiko 12-100 f/4 PRO",
+        "M.Zuiko 40-150 f/2.8 PRO", "M.Zuiko 150-400 PRO",
+        "M.Zuiko 25 f/1.2 PRO", "M.Zuiko 45 f/1.2 PRO",
+        "Zuiko OM 50 f/1.4", "Zuiko OM 50 f/1.8", "Zuiko OM 100 f/2.8"
+      ],
+      "era_markers": [
+        "Olympus / OM SYSTEM branding (renamed 2022)",
+        "PRO designation on M.Zuiko lenses = pro tier",
+        "OM-D = Micro Four Thirds digital",
+        "OM = vintage 35mm SLR (1972-2003 cult collectible)",
+        "Made in Japan stamping"
+      ],
+      "comp_ranges_usd": [
+        {"item": "OM-1 / OM-1 Mark II body", "low": 1300, "high": 2200},
+        {"item": "OM-D E-M1 III / II body", "low": 600, "high": 1100},
+        {"item": "PEN-F (cult)", "low": 600, "high": 1100},
+        {"item": "M.Zuiko 12-40 f/2.8 PRO", "low": 380, "high": 700},
+        {"item": "M.Zuiko 40-150 f/2.8 PRO", "low": 700, "high": 1100},
+        {"item": "Vintage OM-1n / OM-2n film body", "low": 200, "high": 450}
+      ],
+      "target_buy_usd": {"low": 20, "high": 200},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "olympus {model}",
+      "ship_class": "small_box",
+      "notes": "Micro Four Thirds (M4/3) has a smaller sensor footprint but compact-system advantage — OM SYSTEM is the dominant brand. Vintage OM-system 35mm SLRs (1970s-90s) have a strong collector base; OM-2n + 50mm f/1.4 Zuiko is the iconic combo.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Panasonic Lumix",
+      "category": "camera_panasonic",
+      "tier": 2,
+      "models": [
+        "Lumix S1", "Lumix S1H", "Lumix S1R", "Lumix S5", "Lumix S5 II",
+        "Lumix S5 IIX", "Lumix S9",
+        "Lumix GH5", "Lumix GH5 II", "Lumix GH5S", "Lumix GH6", "Lumix GH7",
+        "Lumix G9", "Lumix G9 II", "Lumix G100",
+        "Lumix LX100 II",
+        "Lumix S 24-105 f/4", "Lumix S 50 f/1.4",
+        "Lumix S Pro 70-200", "Leica DG 12-60",
+        "Leica DG Vario-Summilux"
+      ],
+      "era_markers": [
+        "Panasonic Lumix branding",
+        "S = full-frame L-mount (S1/S5/S9 series)",
+        "G = Micro Four Thirds (GH/G9/G100 series)",
+        "Leica DG co-branded lenses (premium tier)",
+        "GH-series = pro video flagship line"
+      ],
+      "comp_ranges_usd": [
+        {"item": "GH7 / GH6 body", "low": 1500, "high": 2400},
+        {"item": "S5 II / S5 IIX body", "low": 1100, "high": 1900},
+        {"item": "S1H body (cinema)", "low": 1300, "high": 2200},
+        {"item": "GH5 / GH5S body (legacy)", "low": 600, "high": 1100}
+      ],
+      "target_buy_usd": {"low": 30, "high": 250},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "panasonic lumix {model}",
+      "ship_class": "small_box",
+      "notes": "Panasonic GH-series is the de-facto indie cinema camera — videographers buy them used aggressively. S-series is Panasonic's L-mount full-frame entry (sister system with Leica SL + Sigma fp). Strong video credentials drive the resale.",
+      "condition_critical": true
+    },
+    {
+      "brand": "DJI Drones + Gimbals",
+      "category": "camera_drone",
+      "tier": 1,
+      "models": [
+        "Mavic 3 Pro", "Mavic 3", "Mavic 3 Classic", "Mavic 3 Cine",
+        "Mavic Air 2S", "Mavic Air 2", "Mavic Mini 4 Pro", "Mavic Mini 3 Pro",
+        "Mini 4K", "Mini 3", "Mini 2 SE",
+        "Mavic 2 Pro", "Mavic 2 Zoom",
+        "Phantom 4 Pro V2", "Inspire 2", "Inspire 3",
+        "Avata", "Avata 2", "FPV",
+        "Ronin S", "Ronin SC", "Ronin RS 2", "Ronin RS 3",
+        "Ronin RS 4 Pro", "Ronin 4D",
+        "Osmo Pocket 3", "Osmo Pocket 2", "Osmo Action 4", "Osmo Action 5"
+      ],
+      "era_markers": [
+        "DJI branding with model line (Mavic / Mini / Phantom / Inspire / Avata / Ronin / Osmo)",
+        "Original retail packaging with serial number",
+        "Charging hub / Fly More combo accessories",
+        "Battery cycle count (each battery has hours-of-flight history)",
+        "Activated to seller's account vs unbound (unbound = ready for new owner)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Mavic 3 Pro Cine Combo", "low": 3500, "high": 5500},
+        {"item": "Mavic 3 Pro / Mavic 3 standard", "low": 1500, "high": 2700},
+        {"item": "Mavic Air 2S", "low": 600, "high": 1100},
+        {"item": "Mavic Mini 4 Pro / 3 Pro", "low": 700, "high": 1100},
+        {"item": "Inspire 2 with X7 camera", "low": 3500, "high": 6000},
+        {"item": "Ronin RS 4 Pro Combo", "low": 700, "high": 1100},
+        {"item": "Osmo Pocket 3 Creator Combo", "low": 600, "high": 900}
+      ],
+      "target_buy_usd": {"low": 40, "high": 400},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "dji {model}",
+      "ship_class": "medium_box",
+      "notes": "DJI dominates consumer drones. CRITICAL: drones must be unbound from seller's DJI account before transfer — sellers sometimes forget and the new owner has friction. FAA-registration is buyer's responsibility (>0.55lb drones need it). Original Fly More combos add 30-50% to standalone drone resale.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Profoto / Godox lighting",
+      "category": "camera_lighting",
+      "tier": 2,
+      "models": [
+        "Profoto B10", "Profoto B10X", "Profoto B10 Plus",
+        "Profoto B1X", "Profoto B2", "Profoto B3",
+        "Profoto A1", "Profoto A1X", "Profoto A2",
+        "Profoto Pro-10", "Profoto Pro-11",
+        "Godox AD200", "Godox AD200 Pro", "Godox AD400 Pro",
+        "Godox AD600 Pro", "Godox AD600 Pro II",
+        "Godox V1", "Godox V860 III", "Godox MoveLink",
+        "Godox SL150", "Godox SL200", "Godox VL150"
+      ],
+      "era_markers": [
+        "Profoto branding (Sweden) for premium",
+        "Godox branding for value tier",
+        "Battery vs AC strobes (location vs studio)",
+        "Original modifier mount (Profoto / Bowens / Godox AC)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Profoto B10 / B10X", "low": 1100, "high": 1700},
+        {"item": "Profoto A1 / A1X (TTL flash)", "low": 600, "high": 1000},
+        {"item": "Godox AD600 Pro / AD400 Pro", "low": 600, "high": 1100},
+        {"item": "Godox AD200 Pro / AD200", "low": 250, "high": 400},
+        {"item": "Godox V1 round-head flash", "low": 130, "high": 220}
+      ],
+      "target_buy_usd": {"low": 15, "high": 200},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "{brand} {model}",
+      "ship_class": "small_box",
+      "notes": "Profoto is the studio-strobe premium tier. Godox is the value-tier challenger that's taken massive market share. Used Profoto sells at 50-70% of new MSRP for years; Godox depreciates slightly faster but used demand is huge."
+    }
+  ],
+  "platform_notes": {
+    "eBay": "Dominant marketplace for used camera equipment.",
+    "KEH": "Largest used-camera retailer in the US — wholesale buyer too. Their offer prices are the floor; eBay used clears at 110-130% of KEH's offer.",
+    "MPB": "European-headquartered used-camera retailer with strong US presence — similar economics to KEH.",
+    "Adorama Used": "Retailer used-trade-in section — sets a price ceiling; eBay used always sells below Adorama Used asking.",
+    "B&H Used": "Smaller used inventory than KEH/MPB but their prices set the high-end of the market for premium glass."
+  }
+}

@@ -70,10 +70,27 @@ class GoCollectLookup:
     None and consumes nothing. This lets app code construct the
     lookup unconditionally and skip integration when the user
     hasn't signed up yet.
+
+    GoCollect requires explicit API access approval (a multi-step
+    application process). An ``api_key`` in config alone isn't
+    enough — the key must also be APPROVED on their end. To prevent
+    every comp run from wasting one transport timeout testing an
+    unapproved key, we gate on a separate ``approved`` flag in
+    config.json:
+
+        "gocollect": {
+            "api_key": "Gqc73BZGico...",
+            "approved": true   <-- flip this once approval lands
+        }
+
+    When approved=False, the instance is a no-op even with a key
+    present. Flip approved=True after GoCollect's email confirming
+    API access lands, and the next comp run starts using it.
     """
 
-    def __init__(self, api_key: Optional[str]):
+    def __init__(self, api_key: Optional[str], approved: bool = False):
         self.api_key = api_key
+        self.approved = bool(approved)
         self._lock = threading.Lock()
         self._cache: Dict[str, Optional[Dict[str, Any]]] = {}
         # Track whether we've hit the daily quota — once a 429 comes
@@ -82,7 +99,11 @@ class GoCollectLookup:
 
     @property
     def enabled(self) -> bool:
-        return bool(self.api_key) and not self._quota_exhausted
+        return (
+            bool(self.api_key)
+            and self.approved
+            and not self._quota_exhausted
+        )
 
     @staticmethod
     def _clean_query(title: str) -> str:

@@ -1,0 +1,368 @@
+{
+  "schema_version": "1.0",
+  "domain": "audio_watches",
+  "last_updated": "2026-05-04",
+  "summary": "Premium audio (headphones / earbuds / speakers) and watches. Trend data (May 2026): 'Sony wireless noise canceling headphones' is a Breakout query and 'casio men's watch' is rising +250%. Audio buyers are model-specific (WH-1000XM5 ≠ WH-1000XM4) — verify exact model number. Casio G-Shock and vintage A158/F-91W lines are durable resale because the products themselves are quasi-immortal; even 10-year-old G-Shocks sell. Premium watch brands (Seiko, Citizen) hold value especially in their Japanese-domestic-market variants.",
+  "field_workflow": [
+    "Audio: model number on the headband (e.g. WH-1000XM5 stamped underneath ear cup)",
+    "Audio: confirm USB-C charging cable + carrying case included",
+    "Watches: case-back engraving identifies model + serial",
+    "Watches: original strap and clasp included = +20-30%",
+    "Watches: working condition (run a battery test or auto-wind) — non-running watches lose 50%+",
+    "Casio G-Shock: backlight + alarm + countdown all functioning"
+  ],
+  "skip_list": [
+    "Replica / fake (Casio especially common)",
+    "Counterfeit AirPods / Sony / Bose",
+    "Generic Bluetooth headphones",
+    "Off-brand Chinese audio",
+    "Children's toy watches",
+    "Quartz watch dead battery (unless luxury)",
+    "Beats Studio Buds (commodity earbuds)",
+    "Plantronics Voyager (commercial gear, low resale)"
+  ],
+  "brands": [
+    {
+      "brand": "Sony noise-canceling headphones",
+      "category": "audio_headphones",
+      "tier": 2,
+      "models": [
+        "WH-1000XM3", "WH-1000XM4", "WH-1000XM5", "WH-1000XM6",
+        "WF-1000XM3", "WF-1000XM4", "WF-1000XM5",
+        "LinkBuds S", "LinkBuds Open",
+        "ULT Wear", "WH-CH720N", "WH-XB910N",
+        "MDR-7506", "MDR-V6"
+      ],
+      "era_markers": [
+        "Sony branding with WH / WF / MDR model prefix",
+        "WH-1000XM series number = generation (3/4/5/6)",
+        "USB-C charging (XM4+) vs Micro-USB (XM3 and earlier)",
+        "Original Sony case + cables included",
+        "Made in Malaysia / Thailand stamping"
+      ],
+      "comp_ranges_usd": [
+        {"item": "WH-1000XM6 (current)", "low": 280, "high": 450},
+        {"item": "WH-1000XM5", "low": 180, "high": 320},
+        {"item": "WH-1000XM4", "low": 130, "high": 230},
+        {"item": "WH-1000XM3 (legacy)", "low": 80, "high": 150},
+        {"item": "WF-1000XM5 / XM4 earbuds", "low": 130, "high": 240},
+        {"item": "MDR-7506 (studio classic)", "low": 70, "high": 120}
+      ],
+      "target_buy_usd": {"low": 15, "high": 130},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "sony {model}",
+      "ship_class": "small_box",
+      "notes": "Sony WH-1000XM series is a Breakout trending query (May 2026). The WH-1000XM5 is the consensus best-NC headphone of its era — strong resale. MDR-7506 is the studio-monitor classic that's been in production unchanged since 1991, perpetually-popular at audio-pro level.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Bose noise-canceling",
+      "category": "audio_headphones",
+      "tier": 2,
+      "models": [
+        "QuietComfort Ultra", "QuietComfort 45", "QuietComfort 35 II",
+        "QuietComfort 35", "QuietComfort 25", "QuietComfort 20",
+        "Noise Cancelling Headphones 700", "QC Earbuds",
+        "QC Earbuds II", "QC Ultra Earbuds",
+        "SoundLink Mini", "SoundLink Mini II", "SoundLink Flex",
+        "SoundLink Revolve", "SoundLink Color"
+      ],
+      "era_markers": [
+        "Bose branding with QuietComfort / SoundLink line",
+        "QC Ultra (current flagship 2024+)",
+        "Original case + cable included",
+        "Made in USA (vintage QC 25/35 era) vs Made in Mexico/China"
+      ],
+      "comp_ranges_usd": [
+        {"item": "QC Ultra Headphones / Earbuds", "low": 280, "high": 450},
+        {"item": "QC 45 / Headphones 700", "low": 180, "high": 320},
+        {"item": "QC 35 II", "low": 130, "high": 220},
+        {"item": "QC 25 / 35 (legacy)", "low": 80, "high": 150},
+        {"item": "SoundLink Revolve / Mini II", "low": 80, "high": 160}
+      ],
+      "target_buy_usd": {"low": 15, "high": 130},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "bose {model}",
+      "ship_class": "small_box",
+      "notes": "Bose QC line is the Sony WH-1000XM rival — comparable demand, slightly different sound profile. Older QC 25 / QC 35 are still selling well as legacy classics. Counterfeits exist — check stitching quality and headband flex on QC line specifically.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Sennheiser premium audio",
+      "category": "audio_headphones",
+      "tier": 2,
+      "models": [
+        "Momentum 4 Wireless", "Momentum 3 Wireless", "Momentum 2",
+        "Momentum True Wireless 4", "Momentum True Wireless 3",
+        "HD 800S", "HD 660S2", "HD 660S", "HD 650",
+        "HD 600", "HD 569", "HD 559", "HD 25",
+        "IE 900", "IE 600", "IE 200",
+        "Accentum", "Accentum Plus"
+      ],
+      "era_markers": [
+        "Sennheiser branding",
+        "Made in Ireland (HD 6xx / 8xx flagship audiophile)",
+        "Made in Romania / China (consumer Momentum line)",
+        "HD 800S / HD 660S2 = current audiophile flagships",
+        "HD 25 = DJ classic, perpetually in demand"
+      ],
+      "comp_ranges_usd": [
+        {"item": "HD 800S (audiophile)", "low": 1000, "high": 1500},
+        {"item": "HD 660S2 / 660S", "low": 280, "high": 450},
+        {"item": "HD 650 / HD 600 (cult classic)", "low": 200, "high": 380},
+        {"item": "Momentum 4 Wireless", "low": 180, "high": 320},
+        {"item": "HD 25 (DJ standard)", "low": 100, "high": 180}
+      ],
+      "target_buy_usd": {"low": 20, "high": 350},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "sennheiser {model}",
+      "ship_class": "small_box",
+      "notes": "Sennheiser HD 600 / 650 / 660S are audiophile classics — multi-generation demand from the headphone community. HD 800S is the flagship dynamic audiophile cans. HD 25 is the DJ-booth standard (every working DJ owns a pair).",
+      "condition_critical": true
+    },
+    {
+      "brand": "Audio-Technica",
+      "category": "audio_headphones",
+      "tier": 2,
+      "models": [
+        "ATH-M50x", "ATH-M50xBT2", "ATH-M40x", "ATH-M30x",
+        "ATH-R70x", "ATH-R70xa",
+        "ATH-AD700X", "ATH-AD900X", "ATH-AD2000X",
+        "ATH-W5000", "ATH-WP900",
+        "ATH-MSR7b", "ATH-CKS series",
+        "AT-LP120X", "AT-LP140XP", "AT-LP3"
+      ],
+      "era_markers": [
+        "Audio-Technica branding",
+        "ATH model prefix for headphones",
+        "AT-LP prefix for turntables",
+        "Made in Japan (premium W-series + R70x)",
+        "Made in Taiwan/Vietnam (consumer M-series)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "ATH-M50x (studio standard)", "low": 80, "high": 150},
+        {"item": "ATH-R70x / R70xa", "low": 220, "high": 380},
+        {"item": "ATH-W5000 / WP900 (Japan wood)", "low": 600, "high": 1500},
+        {"item": "AT-LP120X / LP140XP turntable", "low": 200, "high": 400}
+      ],
+      "target_buy_usd": {"low": 10, "high": 120},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "audio-technica {model}",
+      "ship_class": "small_box",
+      "notes": "ATH-M50x is the ubiquitous studio-monitor headphone — sold for over 15 years. AT-LP turntables compete with Pro-Ject / Rega in the entry-mid hifi market. Japanese-domestic market wood-cup headphones (W-series) trade at premium with audiophile collectors."
+    },
+    {
+      "brand": "Beats by Dr. Dre",
+      "category": "audio_headphones",
+      "tier": 2,
+      "models": [
+        "Beats Studio Pro", "Beats Studio 3", "Beats Studio 2",
+        "Beats Solo 4", "Beats Solo 3", "Beats Pro",
+        "Powerbeats Pro", "Powerbeats Pro 2",
+        "Beats Fit Pro", "Beats Studio Buds", "Beats Studio Buds Plus",
+        "Beats Pill", "Beats Pill Plus"
+      ],
+      "era_markers": [
+        "Beats by Dre / Beats branding",
+        "Apple ownership (post-2014) = improved chip integration",
+        "H1 / H2 / W1 chip on packaging",
+        "Original retail packaging premium"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Beats Studio Pro (current)", "low": 180, "high": 320},
+        {"item": "Powerbeats Pro / Pro 2", "low": 130, "high": 230},
+        {"item": "Beats Solo 4", "low": 100, "high": 180},
+        {"item": "Beats Pill (2024)", "low": 100, "high": 180}
+      ],
+      "target_buy_usd": {"low": 10, "high": 80},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "beats {model}",
+      "ship_class": "small_box",
+      "notes": "Beats has been in BOLO via clothing accessories category — moving here for proper audio classification. Mainstream consumer brand with Apple-tier resale floor. Counterfeits common; verify serial via Apple support page.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Casio G-Shock + vintage",
+      "category": "watches",
+      "tier": 2,
+      "models": [
+        "GA-2100", "GA-2110", "GA-2200", "GA-100", "GA-110",
+        "GW-9400", "GW-9500", "GW-M5610", "GW-B5600",
+        "DW-5600", "DW-5610", "DW-6900", "DW-6900NB",
+        "MTG-B2000", "MTG-B3000", "MR-G",
+        "Frogman", "GWF-A1000", "GWF-D1000",
+        "Mudmaster", "Mudman", "Rangeman", "Gravitymaster",
+        "A158WA", "A168WA", "F-91W", "AE-1200", "AE-1300",
+        "Royale", "Edifice", "Pro Trek"
+      ],
+      "era_markers": [
+        "Casio etched on case-back",
+        "Module number stamped on back (e.g. 5610 / 3229 / 5179)",
+        "Made in Japan vs Made in Thailand (Japan = MR-G / MT-G premium)",
+        "G-Shock specific: shock-resistant logo + model number",
+        "Vintage: gold/silver A158/F-91W with metal bracelet",
+        "Original box + manual + tags = +30%"
+      ],
+      "comp_ranges_usd": [
+        {"item": "MR-G premium (titanium / Bluetooth)", "low": 1500, "high": 5000},
+        {"item": "MTG-B3000 / B2000", "low": 350, "high": 750},
+        {"item": "GA-2100 'Casioak' standard", "low": 70, "high": 150},
+        {"item": "GW-M5610 solar-radio", "low": 130, "high": 240},
+        {"item": "DW-5600 classic", "low": 50, "high": 100},
+        {"item": "Frogman GWF-A1000", "low": 350, "high": 700},
+        {"item": "Vintage A158WA / F-91W gold", "low": 30, "high": 80}
+      ],
+      "target_buy_usd": {"low": 5, "high": 250},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "casio {model}",
+      "ship_class": "small_box",
+      "notes": "Casio men's watch is +250% trending (May 2026). G-Shock is the workhorse line; MR-G + MTG are premium tier. The GA-2100 'Casioak' Royal Oak homage exploded in popularity 2020-2024. Vintage A158WA gold-tone (1980s) with original box trades surprisingly well. Counterfeits exist for premium MR-G — verify via Casio's authenticity check.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Citizen",
+      "category": "watches",
+      "tier": 2,
+      "models": [
+        "Eco-Drive", "Promaster", "Promaster Diver",
+        "Promaster Marine", "Promaster Tough",
+        "Eco-Drive Tsuyosa", "Eco-Drive Corso",
+        "Series 8 GMT", "Tsuyosa Auto",
+        "Chronomaster", "Citizen Caliber 0100",
+        "Bullhead", "Aqualand", "Wingman", "Skyhawk"
+      ],
+      "era_markers": [
+        "Citizen branding + Eco-Drive label (solar power)",
+        "Movement caliber number on case-back (e.g. NB1031, AT8020)",
+        "Made in Japan stamping (premium variants)",
+        "Promaster tachymeter bezel, screw-down crown",
+        "Original strap (rubber for Diver, leather for Corso)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Caliber 0100 (high-accuracy tier)", "low": 3500, "high": 7500},
+        {"item": "Series 8 GMT", "low": 700, "high": 1300},
+        {"item": "Promaster Marine / Diver", "low": 200, "high": 400},
+        {"item": "Tsuyosa Auto / Eco-Drive Corso", "low": 130, "high": 280},
+        {"item": "Standard Eco-Drive (mall tier)", "low": 80, "high": 150}
+      ],
+      "target_buy_usd": {"low": 8, "high": 200},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "citizen {model}",
+      "ship_class": "small_box",
+      "notes": "Citizen Eco-Drive is the volume seller — light-powered movement that doesn't need batteries. Promaster line is the dive/aviation niche. Series 8 and Caliber 0100 are upmarket plays for collectors who want Japanese craftsmanship without Seiko/Grand-Seiko prices.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Seiko",
+      "category": "watches",
+      "tier": 2,
+      "models": [
+        "Seiko 5", "Seiko 5 Sports", "Seiko 5 SRPD", "Seiko 5 SKX",
+        "SKX007", "SKX009", "SKX013",
+        "Prospex", "Prospex Turtle", "Prospex Samurai",
+        "Prospex Sumo", "Prospex Monster", "Prospex Speedtimer",
+        "Presage", "Presage Cocktail", "Presage Sharp Edged",
+        "King Seiko", "Grand Seiko", "GS Spring Drive",
+        "Alpinist", "Marine Master", "Tuna",
+        "Speedtimer", "Solar Chronograph"
+      ],
+      "era_markers": [
+        "Seiko branding + sub-brand line",
+        "Caliber number on case-back (4R36 / 6R35 / NH35 / 8L35)",
+        "Made in Japan stamping (vs lower-tier Made in Malaysia/China)",
+        "JDM (Japan Domestic Market) variants are scarcer + premium",
+        "Discontinued models (SKX007 / SKX009 = pre-2019, premium)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Grand Seiko (Spring Drive)", "low": 2800, "high": 7500},
+        {"item": "King Seiko KSK series", "low": 1100, "high": 2200},
+        {"item": "Prospex Marine Master", "low": 1500, "high": 3500},
+        {"item": "Prospex Turtle / Samurai / Sumo", "low": 350, "high": 700},
+        {"item": "SKX007 / SKX009 (discontinued)", "low": 280, "high": 550},
+        {"item": "Seiko 5 SRPD / 5 KX", "low": 150, "high": 280},
+        {"item": "Presage Cocktail Time", "low": 280, "high": 480}
+      ],
+      "target_buy_usd": {"low": 15, "high": 350},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "seiko {model}",
+      "ship_class": "small_box",
+      "notes": "SKX007 / SKX009 (discontinued 2019) are the dominant flippers in entry-level mech watches — prices have CLIMBED post-discontinuation. Prospex line spans ~$300-$3500. Grand Seiko is its own world (sub-brand, sometimes unbranded 'Grand Seiko' on dial only).",
+      "condition_critical": true
+    },
+    {
+      "brand": "Hamilton Watch",
+      "category": "watches",
+      "tier": 2,
+      "models": [
+        "Khaki Field", "Khaki Field Mechanical", "Khaki Field Auto",
+        "Khaki Aviation", "Khaki Pilot", "Khaki Navy",
+        "Jazzmaster", "Jazzmaster Auto Chrono", "Jazzmaster Open Heart",
+        "Ventura", "Ventura Elvis 80",
+        "Intra-Matic", "Intra-Matic Auto Chrono",
+        "American Classic", "Pan Europ", "Murph"
+      ],
+      "era_markers": [
+        "Hamilton branding (Swatch Group, made in Switzerland)",
+        "Made in Switzerland stamping",
+        "Khaki Field mil-spec heritage",
+        "H-prefix model number (H68411533 / H38416151 etc.)",
+        "Original leather / NATO / metal bracelet"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Jazzmaster / Intra-Matic Auto Chrono", "low": 700, "high": 1300},
+        {"item": "Khaki Field Auto / Mechanical", "low": 350, "high": 650},
+        {"item": "Ventura Elvis 80", "low": 600, "high": 1100},
+        {"item": "Murph (Interstellar)", "low": 700, "high": 1300}
+      ],
+      "target_buy_usd": {"low": 15, "high": 220},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "hamilton {model}",
+      "ship_class": "small_box",
+      "notes": "Khaki Field is the affordable Swiss-made heritage watch — perpetual demand. Murph (from Interstellar movie) commanded huge premium at release; now stable. Jazzmaster Open Heart is a popular gift watch with steady resale.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Bose SoundLink speakers",
+      "category": "audio_speakers",
+      "tier": 2,
+      "models": [
+        "SoundLink Mini", "SoundLink Mini II", "SoundLink Mini Special Edition",
+        "SoundLink Flex", "SoundLink Revolve", "SoundLink Revolve+",
+        "SoundLink Color", "SoundLink Color II",
+        "SoundLink Wave"
+      ],
+      "era_markers": [
+        "Bose SoundLink branding",
+        "Mini II = Bluetooth + USB-C (current)",
+        "Original retail packaging + charging cradle (Mini)",
+        "Made in Mexico / China"
+      ],
+      "comp_ranges_usd": [
+        {"item": "SoundLink Mini II Special Edition", "low": 130, "high": 220},
+        {"item": "SoundLink Revolve+ / Revolve", "low": 130, "high": 240},
+        {"item": "SoundLink Flex (current)", "low": 100, "high": 180},
+        {"item": "SoundLink Mini original", "low": 70, "high": 140}
+      ],
+      "target_buy_usd": {"low": 8, "high": 80},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "bose soundlink {model}",
+      "ship_class": "small_box",
+      "notes": "SoundLink Mini II is the long-running classic — replaced original Micro-USB version with USB-C. Battery life degrades after 4-5 years; verify charging functions before listing."
+    }
+  ],
+  "platform_notes": {
+    "eBay": "Dominant marketplace for both audio and watches. Verify model number on the device for audio (especially Sony XM-series — easy to confuse generations).",
+    "Watch forums": "WatchUSeek / Reddit r/Watches set the cultural benchmark for what a watch is worth. Useful for sanity-checking comps but not as a sales channel.",
+    "Head-fi": "The audiophile reference forum — useful for confirming Sennheiser HD-series / Audio-Technica wood-cup variant comp ranges."
+  }
+}

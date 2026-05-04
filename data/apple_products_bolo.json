@@ -1,0 +1,409 @@
+{
+  "schema_version": "1.0",
+  "domain": "apple_products",
+  "last_updated": "2026-05-04",
+  "summary": "Apple products with proven secondary-market resale. Aliases are deliberately specific (e.g., 'apple tv 4k' NOT bare 'apple tv') to avoid matching the dead-tier products like 2nd/3rd gen Apple TV that no longer get app support and have near-zero resale. Skip-list is a backup safety net for any older-gen titles that slip through. Rule of thumb for Apple resale: Mac with Apple Silicon (M1+, 2020+) ≫ Intel Mac. iPhone 12+ ≫ older. Apple Watch Series 7+ ≫ older. iPad Pro/Air ≫ base iPad. Be skeptical of anything pre-2018.",
+  "field_workflow": [
+    "Always verify model identifier on the device itself — boxes alone aren't enough",
+    "Check Activation Lock status (iCloud locked = nearly worthless)",
+    "Battery health is the single biggest resale driver for portables (MacBook, iPhone, iPad)",
+    "Run About This Mac / Settings → General → About to confirm chip generation",
+    "AppleCare+ remaining transferable to buyer — premium",
+    "Original box / cables / accessories add 10-20% premium",
+    "Cosmetic dings on aluminum bodies are visible and impact resale heavily"
+  ],
+  "skip_list": [
+    "Apple TV 2nd gen",
+    "Apple TV 2nd generation",
+    "Apple TV 3rd gen",
+    "Apple TV 3rd generation",
+    "Apple TV A1378",
+    "Apple TV A1427",
+    "Apple TV A1469",
+    "iPod classic",
+    "iPod shuffle",
+    "iPod nano",
+    "iPod touch 4th gen",
+    "iPod touch 5th gen",
+    "iPod touch 6th gen",
+    "iPhone 6",
+    "iPhone 6s",
+    "iPhone 7",
+    "iPhone 8",
+    "iPhone SE 1st gen",
+    "iPhone 5",
+    "iPhone 5s",
+    "iPhone 5c",
+    "iPad 1st gen",
+    "iPad 2nd gen",
+    "iPad 3rd gen",
+    "iPad 4th gen",
+    "iPad mini 1",
+    "iPad mini 2",
+    "iPad mini 3",
+    "iPad mini 4",
+    "iMac 2008",
+    "iMac 2009",
+    "iMac 2010",
+    "iMac 2011",
+    "iMac 2012",
+    "iMac 2013",
+    "iMac 2014",
+    "MacBook Pro 2008",
+    "MacBook Pro 2009",
+    "MacBook Pro 2010",
+    "MacBook Pro 2011",
+    "MacBook Pro 2012",
+    "MacBook Pro 2013",
+    "MacBook Pro 2014",
+    "MacBook Air 2010",
+    "MacBook Air 2011",
+    "MacBook Air 2012",
+    "MacBook Air 2013",
+    "MacBook Air 2014",
+    "MacBook Air 2015",
+    "Apple Watch Series 1",
+    "Apple Watch Series 2",
+    "Apple Watch Series 3",
+    "Apple Watch first gen",
+    "Apple Watch original",
+    "HomePod 1st gen",
+    "iCloud locked",
+    "Activation Lock",
+    "30-pin",
+    "Lightning to 30-pin"
+  ],
+  "brands": [
+    {
+      "brand": "Apple Mac",
+      "category": "apple_mac",
+      "tier": 2,
+      "models": [
+        "MacBook Pro M1", "MacBook Pro M1 Pro", "MacBook Pro M1 Max",
+        "MacBook Pro M2", "MacBook Pro M2 Pro", "MacBook Pro M2 Max",
+        "MacBook Pro M3", "MacBook Pro M3 Pro", "MacBook Pro M3 Max",
+        "MacBook Pro M4", "MacBook Pro M4 Pro", "MacBook Pro M4 Max",
+        "MacBook Pro 14", "MacBook Pro 16",
+        "MacBook Air M1", "MacBook Air M2", "MacBook Air M3", "MacBook Air M4",
+        "MacBook Air 13", "MacBook Air 15",
+        "Mac mini M1", "Mac mini M2", "Mac mini M2 Pro", "Mac mini M4",
+        "Mac mini M4 Pro",
+        "Mac Studio M1 Max", "Mac Studio M1 Ultra",
+        "Mac Studio M2 Max", "Mac Studio M2 Ultra",
+        "Mac Studio M3 Max", "Mac Studio M3 Ultra",
+        "Mac Studio M4 Max",
+        "iMac M1", "iMac M3", "iMac M4",
+        "iMac 27 5K", "iMac Pro",
+        "Mac Pro 2019", "Mac Pro 2023", "Mac Pro M2 Ultra",
+        "Mac Pro 2013", "Mac Pro cylinder",
+        "MacBook 12 Retina"
+      ],
+      "era_markers": [
+        "Apple Silicon (M1, M2, M3, M4) on About This Mac = premium",
+        "Year/generation on bottom of laptop or back of desktop",
+        "Model identifier (Mac14,2 / Mac15,3 etc.) in About This Mac",
+        "Battery cycle count (visible in System Information)",
+        "Liquid spill indicator (white = clean, red = damaged)",
+        "AppleCare+ status (transferable)",
+        "Original packaging + cables premium",
+        "Pro / Max / Ultra chip suffix = premium variant"
+      ],
+      "comp_ranges_usd": [
+        {"item": "MacBook Pro 16 M3 Max / M4 Max", "low": 2000, "high": 3500},
+        {"item": "MacBook Pro 14/16 M1-M2 Pro/Max", "low": 1100, "high": 2200},
+        {"item": "MacBook Pro 14 M3/M4 base", "low": 1000, "high": 1700},
+        {"item": "MacBook Air M1", "low": 400, "high": 700},
+        {"item": "MacBook Air M2", "low": 600, "high": 950},
+        {"item": "MacBook Air M3", "low": 800, "high": 1200},
+        {"item": "Mac mini M2 / M4", "low": 400, "high": 900},
+        {"item": "Mac Studio M2 Max / M2 Ultra", "low": 1500, "high": 3500},
+        {"item": "iMac M1 / M3 24-inch", "low": 700, "high": 1300},
+        {"item": "iMac 27 5K Retina (last Intel, 2020)", "low": 600, "high": 1200},
+        {"item": "Mac Pro 2013 cylinder", "low": 400, "high": 1200},
+        {"item": "Mac Pro 2019 cheese grater", "low": 1500, "high": 4500},
+        {"item": "Mac Pro M2 Ultra (2023)", "low": 3500, "high": 7000}
+      ],
+      "target_buy_usd": {"low": 80, "high": 600},
+      "platform_primary": "eBay",
+      "platform_secondary": "Swappa",
+      "comp_query_template": "apple {model} {year}",
+      "ship_class": "medium_box",
+      "notes": "Apple Silicon (M-series) is the dividing line for Mac resale. Intel Macs sell at heavy discount and trend lower every year. iMac 27 5K Retina (2020 model with discrete GPU) is the only Intel Mac that holds value as the last of its kind. Mac Pro 2013 has a cult cylinder following. AppleCare+ remaining adds visible premium.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Apple iPhone",
+      "category": "apple_iphone",
+      "tier": 2,
+      "models": [
+        "iPhone 12", "iPhone 12 Pro", "iPhone 12 Pro Max", "iPhone 12 mini",
+        "iPhone 13", "iPhone 13 Pro", "iPhone 13 Pro Max", "iPhone 13 mini",
+        "iPhone 14", "iPhone 14 Plus", "iPhone 14 Pro", "iPhone 14 Pro Max",
+        "iPhone 15", "iPhone 15 Plus", "iPhone 15 Pro", "iPhone 15 Pro Max",
+        "iPhone 16", "iPhone 16 Plus", "iPhone 16 Pro", "iPhone 16 Pro Max",
+        "iPhone 17", "iPhone 17 Pro", "iPhone 17 Pro Max",
+        "iPhone SE 2nd gen", "iPhone SE 3rd gen", "iPhone SE 2022"
+      ],
+      "era_markers": [
+        "Settings → General → About → Model Number (e.g. MQ8K3LL/A)",
+        "Battery health % (Settings → Battery → Battery Health)",
+        "Activation Lock OFF (Find My iPhone disabled, signed out of iCloud)",
+        "Carrier locked vs unlocked (unlocked = premium)",
+        "AppleCare+ remaining",
+        "Storage capacity (128GB / 256GB / 512GB / 1TB)",
+        "Pro / Pro Max suffix = premium variant"
+      ],
+      "comp_ranges_usd": [
+        {"item": "iPhone 16 Pro Max 256-512GB", "low": 800, "high": 1200},
+        {"item": "iPhone 15 Pro / Pro Max", "low": 600, "high": 950},
+        {"item": "iPhone 14 Pro / Pro Max", "low": 450, "high": 700},
+        {"item": "iPhone 13 Pro / Pro Max", "low": 300, "high": 550},
+        {"item": "iPhone 14 / 15 base", "low": 280, "high": 500},
+        {"item": "iPhone 12 Pro / Pro Max", "low": 220, "high": 380},
+        {"item": "iPhone SE 2022 (3rd gen)", "low": 130, "high": 250}
+      ],
+      "target_buy_usd": {"low": 30, "high": 250},
+      "platform_primary": "eBay",
+      "platform_secondary": "Swappa",
+      "comp_query_template": "iphone {model} {storage} unlocked",
+      "ship_class": "small_box",
+      "notes": "Activation Lock kills resale — verify the seller has signed out of iCloud BEFORE bidding. Carrier-locked iPhones sell at 30-50% discount vs unlocked equivalents. Pro / Pro Max command 1.5-2x base model premium.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Apple iPad",
+      "category": "apple_ipad",
+      "tier": 2,
+      "models": [
+        "iPad Pro 11", "iPad Pro 12.9", "iPad Pro 13",
+        "iPad Pro M1", "iPad Pro M2", "iPad Pro M4",
+        "iPad Air 4", "iPad Air 5", "iPad Air 6",
+        "iPad Air M2", "iPad Air 11 M2", "iPad Air 13 M2",
+        "iPad mini 6", "iPad mini 7", "iPad mini A17 Pro",
+        "iPad 9th gen", "iPad 10th gen", "iPad 11th gen",
+        "Magic Keyboard for iPad", "Apple Pencil 2",
+        "Apple Pencil Pro", "Apple Pencil USB-C"
+      ],
+      "era_markers": [
+        "Settings → General → About → Model Number",
+        "M-series chip (M1/M2/M4) = Pro tier flagship",
+        "A-series chip (A14/A15/A17) = standard / Air tier",
+        "Storage on label / packaging (64GB / 256GB / 512GB / 1TB / 2TB)",
+        "Cellular vs Wi-Fi only (cellular = premium)",
+        "Activation Lock OFF",
+        "USB-C connector (post-2018) vs Lightning (pre-2018)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "iPad Pro M4 11/13", "low": 800, "high": 1500},
+        {"item": "iPad Pro M2 11/12.9", "low": 600, "high": 1100},
+        {"item": "iPad Pro M1", "low": 400, "high": 800},
+        {"item": "iPad Air M2 11/13", "low": 450, "high": 750},
+        {"item": "iPad Air 5 (M1)", "low": 280, "high": 500},
+        {"item": "iPad mini 6/7", "low": 250, "high": 450},
+        {"item": "Magic Keyboard for iPad Pro", "low": 130, "high": 280},
+        {"item": "Apple Pencil 2 / Pro", "low": 80, "high": 130}
+      ],
+      "target_buy_usd": {"low": 25, "high": 200},
+      "platform_primary": "eBay",
+      "platform_secondary": "Swappa",
+      "comp_query_template": "ipad {model} {size} {storage}",
+      "ship_class": "small_box",
+      "notes": "iPad Pro with M-series chips and iPad Air M2 are the volume sellers. Skip iPad mini 1-4 (too old, slow). Magic Keyboard accessories trade well — the older 2018-2020 11/12.9 versions still command $130-280.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Apple Watch (modern)",
+      "category": "apple_watch",
+      "tier": 2,
+      "models": [
+        "Apple Watch Series 7", "Apple Watch Series 8",
+        "Apple Watch Series 9", "Apple Watch Series 10",
+        "Apple Watch Series 11",
+        "Apple Watch Ultra", "Apple Watch Ultra 2",
+        "Apple Watch Ultra 3",
+        "Apple Watch SE 2nd gen", "Apple Watch SE 2"
+      ],
+      "era_markers": [
+        "Series number on packaging / About",
+        "Cellular (LTE) variant ring on Digital Crown",
+        "Case material (aluminum / steel / titanium)",
+        "Case size (40/41/42/44/45/46/49 mm)",
+        "AppleCare+ remaining",
+        "Original band + box premium"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Apple Watch Ultra 2 (Titanium)", "low": 480, "high": 750},
+        {"item": "Apple Watch Series 10", "low": 280, "high": 450},
+        {"item": "Apple Watch Series 9", "low": 220, "high": 380},
+        {"item": "Apple Watch Series 8", "low": 180, "high": 300},
+        {"item": "Apple Watch SE 2nd gen", "low": 130, "high": 220}
+      ],
+      "target_buy_usd": {"low": 15, "high": 120},
+      "platform_primary": "eBay",
+      "platform_secondary": "Swappa",
+      "comp_query_template": "apple watch {series} {size} {material}",
+      "ship_class": "small_box",
+      "notes": "Series 7+ all sell consistently. Series 1-3 are deprecated and skip-listed. Ultra (titanium, 49mm) is the premium tier — commands 2-3x Series equivalent. Cellular variants are 30-50% premium over GPS-only.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Apple AirPods Pro / Max",
+      "category": "apple_audio",
+      "tier": 2,
+      "models": [
+        "AirPods Pro 2", "AirPods Pro 2nd gen",
+        "AirPods Pro 2 USB-C", "AirPods Pro 3",
+        "AirPods Max", "AirPods Max USB-C",
+        "AirPods 4 with ANC", "AirPods 4"
+      ],
+      "era_markers": [
+        "Pro 2 has H2 chip + improved ANC",
+        "USB-C variant (post-2023) vs Lightning (older)",
+        "Original case (charging case) included",
+        "Genuine Apple stamp inside case",
+        "Case with MagSafe / wireless charging (premium)",
+        "AirPods Max color (Space Gray / Silver / Pink / Sky Blue / Green)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "AirPods Max (any color)", "low": 280, "high": 480},
+        {"item": "AirPods Pro 2 (USB-C, current)", "low": 130, "high": 220},
+        {"item": "AirPods Pro 2 (Lightning)", "low": 100, "high": 170},
+        {"item": "AirPods 4 with ANC", "low": 100, "high": 160}
+      ],
+      "target_buy_usd": {"low": 15, "high": 80},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "airpods {model}",
+      "ship_class": "poly_mailer",
+      "notes": "Counterfeit AirPods Pro 2 are EVERYWHERE on eBay — verify with serial number on Apple's check-coverage page before listing. Look for genuine speaker grille pattern, accurate font on case engraving. AirPods Max are popular for headphone collectors and resell consistently.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Apple TV 4K / HD",
+      "category": "apple_tv",
+      "tier": 2,
+      "models": [
+        "Apple TV 4K", "Apple TV 4K 2nd gen", "Apple TV 4K 3rd gen",
+        "Apple TV HD", "Apple TV HD 4th gen",
+        "Apple TV 5th gen", "Apple TV 6th gen", "Apple TV 7th gen",
+        "Apple TV A1842", "Apple TV A1625",
+        "Apple TV A2169", "Apple TV A2737"
+      ],
+      "era_markers": [
+        "4K = post-2017 (originally A1842, then A2169 in 2021, A2737 in 2022)",
+        "HD = 4th gen 2015-2021 (A1625) — still gets app support",
+        "Apple TV 1st-3rd gen = NO app support, dead-tier (skip-listed)",
+        "Original Siri Remote (with touchpad / clickpad)",
+        "Storage variant on 4K (32GB vs 64GB / 128GB)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Apple TV 4K 3rd gen 128GB Wi-Fi+Ethernet", "low": 100, "high": 170},
+        {"item": "Apple TV 4K 3rd gen 64GB", "low": 80, "high": 130},
+        {"item": "Apple TV 4K 2nd gen", "low": 50, "high": 100},
+        {"item": "Apple TV 4K 1st gen (2017)", "low": 35, "high": 70},
+        {"item": "Apple TV HD (4th gen 2015)", "low": 25, "high": 50}
+      ],
+      "target_buy_usd": {"low": 5, "high": 40},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "apple tv 4k {gen}",
+      "ship_class": "poly_mailer",
+      "notes": "ALIASES INTENTIONALLY EXCLUDE bare 'apple tv' to skip 1st/2nd/3rd gen units (no app support, near-zero resale). 2nd/3rd gen are explicitly skip-listed. 4K and HD (4th gen 2015) are the only worthwhile pickups."
+    },
+    {
+      "brand": "Apple HomePod (modern)",
+      "category": "apple_audio",
+      "tier": 2,
+      "models": [
+        "HomePod 2nd gen", "HomePod second generation",
+        "HomePod mini", "HomePod 2023"
+      ],
+      "era_markers": [
+        "HomePod 2nd gen released 2023 = current support tier",
+        "HomePod 1st gen (2018) discontinued — skip-listed",
+        "HomePod mini in colors (Yellow / Orange / Blue) = limited runs",
+        "Original cable + power brick"
+      ],
+      "comp_ranges_usd": [
+        {"item": "HomePod 2nd gen 2023", "low": 200, "high": 320},
+        {"item": "HomePod mini standard colors", "low": 60, "high": 110},
+        {"item": "HomePod mini Yellow / Orange / Blue", "low": 80, "high": 140}
+      ],
+      "target_buy_usd": {"low": 8, "high": 60},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "homepod {model}",
+      "ship_class": "small_box",
+      "notes": "Skip HomePod 1st gen (skip-listed). HomePod 2nd gen and mini sell consistently — ensure original cable + sticker on bottom intact. Limited-run mini colors (Yellow/Orange/Blue) command 30-50% premium over standard White/Black/Gray."
+    },
+    {
+      "brand": "Apple Display",
+      "category": "apple_display",
+      "tier": 2,
+      "models": [
+        "Apple Studio Display", "Studio Display Standard",
+        "Studio Display Nano-Texture",
+        "Pro Display XDR", "Pro Display XDR Nano-Texture",
+        "Pro Stand", "VESA Mount Adapter"
+      ],
+      "era_markers": [
+        "Studio Display = 27-inch 5K (released 2022)",
+        "Pro Display XDR = 32-inch 6K (released 2019)",
+        "Standard glass vs Nano-Texture (anti-glare, premium variant)",
+        "Pro Stand sold separately (~$1000 new)",
+        "VESA mount adapter (~$200 new) for arm-mounting"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Pro Display XDR (Standard)", "low": 2800, "high": 4200},
+        {"item": "Pro Display XDR (Nano-Texture)", "low": 3500, "high": 5200},
+        {"item": "Studio Display (Standard)", "low": 1100, "high": 1500},
+        {"item": "Studio Display (Nano-Texture)", "low": 1400, "high": 1800},
+        {"item": "Pro Stand", "low": 600, "high": 950}
+      ],
+      "target_buy_usd": {"low": 80, "high": 800},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "apple {model} display",
+      "ship_class": "large_box",
+      "notes": "Studio Display + Pro Display XDR are creator-tier monitors. Verify the panel doesn't have stuck pixels or backlight bleed via photo of solid colors. Pro Display XDR is rare on the secondary market — owner-base is smaller. Nano-Texture variants command 20-25% premium. Heavy / fragile to ship — only worth listing if margin justifies large_box freight + insurance.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Apple Magic accessories",
+      "category": "apple_accessory",
+      "tier": 2,
+      "models": [
+        "Magic Keyboard with Touch ID",
+        "Magic Keyboard with Numeric Keypad",
+        "Magic Trackpad",
+        "Magic Mouse",
+        "Magic Keyboard"
+      ],
+      "era_markers": [
+        "Touch ID variant = post-2021 with Apple Silicon Mac compatibility",
+        "Lightning vs USB-C charging port (USB-C is current)",
+        "Numeric Keypad variant",
+        "Original color (Silver / Space Gray / Black variants for Mac Studio)",
+        "Original packaging premium"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Magic Keyboard with Touch ID + Numeric Keypad", "low": 130, "high": 220},
+        {"item": "Magic Keyboard with Touch ID", "low": 100, "high": 160},
+        {"item": "Magic Trackpad (USB-C, current)", "low": 80, "high": 130},
+        {"item": "Magic Mouse (USB-C, current)", "low": 60, "high": 100},
+        {"item": "Magic Keyboard (no Touch ID)", "low": 50, "high": 90}
+      ],
+      "target_buy_usd": {"low": 10, "high": 60},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "apple magic {accessory}",
+      "ship_class": "poly_mailer",
+      "notes": "Touch ID variants (post-2021) are the volume sellers. Black variants (originally only sold with Mac Studio Pro) command premium over standard silver. Original packaging adds 15-25%."
+    }
+  ],
+  "platform_notes": {
+    "eBay": "Dominant marketplace for Apple resale. Verify Activation Lock OFF and original-owner Apple ID signed out before listing — buyers will refund and leave bad feedback otherwise.",
+    "Swappa": "Higher conversion rates than eBay for current iPhones / iPads / Watches because the buyer pool is more device-focused. Listing fees are fixed (~$5/listing) so worth it for $200+ items only.",
+    "Apple Trade-In": "The bottom floor for any Apple device. eBay used typically clears 30-50% above Apple's trade-in offer — useful as a sanity check on what an item is at minimum worth."
+  }
+}

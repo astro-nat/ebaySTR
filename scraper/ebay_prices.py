@@ -51,7 +51,8 @@ class EbayPriceLookup:
 
     def __init__(self, app_id: str, cert_id: str, pricecharting=None,
                  scrapingbee_key: Optional[str] = None,
-                 gocollect=None):
+                 gocollect=None,
+                 mercari_enabled: bool = False):
         """eBay/Mercari price lookup, optionally augmented with PriceCharting.
 
         Args:
@@ -69,11 +70,19 @@ class EbayPriceLookup:
                 pipeline is effectively dead and prices fall through to
                 eBay's Browse-API active listings. None disables proxying
                 — direct request, current behavior preserved.
+            mercari_enabled: Default False. Mercari's scraper has had a
+                0% success rate across 7,700+ lookups in production —
+                their JSON shape probably changed and/or they're
+                blocking ScrapingBee proxies hard. Every Mercari call
+                still costs ~25 ScrapingBee credits even when it returns
+                nothing. Defaults OFF; the user can flip on if Mercari
+                ever recovers (or to retest periodically).
         """
         self.app_id = app_id
         self.cert_id = cert_id
         self.pricecharting = pricecharting
         self.scrapingbee_key = scrapingbee_key
+        self.mercari_enabled = bool(mercari_enabled)
         # GoCollect: curated CGC/BGS-graded comic prices. Tried FIRST
         # for graded comic lots — its grade-specific data outperforms
         # both PriceCharting (which matches at the series level, not
@@ -473,7 +482,8 @@ class EbayPriceLookup:
         result = self.lookup_price_range(title, limit=limit)
         return result["median"] if result else None
 
-    def lookup_price_range(self, title: str, limit: int = 8) -> Optional[dict]:
+    def lookup_price_range(self, title: str, limit: int = 8,
+                           pc_only: bool = False) -> Optional[dict]:
         """Look up combined resale price statistics from eBay + Mercari sold data.
 
         Uses progressive query shortening: we try the full cleaned title first
@@ -481,6 +491,14 @@ class EbayPriceLookup:
         turn up. eBay's search is extremely intolerant of extra terms — a
         7-word query commonly returns zero, while the same first 3 words
         return hundreds. We stop as soon as we clear the ≥3 sold-comp bar.
+
+        ``pc_only=True`` restricts the lookup to GoCollect + PriceCharting
+        (curated catalogs only) and skips the eBay + Mercari sold-listings
+        scrape entirely. Used for stylized/replica lots where eBay scraped
+        comps would return authentic-brand contamination, but PC's
+        catalog-keyed matching is safe — PC simply returns None for
+        products it doesn't cover (handbags, jewelry, decorative
+        sculpture, etc.).
 
         Returns:
             {
@@ -522,6 +540,12 @@ class EbayPriceLookup:
             except Exception:
                 pass  # Don't let PC outages break the scan
 
+        # PC-only mode bails here: eBay/Mercari sold-comps would
+        # contaminate stylized/replica lookups with authentic-brand
+        # prices that don't apply.
+        if pc_only:
+            return None
+
         variants = self._query_variants(title)
         if not variants:
             return None
@@ -542,12 +566,17 @@ class EbayPriceLookup:
             except Exception:
                 ebay_prices = []
 
-            try:
-                time.sleep(0.3)
-                mercari_prices = self._scrape_mercari_sold_prices(query)
-                mercari_prices = self._filter_outliers(mercari_prices)
-            except Exception:
-                mercari_prices = []
+            # Mercari is gated behind mercari_enabled because their
+            # scraper has had a 0% success rate in production — every
+            # call costs ~25 ScrapingBee credits and returns nothing.
+            # Default off; user can flip on if Mercari ever recovers.
+            if self.mercari_enabled:
+                try:
+                    time.sleep(0.3)
+                    mercari_prices = self._scrape_mercari_sold_prices(query)
+                    mercari_prices = self._filter_outliers(mercari_prices)
+                except Exception:
+                    mercari_prices = []
 
             combined = ebay_prices + mercari_prices
 
@@ -943,6 +972,16 @@ class EbayPriceLookup:
             df['category'].fillna('').astype(str).tolist()
             if 'category' in df.columns else [''] * total
         )
+        # Per-row "PC only" flag — set by _apply_comps_filters when a lot
+        # is stylized/replica. The lookup runs GoCollect + PriceCharting
+        # but skips eBay/Mercari, because authentic-brand sold-comps
+        # don't apply to a "Gucci style" lot. PC will return None when
+        # it doesn't cover the product (handbags, jewelry, etc.) — that's
+        # the safe outcome.
+        pc_only_flags = (
+            df['_pc_only_stylized'].fillna(False).astype(bool).tolist()
+            if '_pc_only_stylized' in df.columns else [False] * total
+        )
 
         # Result slots, indexed positionally
         price_results: list = [None] * total
@@ -964,7 +1003,9 @@ class EbayPriceLookup:
 
         def _work_price(i: int):
             try:
-                return i, self.lookup_price_range(titles[i])
+                return i, self.lookup_price_range(
+                    titles[i], pc_only=pc_only_flags[i]
+                )
             except Exception:
                 return i, None
 

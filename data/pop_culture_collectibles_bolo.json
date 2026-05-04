@@ -1,0 +1,308 @@
+{
+  "schema_version": "1.0",
+  "domain": "pop_culture_collectibles",
+  "last_updated": "2026-05-04",
+  "summary": "Pop-culture / fandom collectibles that ship lightweight: Funko Pops (Star Wars, Marvel, DC, anime, exclusives), Hot Wheels collector variants (Star Wars, Treasure Hunts, Redlines, RLC), vintage Kenner Star Wars (1977-85), Topps trading cards. All small enough to ship in poly mailer or small box. Sweet spot: sealed/unopened Funko Pops $15-50, exclusive/chase Pops $50-300, vintage Kenner carded $50-500, vintage Hot Wheels Redlines $30-200.",
+  "field_workflow": [
+    "Funko Pop: Verify the box is undamaged — collectors are pickier about box than figure",
+    "Funko Pop: Look for sticker — Convention (SDCC/NYCC), Chase, Funko Shop Exclusive, Hot Topic, etc. — these multiply value",
+    "Hot Wheels: TH (Treasure Hunt) / Super TH have green stripe / TH symbol on packaging; check for these markers",
+    "Vintage Kenner Star Wars: card grading (AFA/CAS) matters hugely; bubbles intact + clean back doubles value",
+    "Topps trading cards: factory-sealed boxes always > opened; verify wax-pack seal hasn't been tampered with",
+    "LEGO sets: 'retired' sets command 2-5x retail; verify sealed plastic on box hasn't been opened"
+  ],
+  "skip_list": [
+    "Custom-painted Funko (loses Funko premium)",
+    "Loose Funko Pop (no box) — usually <$10",
+    "Hot Wheels mainline (commodity blue-card)",
+    "Damaged box / creased card",
+    "Not for sale (NFS) prototypes",
+    "Reproduction Kenner figures",
+    "Reseller-graded (non-AFA/CAS) cards"
+  ],
+  "brands": [
+    {
+      "brand": "Funko Pop",
+      "category": "pop_culture_figure",
+      "tier": 2,
+      "models": [
+        "Funko Pop", "Funko POP", "Funko Pop!",
+        "Funko Pop Marvel", "Funko Pop DC",
+        "Funko Pop Star Wars", "Funko Pop Disney",
+        "Funko Pop Anime", "Funko Pop Animation",
+        "Funko Pop Movies", "Funko Pop Television",
+        "Funko Pop Games", "Funko Pop Sports",
+        "SDCC Funko", "NYCC Funko",
+        "Funko Shop Exclusive", "Funko Chase",
+        "Hot Topic Exclusive Funko", "Walmart Exclusive Funko",
+        "Target Exclusive Funko", "Box Lunch Exclusive",
+        "Glow in the Dark Funko", "Metallic Funko",
+        "Black Light Funko", "Diamond Collection Funko",
+        "Funko Soda", "Funko Vinyl SODA",
+        "Funko Mystery Mini"
+      ],
+      "era_markers": [
+        "Funko branding on box top corner",
+        "Pop! number on box (e.g. #594 Luke Skywalker)",
+        "Sticker designation: Convention (SDCC/NYCC), Chase, Hot Topic, Funko Shop, Walmart Exclusive, etc.",
+        "Vinyl figure inside protective case (premium signal)",
+        "Original protective hard case ('Pop Stack' brand) adds resale"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Convention exclusive (SDCC / NYCC)", "low": 80, "high": 350},
+        {"item": "Chase variant (1:6 ratio)", "low": 60, "high": 200},
+        {"item": "Funko Shop / Glow / Metallic exclusive", "low": 40, "high": 150},
+        {"item": "Hot Topic / Walmart / Target exclusive", "low": 25, "high": 80},
+        {"item": "Standard Pop in good box", "low": 12, "high": 35},
+        {"item": "Vaulted / Retired Pop", "low": 30, "high": 200}
+      ],
+      "target_buy_usd": {"low": 2, "high": 30},
+      "platform_primary": "eBay",
+      "platform_secondary": "Mercari",
+      "comp_query_template": "funko pop {character} {number}",
+      "ship_class": "small_box",
+      "notes": "Funko Pop is the dominant modern pop-culture collectible. Box condition matters MORE than figure condition — many collectors buy sealed-in-package only. Convention exclusives + Chase variants are the resale champions. 'Vaulted' (retired) Pops appreciate steadily. Hard-shell protectors ('Pop Stack' / 'Pop Shield') signal serious collector ownership.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Hot Wheels collector variants",
+      "category": "pop_culture_diecast",
+      "tier": 2,
+      "models": [
+        "Hot Wheels Treasure Hunt", "Hot Wheels TH",
+        "Hot Wheels Super Treasure Hunt", "Hot Wheels Super TH",
+        "Hot Wheels Redline", "Hot Wheels RLC",
+        "Hot Wheels Red Line Club",
+        "Hot Wheels Premium", "Hot Wheels Boulevard",
+        "Hot Wheels Cars Culture", "Hot Wheels Car Culture",
+        "Hot Wheels Convention", "Hot Wheels Mattel Creations",
+        "Hot Wheels Star Wars", "Hot Wheels Marvel",
+        "Hot Wheels Pop Culture", "Hot Wheels Entertainment",
+        "Hot Wheels Hall of Fame",
+        "Matchbox Lesney", "Matchbox Models of Yesteryear",
+        "Matchbox 1-75 series"
+      ],
+      "era_markers": [
+        "Hot Wheels Treasure Hunt symbol (flame icon) on package",
+        "Super Treasure Hunt: gold-spectraflame paint + RR (real rider) tires",
+        "Redline tires (1968-77 vintage = 'Redlines') — colored stripe",
+        "RLC stamp (Red Line Club exclusive)",
+        "Original blister pack unopened (mainline) vs custom blister",
+        "Lesney era Matchbox (pre-1982 UK production)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Super Treasure Hunt unopened", "low": 25, "high": 150},
+        {"item": "RLC exclusive (Red Line Club)", "low": 40, "high": 200},
+        {"item": "Treasure Hunt unopened", "low": 10, "high": 40},
+        {"item": "Vintage Redline (1968-77) loose good condition", "low": 20, "high": 200},
+        {"item": "Vintage Redline carded mint", "low": 100, "high": 1000},
+        {"item": "Hot Wheels Star Wars Starship", "low": 15, "high": 60},
+        {"item": "Lesney Matchbox vintage", "low": 25, "high": 150}
+      ],
+      "target_buy_usd": {"low": 1, "high": 30},
+      "platform_primary": "eBay",
+      "platform_secondary": "Mercari",
+      "comp_query_template": "hot wheels {variant} {model}",
+      "ship_class": "poly_mailer",
+      "notes": "Most Hot Wheels mainline (blue-card) is commodity at <$5. The premium tier is Treasure Hunts (TH), Super Treasure Hunts (STH), RLC exclusives, vintage Redlines (1968-77), and pop-culture variants (Star Wars / Marvel / Cars Culture). VINTAGE Lesney Matchbox (pre-1982 UK production) commands premium. Modern mainline blue-card Hot Wheels = skip.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Vintage Kenner Star Wars",
+      "category": "pop_culture_figure",
+      "tier": 1,
+      "models": [
+        "Kenner Star Wars", "Kenner SW",
+        "Kenner 1977", "Kenner 1978", "Kenner 1979",
+        "Kenner 1980", "Kenner 1981", "Kenner 1982",
+        "Kenner 1983", "Kenner 1984", "Kenner 1985",
+        "Vintage Kenner", "Kenner action figure",
+        "Power of the Force", "POTF Kenner",
+        "Death Star Playset", "Millennium Falcon Kenner",
+        "AT-AT Kenner", "X-Wing Kenner",
+        "Kenner carded", "Kenner cardback",
+        "12-back", "20-back", "21-back", "31-back",
+        "32-back", "41-back", "45-back", "47-back",
+        "65-back", "77-back", "92-back"
+      ],
+      "era_markers": [
+        "Kenner branding on cardback or box",
+        "Made in Hong Kong / Made in Macau / Made in China stamping",
+        "Backprint number identifies cardback era (12-back = 1978 first wave premium)",
+        "Original bubble intact + minimal corner wear",
+        "Star Wars logo era (1977-83) vs Empire / Return of the Jedi",
+        "Power of the Force coin (1985 final wave premium)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "12-back carded figure (1978 first wave)", "low": 200, "high": 2000},
+        {"item": "20-back / 21-back carded ESB era", "low": 80, "high": 500},
+        {"item": "ROTJ-era carded figure", "low": 40, "high": 200},
+        {"item": "Power of the Force (1985) carded with coin", "low": 200, "high": 1500},
+        {"item": "Loose vintage Kenner figure complete", "low": 15, "high": 80},
+        {"item": "Vintage Kenner playset (Death Star, AT-AT, etc.)", "low": 130, "high": 800}
+      ],
+      "target_buy_usd": {"low": 5, "high": 100},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "kenner star wars {character} {era}",
+      "ship_class": "small_box",
+      "notes": "Vintage Kenner Star Wars (1977-85) is the foundation of modern toy collecting. Carded (unopened) figures command 5-20x loose-figure prices. Cardback number (visible on back) identifies era — 12-back (1978 first wave) is premium. AFA / CAS grading adds 50-200%. Counterfeits of rare cardbacks exist; verify with Imperial Gunnery cardback database.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Topps trading cards",
+      "category": "trading_cards",
+      "tier": 2,
+      "models": [
+        "Topps factory sealed", "Topps wax box",
+        "Topps wax pack", "Topps Star Wars",
+        "Topps Heritage", "Topps Chrome",
+        "Topps Allen & Ginter", "Topps Update",
+        "Topps Bowman", "Topps Stadium Club",
+        "Topps Tier One", "Topps Triple Threads",
+        "Topps Definitive", "Topps Dynasty",
+        "Topps Now", "Topps Project 70",
+        "Topps Garbage Pail Kids", "Topps GPK",
+        "Topps Wacky Packages",
+        "Topps 1987", "Topps 1989", "Topps 1990",
+        "Topps Mickey Mantle", "Topps rookie"
+      ],
+      "era_markers": [
+        "Topps branding on packaging / card",
+        "Year on the front (e.g. '1987 Topps')",
+        "Factory-sealed wax pack vs broken box",
+        "Set seal: factory wrap intact = premium",
+        "Vintage 1950s-60s = highest premium era"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Topps wax box vintage 1980s-90s", "low": 80, "high": 500},
+        {"item": "Topps Heritage / Chrome modern hobby box", "low": 130, "high": 380},
+        {"item": "Vintage 1950s-60s wax pack unopened", "low": 200, "high": 2000},
+        {"item": "Topps Star Wars wax box vintage", "low": 130, "high": 400},
+        {"item": "GPK / Wacky Packages vintage box", "low": 80, "high": 300}
+      ],
+      "target_buy_usd": {"low": 5, "high": 100},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "topps {set} {year} sealed",
+      "ship_class": "small_box",
+      "notes": "Topps factory-sealed wax boxes are the resale gold for trading cards. Junk-wax era (1986-92) is mostly commodity unless packaging-mint. Vintage (1950s-60s) sealed packs trade at extreme premium. Star Wars Topps (1977-83) and Garbage Pail Kids (1985-88) vintage trade well. Always verify pack/box hasn't been searched."
+    },
+    {
+      "brand": "Loungefly",
+      "category": "pop_culture_bag",
+      "tier": 2,
+      "models": [
+        "Loungefly", "Loungefly Disney", "Loungefly Marvel",
+        "Loungefly Star Wars", "Loungefly Sanrio",
+        "Loungefly Pokemon", "Loungefly Harry Potter",
+        "Loungefly Nightmare Before Christmas",
+        "Loungefly NBC", "Loungefly Stitch",
+        "Loungefly Mickey", "Loungefly Minnie",
+        "Loungefly Hello Kitty", "Loungefly Princess",
+        "Loungefly cosplay", "Loungefly mini backpack",
+        "Loungefly wallet", "Loungefly crossbody",
+        "Loungefly exclusive", "Loungefly Box Lunch",
+
+        "Disney mini backpack", "mini backpack Disney",
+        "Marvel mini backpack", "mini backpack Marvel",
+        "Star Wars mini backpack", "mini backpack Star Wars",
+        "Harry Potter mini backpack", "mini backpack Harry Potter",
+        "Sanrio mini backpack", "Hello Kitty mini backpack",
+        "Pokemon mini backpack", "mini backpack Pokemon",
+        "Nightmare Before Christmas mini backpack",
+        "Nightmare Before Christmas backpack",
+        "NBC mini backpack",
+
+        "Stitch mini backpack", "Stitch backpack",
+        "Mickey Mouse mini backpack", "Mickey mini backpack",
+        "Minnie Mouse mini backpack", "Minnie mini backpack",
+        "Ariel mini backpack", "Belle mini backpack",
+        "Cinderella mini backpack",
+        "Princess mini backpack",
+        "Baby Yoda mini backpack", "Grogu mini backpack",
+        "Mandalorian mini backpack",
+        "Spider-Man mini backpack", "Spider Man mini backpack",
+        "Captain America mini backpack",
+        "Pikachu mini backpack",
+        "Jack Skellington mini backpack",
+        "Sally mini backpack",
+        "Maleficent mini backpack",
+        "Ursula mini backpack",
+
+        "cosplay mini backpack", "cosplay backpack",
+        "character mini backpack",
+        "themed mini backpack"
+      ],
+      "era_markers": [
+        "Loungefly logo embroidered on front strap or zipper",
+        "Hangtag with character licensing info (Disney, Marvel, etc.)",
+        "Faux-leather PU construction (signature Loungefly material)",
+        "Embossed/3D character details on front panel",
+        "Box Lunch / Hot Topic / Funko Shop / Disney Parks exclusive sticker",
+        "Loungefly serial / SKU on inside tag (LF-XXXXX format)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Retired/exclusive Loungefly mini backpack", "low": 130, "high": 400},
+        {"item": "Standard Loungefly licensed mini backpack", "low": 60, "high": 180},
+        {"item": "Loungefly wallet / crossbody", "low": 30, "high": 80},
+        {"item": "Box Lunch / Funko Shop exclusive Loungefly", "low": 80, "high": 250},
+        {"item": "Used Loungefly good condition", "low": 35, "high": 100}
+      ],
+      "target_buy_usd": {"low": 5, "high": 50},
+      "platform_primary": "eBay",
+      "platform_secondary": "Mercari",
+      "comp_query_template": "loungefly {character} mini backpack",
+      "ship_class": "small_box",
+      "notes": "IMPORTANT: Loungefly is the dominant maker of licensed-character mini backpacks (Disney, Marvel, Star Wars, Sanrio, Harry Potter, Pokemon, NBC). Auction listings often DON'T explicitly say 'Loungefly' — they just say 'Disney mini backpack' or 'Stitch backpack' or 'Marvel mini backpack'. We catch BOTH the explicit-brand listings AND the implicit ones via character + 'mini backpack' alias combinations. Retired / exclusive variants (Box Lunch, Funko Shop, Disney Parks-exclusive) trade 2-4x retail. Verify the Loungefly logo on strap or interior tag when listing — counterfeits exist (mostly cheap PVC knockoffs from import marketplaces).",
+      "condition_critical": true
+    },
+    {
+      "brand": "Vintage Transformers + GI Joe + Masters",
+      "category": "pop_culture_figure",
+      "tier": 2,
+      "models": [
+        "G1 Transformers", "Generation 1 Transformers",
+        "Optimus Prime G1", "Megatron G1",
+        "Transformers takara",
+        "Soundwave Transformers",
+        "Vintage GI Joe", "GI Joe ARAH",
+        "GI Joe Real American Hero",
+        "Snake Eyes GI Joe", "Cobra Commander",
+        "Masters of the Universe", "MOTU",
+        "He-Man vintage", "She-Ra vintage",
+        "MOTU Origins", "MOTU Classics",
+        "Skeletor vintage", "Castle Grayskull",
+        "Vintage Mego", "Mego World's Greatest"
+      ],
+      "era_markers": [
+        "Hasbro stamping on Transformers (G1 = 1984-92)",
+        "Made in Japan stamp on G1 Transformers (Takara) = premium",
+        "Made in Hong Kong / Macau stamp on early G1",
+        "GI Joe ARAH (A Real American Hero) = 1982-94",
+        "MOTU (Masters of the Universe) = 1982-87 vintage",
+        "Mego = 1970s World's Greatest Superheroes line"
+      ],
+      "comp_ranges_usd": [
+        {"item": "G1 Optimus Prime / Megatron sealed", "low": 700, "high": 3000},
+        {"item": "G1 Transformers carded common", "low": 80, "high": 280},
+        {"item": "GI Joe ARAH carded vintage", "low": 60, "high": 350},
+        {"item": "MOTU vintage carded figure", "low": 80, "high": 300},
+        {"item": "Castle Grayskull complete", "low": 130, "high": 500},
+        {"item": "Mego World's Greatest carded", "low": 130, "high": 600}
+      ],
+      "target_buy_usd": {"low": 5, "high": 100},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "{line} {character} vintage",
+      "ship_class": "small_box",
+      "notes": "G1 Transformers (1984-92), GI Joe ARAH (1982-94), and Masters of the Universe (1982-87) are the core 1980s vintage toy collector markets. Carded / sealed figures + complete playsets are the resale champions. Authentication risk for high-end pieces (G1 Optimus Prime); verify die-cast vs all-plastic, accessories complete."
+    }
+  ],
+  "platform_notes": {
+    "eBay": "Dominant marketplace for all pop-culture collectibles. Use sold-listings filter — asking prices are commonly 2-3x what items actually clear at.",
+    "Mercari": "Funko Pops + Hot Wheels collector tier sell well at slight discount to eBay; lower fees offset.",
+    "Funko Europe": "Reference for Funko exclusivity / Chase status — useful for confirming whether a box was a limited release.",
+    "Imperial Gunnery / Star Wars Cards": "Reference databases for vintage Kenner Star Wars cardback identification + counterfeit detection."
+  }
+}

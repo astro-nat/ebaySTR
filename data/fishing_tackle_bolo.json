@@ -1,0 +1,387 @@
+{
+  "schema_version": "1.0",
+  "domain": "fishing_tackle",
+  "last_updated": "2026-05-04",
+  "summary": "Fishing tackle and lure brands with strong resale economics. Vintage wooden lures (Heddon, Creek Chub, Paw Paw) command premium from a dedicated collector base — original box doubles value. Modern premium (Rapala, Bagley) retains value when in unfished condition. Pacific NW salmon/steelhead specialty gear (Les Davis, Beau Mac, Luhr-Jensen) has its own niche market that's strong on eBay regardless of national trends.",
+  "field_workflow": [
+    "Identify maker via stamping on lure body (most are stamped on belly or lip)",
+    "Photograph hooks, hardware, and box if present — original tag/box doubles value",
+    "Glass-eye lures pre-1955 are premium over plastic-eye (most makers transitioned ~1955)",
+    "Single hook vs double vs treble matters — original hooks add value",
+    "Hairline cracks in wooden lures are tolerated; missing paint or repaints kill value",
+    "For modern Rapala/Storm: discontinued colors trade at 5-10x common colors"
+  ],
+  "skip_list": [
+    "Generic / unbranded plastic lures",
+    "Made in China lures (modern aftermarket)",
+    "Walmart house brand tackle",
+    "Berkley Power Bait (consumable, low resale)",
+    "Plano tackle boxes (mass market)",
+    "Eagle Claw mass-market hooks",
+    "Repainted vintage lures (any maker)",
+    "Reproduction lures",
+    "Lures missing original hooks (most cases)"
+  ],
+  "brands": [
+    {
+      "brand": "Heddon",
+      "category": "vintage_lures",
+      "tier": 1,
+      "models": [
+        "Lucky 13", "Vamp", "Crazy Crawler", "Punkinseed", "Pumpkinseed",
+        "River Runt", "Zara Spook", "Tiny Torpedo", "Torpedo",
+        "Magnum Tadpolly", "Tadpolly", "Sonic", "Chugger Spook",
+        "Hi-Tail", "Meadow Mouse", "Wounded Spook", "Game Fisher",
+        "Black Sucker", "Heddon Dowagiac"
+      ],
+      "era_markers": [
+        "Made in U.S.A. stamping",
+        "Heddon Dowagiac stamping (Dowagiac Michigan factory)",
+        "Glass eyes = pre-1955 (premium over plastic eyes)",
+        "Cup-rig hardware = pre-1936 (very early premium)",
+        "L-rig hardware = 1936-1955",
+        "Surface-rig hardware = post-1955",
+        "Original box (cardboard) doubles or triples value",
+        "Original paper insert / pocket catalog premium",
+        "Original two-piece pocket box (pre-1948)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "vintage wooden glass-eye + box", "low": 80, "high": 500},
+        {"item": "vintage wooden glass-eye loose", "low": 35, "high": 180},
+        {"item": "plastic-eye 1955-1970 + box", "low": 30, "high": 120},
+        {"item": "plastic-eye loose", "low": 12, "high": 40},
+        {"item": "modern Heddon (post-1980)", "low": 5, "high": 20}
+      ],
+      "target_buy_usd": {"low": 3, "high": 30},
+      "platform_primary": "eBay",
+      "platform_secondary": "Etsy",
+      "comp_query_template": "vintage heddon {model} glass eye",
+      "ship_class": "small_box",
+      "notes": "The most-collected vintage lure brand. Always check eyes (glass = better), hardware style (cup/L/surface rig dates the lure), and box condition. Repaints kill value — original paint with patina is what buyers want.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Creek Chub Bait Co",
+      "category": "vintage_lures",
+      "tier": 1,
+      "models": [
+        "Pikie Minnow", "Pikie", "Plunker", "Darter",
+        "Husky Pikie", "Wiggle Fish", "Husky Musky",
+        "Jointed Pikie", "Striper Pikie", "Surfster",
+        "Injured Minnow", "Beetle", "Snook Pikie",
+        "Crawdad", "Sucker", "Mouse"
+      ],
+      "era_markers": [
+        "Creek Chub Bait Co stamped on belly",
+        "Made in Garrett Indiana stamping (premium)",
+        "Glass eyes = pre-1955",
+        "Painted eyes = pre-1930s (very early)",
+        "Tack eyes (early jointed Pikies) premium",
+        "Original cardboard box with paper label",
+        "Pflueger or other branded hooks (era-specific)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "vintage glass-eye + original box", "low": 60, "high": 400},
+        {"item": "vintage glass-eye loose", "low": 30, "high": 150},
+        {"item": "plastic-eye 1955-1980", "low": 20, "high": 80},
+        {"item": "modern Creek Chub repro", "low": 5, "high": 20}
+      ],
+      "target_buy_usd": {"low": 3, "high": 30},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "vintage creek chub {model} pikie",
+      "ship_class": "small_box",
+      "notes": "Early painted-eye examples (pre-1930s) command serious money. Always check the eye type and look for original paper inserts in the box.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Arbogast",
+      "category": "vintage_lures",
+      "tier": 1,
+      "models": [
+        "Jitterbug", "Hula Popper", "Hawaiian Wiggler",
+        "Mud Bug", "Sputterbuzz", "Hula Dancer",
+        "Arbo-Gaster", "Tin Liz"
+      ],
+      "era_markers": [
+        "Fred Arbogast Akron Ohio stamping",
+        "Wooden body Jitterbug = pre-1950s (premium over plastic)",
+        "Original arched-lip Jitterbug shape",
+        "Original double hook on Jitterbug (not treble)",
+        "Brass screw eyes (older)",
+        "Two-piece cardboard pocket box with insert"
+      ],
+      "comp_ranges_usd": [
+        {"item": "vintage wooden Jitterbug + box", "low": 50, "high": 250},
+        {"item": "vintage wooden Jitterbug loose", "low": 25, "high": 100},
+        {"item": "plastic Jitterbug 1950s-70s", "low": 15, "high": 60},
+        {"item": "Hula Popper vintage", "low": 12, "high": 50},
+        {"item": "modern Arbogast (post-1990)", "low": 4, "high": 15}
+      ],
+      "target_buy_usd": {"low": 2, "high": 15},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "vintage arbogast jitterbug wooden",
+      "ship_class": "small_box",
+      "notes": "Wooden Jitterbugs from the 1940s-50s are the prize. The lip shape and rig are diagnostic — modern reissues use flat injected-plastic lips that are easy to distinguish."
+    },
+    {
+      "brand": "South Bend Bait Co",
+      "category": "vintage_lures",
+      "tier": 1,
+      "models": [
+        "Bass-Oreno", "Pike-Oreno", "Min-Oreno", "Trout-Oreno",
+        "Babe-Oreno", "Surf-Oreno", "Vac-Oreno",
+        "Plug-Oreno", "Best-O-Luck", "Cap'n Tinker",
+        "Truck-Oreno", "Tex-Oreno"
+      ],
+      "era_markers": [
+        "South Bend Bait Co stamping",
+        "Made in South Bend Indiana",
+        "Glass eyes = pre-1955",
+        "Wooden body (pre-mid-1950s)",
+        "Two-piece pocket box with paper insert"
+      ],
+      "comp_ranges_usd": [
+        {"item": "vintage wooden glass-eye + box", "low": 50, "high": 250},
+        {"item": "vintage wooden loose", "low": 25, "high": 100},
+        {"item": "plastic 1950s-70s", "low": 15, "high": 50}
+      ],
+      "target_buy_usd": {"low": 3, "high": 25},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "vintage south bend {model} oreno",
+      "ship_class": "small_box",
+      "notes": "The Bass-Oreno is the iconic model. Patterns matter — Frog, Rainbow Trout, and Red Head are common; Yellow Perch / Sienna Crackleback are scarcer."
+    },
+    {
+      "brand": "Paw Paw Bait Co",
+      "category": "vintage_lures",
+      "tier": 1,
+      "models": [
+        "Wotta-Frog", "Pumpkin Seed", "Bull Nose Frog",
+        "Wounded Minnow", "Slim Lindy", "Caster",
+        "Mouse", "River Type Pikie", "Jig-A-Lure",
+        "Spinning Bullhead", "Bull Nose Plug"
+      ],
+      "era_markers": [
+        "Paw Paw Bait Co Michigan stamping",
+        "Glass eyes = pre-1955",
+        "Hand-painted scale patterns (older)",
+        "Two-piece pocket box (rare)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "vintage glass-eye + box", "low": 60, "high": 350},
+        {"item": "vintage glass-eye loose", "low": 30, "high": 150},
+        {"item": "plastic 1955-1970", "low": 18, "high": 60}
+      ],
+      "target_buy_usd": {"low": 3, "high": 25},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "vintage paw paw {model} michigan",
+      "ship_class": "small_box",
+      "notes": "Smaller production run than Heddon/Creek Chub means scarcer overall — collectors hunt these. Pattern matters more than model for rarity.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Les Davis",
+      "category": "salmon_steelhead_gear",
+      "tier": 2,
+      "models": [
+        "Hotrod", "Canadian Wonder", "Herring Dodger",
+        "Bolo", "Whitecap", "Dixie", "Crystal", "Penny",
+        "Sockeye", "Coyote", "Gibbs Stewart", "Mooching"
+      ],
+      "era_markers": [
+        "Les Davis stamping on body",
+        "Made in U.S.A. mark",
+        "Hammered finish (older premium)",
+        "Original brass/copper construction",
+        "Pre-Luhr-Jensen acquisition (Les Davis was bought by Luhr-Jensen)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "vintage hammered Hotrod / Canadian Wonder", "low": 30, "high": 150},
+        {"item": "vintage Herring Dodger", "low": 20, "high": 90},
+        {"item": "modern Davis dodger", "low": 8, "high": 30}
+      ],
+      "target_buy_usd": {"low": 3, "high": 25},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "les davis {model} hotrod dodger",
+      "ship_class": "small_box",
+      "notes": "Pacific NW salmon/steelhead specialty. Hotrod and Canadian Wonder are the most-hunted vintage variants. Hammered-finish vintage examples 5-10x common modern reproductions."
+    },
+    {
+      "brand": "Beau Mac",
+      "category": "salmon_steelhead_gear",
+      "tier": 2,
+      "models": [
+        "Cheater", "Mini Cheater", "Maxi Cheater",
+        "Steelhead Float", "Cure Cleaner",
+        "Drift Bobber", "Spin-N-Glo", "Side Planer"
+      ],
+      "era_markers": [
+        "Beau Mac branding (Pacific NW)",
+        "Original packaging with model code",
+        "Color-specific (Hot Pink, Chartreuse, Roe Bag are hot)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Cheater multi-pack original", "low": 15, "high": 60},
+        {"item": "individual Cheaters NIP", "low": 5, "high": 20}
+      ],
+      "target_buy_usd": {"low": 1, "high": 8},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "beau mac cheater steelhead",
+      "ship_class": "poly_mailer",
+      "notes": "Modern (1990s+) but the Pacific NW steelhead/salmon collector market keeps demand high. New-in-package multi-packs sell best."
+    },
+    {
+      "brand": "Rapala",
+      "category": "modern_premium_lures",
+      "tier": 2,
+      "models": [
+        "Original Floater", "X-Rap", "Husky Jerk", "Shad Rap",
+        "DT", "Jointed Minnow", "Skitter Pop", "Skitter Walk",
+        "Countdown", "Risto Rap", "Jointed Shad Rap",
+        "Magnum", "F11", "F13", "F18", "CD9", "CD11"
+      ],
+      "era_markers": [
+        "Hand Tuned & Tank Tested label",
+        "Made in Finland (older premium over Estonia/Ireland)",
+        "Original retail box with two-piece insert",
+        "Discontinued colors (Crystal Perch, Hot Mustard Muddler, etc.)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "discontinued color new-in-box", "low": 25, "high": 120},
+        {"item": "discontinued color used", "low": 12, "high": 40},
+        {"item": "current production new", "low": 6, "high": 18},
+        {"item": "current production used", "low": 3, "high": 8}
+      ],
+      "target_buy_usd": {"low": 1, "high": 12},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "rapala {model} {color}",
+      "ship_class": "poly_mailer",
+      "notes": "Discontinued colors are the play. Common colors (Silver, Gold, Firetiger) flood eBay and don't move. Look for boxed sets of older Made-in-Finland Originals."
+    },
+    {
+      "brand": "Storm",
+      "category": "modern_premium_lures",
+      "tier": 2,
+      "models": [
+        "Wiggle Wart", "Original Wiggle Wart", "ThunderStick",
+        "Hot 'N Tot", "Pee Wee Wart", "Mag Wart",
+        "Naturalistic", "Lightnin' Shad", "Subwart",
+        "Chug Bug", "Rattlin' Chug Bug"
+      ],
+      "era_markers": [
+        "Storm Manufacturing Tulsa Oklahoma (pre-2000)",
+        "Original wooden Wiggle Wart (rare)",
+        "Discontinued color codes (V-209, V-213, etc.)",
+        "Original retail box style varies by era"
+      ],
+      "comp_ranges_usd": [
+        {"item": "original wooden Wiggle Wart", "low": 60, "high": 250},
+        {"item": "vintage plastic Wiggle Wart NIP rare color", "low": 30, "high": 120},
+        {"item": "common Wiggle Wart used", "low": 6, "high": 20}
+      ],
+      "target_buy_usd": {"low": 2, "high": 25},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "vintage storm wiggle wart",
+      "ship_class": "poly_mailer",
+      "notes": "Pre-Rapala-acquisition Storm Wiggle Warts are the hot ticket — bass anglers chase specific color codes. The actual wooden Wiggle Wart is rare and valuable."
+    },
+    {
+      "brand": "Bagley",
+      "category": "modern_premium_lures",
+      "tier": 2,
+      "models": [
+        "Balsa B", "Diving B", "Honey B", "Small Fry",
+        "DB Series", "DB1", "DB2", "DB3",
+        "Killer B", "Kill'r B II", "Bang-O-Lure",
+        "Smoo", "Salt Stinger"
+      ],
+      "era_markers": [
+        "Bagley's Made in Florida label (premium over Dominican Republic)",
+        "Hand-poured balsa wood construction",
+        "Hand-tuned label",
+        "Original two-piece box"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Made-in-Florida balsa NIP rare color", "low": 40, "high": 200},
+        {"item": "Made-in-Florida used", "low": 15, "high": 60},
+        {"item": "Dominican Republic production", "low": 8, "high": 25}
+      ],
+      "target_buy_usd": {"low": 2, "high": 20},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "bagley balsa {model} florida",
+      "ship_class": "poly_mailer",
+      "notes": "Florida-made balsa Bagleys are the holy grail (made by Jim Bagley until ~1990). The transition to Dominican production dropped quality and value. Color codes matter — write down the box label number."
+    },
+    {
+      "brand": "Luhr-Jensen",
+      "category": "salmon_steelhead_gear",
+      "tier": 2,
+      "models": [
+        "Krocodile", "Kwikfish", "Kwik Fish", "J-Plug",
+        "Fire Plug", "Speed Trap", "Moss Boss",
+        "Power Dive Minnow", "Tiger Plug", "Coyote",
+        "Diamond King", "Dipsy Diver"
+      ],
+      "era_markers": [
+        "Luhr-Jensen Hood River Oregon stamping",
+        "Made in U.S.A. (pre-1996, before Rapala acquisition)",
+        "Chrome and brass plated finishes (older)",
+        "Original Luhr-Jensen box (pre-Rapala-era graphics)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "vintage Hood River Oregon Krocodile spoon", "low": 15, "high": 60},
+        {"item": "vintage J-Plug original colors", "low": 12, "high": 50},
+        {"item": "modern post-Rapala", "low": 5, "high": 18}
+      ],
+      "target_buy_usd": {"low": 1, "high": 15},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "luhr jensen {model} hood river",
+      "ship_class": "poly_mailer",
+      "notes": "The 1996 Rapala acquisition is the dividing line. Pre-1996 Hood River Oregon stamping = premium; post-1996 production is mass-market value."
+    },
+    {
+      "brand": "Mann's Bait Company",
+      "category": "modern_premium_lures",
+      "tier": 2,
+      "models": [
+        "Stretch 5+", "Stretch 10+", "Stretch 15+",
+        "Stretch 20+", "Stretch 25+", "Stretch 30+",
+        "Jelly Worm", "Augusta Jelly", "Pig & Jig",
+        "Loud Mouth", "Baby 1 Minus", "1 Minus",
+        "Ghost", "Razorback", "Hard Hookin"
+      ],
+      "era_markers": [
+        "Mann's Bait Company Eufaula Alabama",
+        "Made in U.S.A. (older production)",
+        "Stretch series with depth-rated number",
+        "Vintage Augusta Jelly Worm (1970s-80s collectible)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "vintage Stretch / 1 Minus NIP", "low": 25, "high": 80},
+        {"item": "1970s-80s Jelly Worm bag", "low": 15, "high": 50},
+        {"item": "modern Stretch series", "low": 8, "high": 25}
+      ],
+      "target_buy_usd": {"low": 1, "high": 12},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "manns {model} stretch eufaula",
+      "ship_class": "poly_mailer",
+      "notes": "The Stretch series (5+ through 30+) and 1 Minus are the volume sellers. Vintage 1970s-80s plastic worm bags command nostalgia premium with bass collectors."
+    }
+  ],
+  "platform_notes": {
+    "eBay": "By far the dominant platform for vintage tackle. Sold-listings filter is essential — asking prices are wildly inflated on this category. Auctioneers commonly relist year after year.",
+    "Etsy": "Vintage lures (20+ years old) get a slight Etsy lift over eBay due to the demographic. Worth dual-listing for high-value pieces.",
+    "Pacific Northwest specialty": "Les Davis, Beau Mac, Luhr-Jensen Pacific NW gear has its own ecosystem — eBay is still primary but listing in Salmon/Steelhead categories specifically helps."
+  }
+}

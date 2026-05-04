@@ -1,0 +1,451 @@
+{
+  "schema_version": "1.0",
+  "domain": "golf_equipment",
+  "last_updated": "2026-05-04",
+  "summary": "Golf clubs, bags, and accessories. Trend data (May 2026): 'used' searches are dominated by golf clubs — women's golf clubs is the #1 'used' query (search interest 100), with Callaway and Ping leading by brand name. Left-handed and women's-specific clubs trend higher because the supply is structurally smaller than the demand. Boutique direct-to-consumer brands (Stix, Takomo) have small but loyal followings. Golf is highly resale-friendly because the buyer base is willing to pay used vs. new, and there's a strong Made-in-USA / Japan-built quality differentiation.",
+  "field_workflow": [
+    "Always identify the head + shaft separately — premium head + replaced cheap shaft = lower value",
+    "Verify model name on the sole of the club (etched / printed)",
+    "Year/generation matters: a 2024 Stealth 2 driver beats a 2018 M3 driver by 2-3x",
+    "Stock vs upgraded shaft (e.g., Mitsubishi Diamana, Fujikura Ventus) — upgraded = premium",
+    "Loft / lie / length adjustments — most modern drivers are adjustable, but irons aren't",
+    "Right-hand vs left-hand: LH commands 10-20% premium because supply is smaller",
+    "Women's vs men's: ladies-flex / shorter clubs comp separately",
+    "Headcover + tool included = +5-10%"
+  ],
+  "skip_list": [
+    "Top Flite",
+    "Wilson generic",
+    "Pinemeadow",
+    "Knockoff / clone",
+    "Spalding executive",
+    "Northwestern",
+    "Walmart house brand",
+    "Used golf balls (low margin unless premium-brand condition box)",
+    "Bent shafts",
+    "Cracked clubheads",
+    "Mismatched club sets (manufacturer mixes)"
+  ],
+  "brands": [
+    {
+      "brand": "Callaway Golf",
+      "category": "golf_clubs",
+      "tier": 1,
+      "models": [
+        "Paradym", "Paradym Ai Smoke", "Rogue ST", "Rogue", "Epic Speed",
+        "Epic Max", "Epic Flash", "Mavrik", "Apex Pro", "Apex DCB",
+        "Apex CB", "Apex MB", "Apex 24", "Apex Tour",
+        "Big Bertha", "Big Bertha B21", "X Forged",
+        "Jaws Raw", "Jaws MD5", "Mack Daddy",
+        "Odyssey White Hot", "Odyssey 2-Ball", "Odyssey AI-One",
+        "Stealth", "Pre-Owned",
+        "Reva", "Reva 24"
+      ],
+      "era_markers": [
+        "Callaway etched on sole + chevron logo",
+        "Made in USA / Made in Mexico (different production eras)",
+        "Year-specific finish (Paradym 2023 / Paradym Ai Smoke 2024)",
+        "Tour stamping on premium models (Apex Tour, Tour Authentic)",
+        "Stock shaft vs aftermarket (Project X, Diamana, Ventus, Tensei) — aftermarket premium"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Paradym / Ai Smoke driver", "low": 280, "high": 480},
+        {"item": "Rogue ST / Mavrik driver (used)", "low": 150, "high": 280},
+        {"item": "Apex Pro / CB iron set 4-PW", "low": 600, "high": 1200},
+        {"item": "Apex DCB iron set", "low": 450, "high": 850},
+        {"item": "Jaws Raw wedge (single)", "low": 90, "high": 160},
+        {"item": "Odyssey premium putter", "low": 120, "high": 280},
+        {"item": "Reva (women's) iron set", "low": 380, "high": 700}
+      ],
+      "target_buy_usd": {"low": 30, "high": 250},
+      "platform_primary": "eBay",
+      "platform_secondary": "2nd Swing",
+      "comp_query_template": "callaway {model} {year}",
+      "ship_class": "large_box",
+      "notes": "Callaway is the #1 trending used-club search alongside Ping. Pre-Owned program is their official refurb channel — pay attention to 'callaway preowned' titles which command a slight premium for the certification.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Ping Golf",
+      "category": "golf_clubs",
+      "tier": 1,
+      "models": [
+        "G430", "G430 Max", "G430 LST", "G430 SFT",
+        "G425", "G425 Max", "G425 LST", "G425 SFT",
+        "G410", "G400", "G400 Max", "G30", "G25",
+        "i230", "i525", "i59", "i210", "i200",
+        "Blueprint", "Blueprint S", "Blueprint T",
+        "Anser", "Anser 2", "Anser 4", "Tyne", "Tyne H",
+        "Glide 4.0", "Glide Forged", "Glide 3.0", "Glide 2.0",
+        "Hoofer", "Hoofer Lite", "Hoofer 14"
+      ],
+      "era_markers": [
+        "Ping man-in-blue logo",
+        "G-series number on sole (G430 / G425 / G410)",
+        "Color dot on hosel = lie angle (custom-fit signal)",
+        "Karsten Manufacturing stamping (vintage premium)",
+        "PP-58 grip on Ping putters (signature)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "G430 / G425 driver", "low": 280, "high": 480},
+        {"item": "G410 / G400 driver (used)", "low": 130, "high": 250},
+        {"item": "i230 / i525 iron set 4-PW", "low": 600, "high": 1200},
+        {"item": "Blueprint forged iron set", "low": 850, "high": 1700},
+        {"item": "Anser putter (modern)", "low": 130, "high": 280},
+        {"item": "Glide wedge (single)", "low": 70, "high": 140},
+        {"item": "Hoofer carry bag", "low": 100, "high": 200}
+      ],
+      "target_buy_usd": {"low": 25, "high": 220},
+      "platform_primary": "eBay",
+      "platform_secondary": "Global Golf",
+      "comp_query_template": "ping {model} {year}",
+      "ship_class": "large_box",
+      "notes": "Ping is +40% trending (May 2026 Google Trends). Their custom-fit color-dot system means most clubs are individually fit — this DOESN'T limit resale (buyers know their dot or get re-fit). Anser putters are an iconic putter line with sustained demand.",
+      "condition_critical": true
+    },
+    {
+      "brand": "TaylorMade",
+      "category": "golf_clubs",
+      "tier": 1,
+      "models": [
+        "Stealth", "Stealth 2", "Stealth Plus", "Stealth HD",
+        "Qi10", "Qi10 Max", "Qi10 LS", "BRNR Mini",
+        "M6", "M5", "M4", "M3", "M2", "M1",
+        "Sim2", "Sim2 Max", "Sim Max",
+        "P770", "P790", "P7MC", "P7MB", "P7CB",
+        "Spider Tour", "Spider X", "TP Reserve", "TP Hydro Blast",
+        "MG3", "MG4", "Milled Grind", "ATV",
+        "FlexTech", "Cart Lite", "Pro Cart"
+      ],
+      "era_markers": [
+        "TaylorMade etched on sole",
+        "Carbon Twist Face (Stealth + Qi10) — visible at the face",
+        "M-series number on sole (M1-M6 = 2017-2019 era)",
+        "Sim / Sim2 era (2020-2022)",
+        "Stealth / Stealth 2 era (2022-2023)",
+        "Qi10 era (2024+) = current generation"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Qi10 / Stealth 2 driver", "low": 280, "high": 500},
+        {"item": "Sim2 / M6 driver (used)", "low": 130, "high": 280},
+        {"item": "P770 / P790 iron set", "low": 800, "high": 1500},
+        {"item": "P7MC / P7MB blades", "low": 700, "high": 1400},
+        {"item": "Spider Tour putter", "low": 200, "high": 380},
+        {"item": "MG3 / MG4 wedge (single)", "low": 80, "high": 160}
+      ],
+      "target_buy_usd": {"low": 30, "high": 250},
+      "platform_primary": "eBay",
+      "platform_secondary": "2nd Swing",
+      "comp_query_template": "taylormade {model} {year}",
+      "ship_class": "large_box",
+      "notes": "P-series (P770, P790, P7MC, P7MB) are TaylorMade's premium forged irons. Spider putters are tour-favorite mallet style. Older M-series (M1-M6) is value tier; Sim-and-newer hold premium.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Titleist",
+      "category": "golf_clubs",
+      "tier": 1,
+      "models": [
+        "TSR1", "TSR2", "TSR3", "TSR4",
+        "TSi1", "TSi2", "TSi3", "TSi4",
+        "TS1", "TS2", "TS3", "TS4",
+        "917", "915", "910",
+        "T100", "T100s", "T150", "T200", "T350", "T400",
+        "AP1", "AP2", "AP3", "CB", "MB",
+        "Vokey SM10", "Vokey SM9", "Vokey SM8", "Vokey SM7",
+        "Pro V1", "Pro V1x", "AVX", "Tour Soft",
+        "Players 4", "Players 4 Plus", "Cart 14"
+      ],
+      "era_markers": [
+        "Titleist script on sole + 'T' logo",
+        "TSR (current) > TSi > TS > 9xx legacy",
+        "T-series irons (T100/T150/T200/T350/T400 = current)",
+        "AP irons (AP1/AP2/AP3 = pre-2020 legacy)",
+        "Vokey SM-number identifies generation (SM10 = 2024, SM9 = 2022)",
+        "Original Titleist headcover + leather grip = premium"
+      ],
+      "comp_ranges_usd": [
+        {"item": "TSR2 / TSR3 driver", "low": 350, "high": 580},
+        {"item": "TSi3 / TS3 driver (used)", "low": 180, "high": 350},
+        {"item": "T100 / T150 iron set", "low": 800, "high": 1500},
+        {"item": "AP2 / AP3 iron set (legacy)", "low": 450, "high": 850},
+        {"item": "Vokey SM9 / SM10 wedge (single)", "low": 90, "high": 180},
+        {"item": "Pro V1 / Pro V1x sleeve (3-pack)", "low": 12, "high": 25}
+      ],
+      "target_buy_usd": {"low": 25, "high": 250},
+      "platform_primary": "eBay",
+      "platform_secondary": "Global Golf",
+      "comp_query_template": "titleist {model}",
+      "ship_class": "large_box",
+      "notes": "Vokey wedges are the strongest individual-club resale in golf — Titleist's wedge guru Bob Vokey designs them, and pros use them. SM-number identifies the generation. Pro V1 / Pro V1x balls in original box have decent margin if branded sleeves.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Mizuno Golf",
+      "category": "golf_clubs",
+      "tier": 1,
+      "models": [
+        "JPX 925", "JPX 923", "JPX 921", "JPX 919",
+        "JPX 925 Tour", "JPX 925 Forged", "JPX 925 Hot Metal",
+        "MP-20", "MP-20 SEL", "MP-18", "MP-15",
+        "Pro 245", "Pro 241", "Pro 225", "Pro 223",
+        "T22", "T20", "ST-Z", "ST-X", "ST 200", "ST 220",
+        "M.Craft Type I", "M.Craft Type II", "M.Craft Type III"
+      ],
+      "era_markers": [
+        "Mizuno Runbird logo",
+        "Made in Japan stamping (premium signal)",
+        "Grain Flow Forged label on irons",
+        "JPX number = generation (925 / 923 / 921 / 919)",
+        "MP-series (Mizuno Pro premium forged irons)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "JPX 925 / 923 iron set 4-PW", "low": 700, "high": 1300},
+        {"item": "MP-20 / MP-18 forged iron set", "low": 600, "high": 1200},
+        {"item": "Pro 241 / Pro 245 iron set", "low": 800, "high": 1400},
+        {"item": "T22 / T20 wedge (single)", "low": 90, "high": 170},
+        {"item": "ST-Z / ST-X driver", "low": 200, "high": 400}
+      ],
+      "target_buy_usd": {"low": 30, "high": 220},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "mizuno {model}",
+      "ship_class": "large_box",
+      "notes": "Mizuno is the player's-iron premium tier. Made-in-Japan Grain Flow Forged irons hold value strongly with traditionalist players. Less mass-market than Callaway/Titleist but loyal collector base.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Cobra Golf",
+      "category": "golf_clubs",
+      "tier": 2,
+      "models": [
+        "Darkspeed", "Darkspeed LS", "Darkspeed Max",
+        "Aerojet", "Aerojet LS", "Aerojet Max",
+        "LTDx", "LTDx LS", "LTDx Max", "Radspeed",
+        "King Forged Tec", "King Tour", "King CB",
+        "Speedzone", "F-Max", "F-Max Airspeed"
+      ],
+      "era_markers": [
+        "Cobra branding with King series for premium",
+        "Carbon Twist Face on Darkspeed / Aerojet",
+        "Year-aligned naming (Darkspeed 2024, Aerojet 2023, LTDx 2022)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Darkspeed / Aerojet driver", "low": 200, "high": 400},
+        {"item": "King Forged Tec iron set", "low": 600, "high": 1100},
+        {"item": "LTDx / Radspeed driver (used)", "low": 130, "high": 250}
+      ],
+      "target_buy_usd": {"low": 20, "high": 150},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "cobra {model}",
+      "ship_class": "large_box",
+      "notes": "Cobra trades at modest discount to Callaway/TaylorMade equivalents but the King-series forged irons have premium tier appeal."
+    },
+    {
+      "brand": "Cleveland Golf",
+      "category": "golf_clubs",
+      "tier": 2,
+      "models": [
+        "RTX ZipCore", "RTX 6", "RTX 5", "RTX 4", "RTX 3",
+        "CBX", "CBX2", "CBX Full Face", "CBX Zipcore",
+        "Smart Sole", "Smart Sole 4", "Launcher XL Halo",
+        "Frontline", "Huntington Beach", "HB Soft", "HB Soft 2"
+      ],
+      "era_markers": [
+        "Cleveland Golf branding",
+        "RTX wedge series number = generation",
+        "ZipCore technology marker",
+        "Made in USA (older premium) vs Made in Japan / Mexico"
+      ],
+      "comp_ranges_usd": [
+        {"item": "RTX ZipCore / RTX 6 wedge", "low": 80, "high": 150},
+        {"item": "CBX / CBX2 wedge", "low": 60, "high": 120},
+        {"item": "Smart Sole 4 chipper", "low": 50, "high": 100},
+        {"item": "Huntington Beach putter", "low": 80, "high": 150}
+      ],
+      "target_buy_usd": {"low": 10, "high": 80},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "cleveland golf {model}",
+      "ship_class": "small_box",
+      "notes": "Cleveland is the value-wedge specialist. RTX series competes with Vokey at lower prices. CBX (cavity back wedge) has unique appeal for higher-handicappers. Owned by Srixon/Dunlop."
+    },
+    {
+      "brand": "Srixon",
+      "category": "golf_clubs",
+      "tier": 2,
+      "models": [
+        "ZX5", "ZX5 Mk II", "ZX7", "ZX7 Mk II", "ZX4",
+        "Z-Star", "Z-Star XV", "Q-Star Tour", "Soft Feel",
+        "ZX Mk II Driver", "ZX5 Driver"
+      ],
+      "era_markers": [
+        "Srixon branding (sister brand to Cleveland)",
+        "ZX series number = generation",
+        "Made in Japan stamping",
+        "Z-Star ball lineup (premium tour ball)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "ZX5 / ZX7 Mk II iron set", "low": 600, "high": 1100},
+        {"item": "ZX5 driver", "low": 200, "high": 380},
+        {"item": "Z-Star ball sleeve (3-pack)", "low": 12, "high": 22}
+      ],
+      "target_buy_usd": {"low": 15, "high": 130},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "srixon {model}",
+      "ship_class": "large_box",
+      "notes": "Srixon is the underrated player's iron — pros use them, retail doesn't always know. Made-in-Japan ZX-series forged irons compete with Mizuno/Titleist at lower MSRP.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Scotty Cameron Putters",
+      "category": "golf_putters",
+      "tier": 1,
+      "models": [
+        "Newport", "Newport 2", "Newport 2 Plus",
+        "Phantom X 5", "Phantom X 7", "Phantom X 9", "Phantom X 11",
+        "Special Select", "Squareback", "Fastback",
+        "Studio Style", "Studio Stainless", "Studio Select",
+        "Pro Platinum", "Circle T", "Tour Only",
+        "Futura", "GoLo", "California Del Mar", "Monterey"
+      ],
+      "era_markers": [
+        "Scotty Cameron etched on bumper",
+        "Titleist parent stamping (Cameron is the putter brand, Titleist is parent)",
+        "Made in USA stamping (signature)",
+        "Tour-Only / Circle T = limited tour-issue (premium)",
+        "Original headcover (matching) included = +$50-100"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Tour-Only / Circle T", "low": 1500, "high": 8000},
+        {"item": "Phantom X / Special Select retail", "low": 350, "high": 700},
+        {"item": "Newport / Newport 2 retail", "low": 280, "high": 580},
+        {"item": "Studio Style legacy", "low": 200, "high": 450}
+      ],
+      "target_buy_usd": {"low": 30, "high": 500},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "scotty cameron {model}",
+      "ship_class": "small_box",
+      "notes": "Scotty Cameron is THE blue-chip putter brand — collector market is its own ecosystem. Tour Only / Circle T pieces (issued only to tour pros) trade at extreme premium. Always verify authenticity (counterfeits are rampant) via serial number, weld pattern, finish quality.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Bettinardi Putters",
+      "category": "golf_putters",
+      "tier": 1,
+      "models": [
+        "Studio Stock", "BB1", "BB8", "BB28",
+        "Queen B 6", "Queen B 11", "Queen B 14",
+        "Inovai 6.0", "Inovai 7.0", "Inovai 8.0",
+        "Antidote", "Tour Department"
+      ],
+      "era_markers": [
+        "Bettinardi branding (Italian-American family-owned)",
+        "100% Made in USA milled stamping",
+        "Honeycomb face pattern on Studio Stock",
+        "Queen B = limited boutique line (premium)",
+        "Year stamp etched on bumper"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Queen B / Tour Department", "low": 600, "high": 1500},
+        {"item": "Studio Stock", "low": 350, "high": 700},
+        {"item": "Inovai (mallet)", "low": 280, "high": 550}
+      ],
+      "target_buy_usd": {"low": 30, "high": 400},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "bettinardi {model}",
+      "ship_class": "small_box",
+      "notes": "Bettinardi is the boutique alternative to Scotty Cameron — also fully Made in USA, smaller production runs, dedicated collector base. Queen B line is highly sought after.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Stix Golf",
+      "category": "golf_clubs",
+      "tier": 2,
+      "models": [
+        "Stix Beginner Set", "Stix Stride", "Stix Casual",
+        "Stix Driver", "Stix Iron Set", "Stix Putter"
+      ],
+      "era_markers": [
+        "Stix branding (DTC modern brand)",
+        "Black + White minimalist aesthetic",
+        "Stride = hybrid line",
+        "Original packaging often colorful tube"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Stix complete set", "low": 280, "high": 550},
+        {"item": "Stix Stride hybrid set", "low": 180, "high": 350}
+      ],
+      "target_buy_usd": {"low": 15, "high": 100},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "stix golf {model}",
+      "ship_class": "large_box",
+      "notes": "Stix is direct-to-consumer modern brand with growing aftermarket — appeals to beginner/intermediate buyer who wants minimalist aesthetics over tour heritage. Trending in 2026 search data."
+    },
+    {
+      "brand": "Takomo",
+      "category": "golf_clubs",
+      "tier": 2,
+      "models": [
+        "Takomo 101", "Takomo 201", "Takomo 301",
+        "101 Cavity Back", "201 Players Cavity",
+        "301 Mid Forged", "Takomo Iron Set"
+      ],
+      "era_markers": [
+        "Takomo branding (Finland-based DTC brand)",
+        "Forged Japan-made",
+        "101 / 201 / 301 series (game-improvement to players)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Takomo iron set 4-PW", "low": 350, "high": 650}
+      ],
+      "target_buy_usd": {"low": 20, "high": 150},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "takomo {model}",
+      "ship_class": "large_box",
+      "notes": "Takomo is a Finnish DTC brand making Japan-forged irons at retail-disruptor prices. Trending in 2026 search data. The 201 (player's cavity) is the volume seller.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Sun Mountain Golf Bags",
+      "category": "golf_bags",
+      "tier": 2,
+      "models": [
+        "C-130", "C-130 S", "C-130 Supercharged",
+        "Sport V1", "Sport V2", "ClubGlider",
+        "Sync", "H2NO Lite", "H2NO Tour Series",
+        "Eco-Lite", "ECO-Lite Cart Bag",
+        "Three 5", "Three 5 LS"
+      ],
+      "era_markers": [
+        "Sun Mountain branding",
+        "C-130 cart bag = workhorse line (multiple gens)",
+        "ClubGlider = wheeled travel cover",
+        "Made in Missoula MT label (vintage premium)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "C-130 / C-130 S cart bag", "low": 180, "high": 350},
+        {"item": "ClubGlider Meridian / Tour Series", "low": 220, "high": 450},
+        {"item": "Sport V1 / V2 stand bag", "low": 130, "high": 240}
+      ],
+      "target_buy_usd": {"low": 15, "high": 120},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "sun mountain {model}",
+      "ship_class": "medium_box",
+      "notes": "Sun Mountain is the dominant golf-bag brand for the cart-bag segment. C-130 series has the best resale — 14-way dividers + waterproof construction. 'Golf bag' is +50% trending in 2026 search data."
+    }
+  ],
+  "platform_notes": {
+    "eBay": "Dominant platform for used golf clubs. Sold-listings filter is essential — used-club asking prices are 2-3x what they actually clear at.",
+    "2nd Swing": "Major used-golf-clubs retailer. Not a sales channel, but their pricing is the market benchmark.",
+    "Global Golf": "Similar to 2nd Swing — wholesale buyer for trade-ins. Their bid prices set the absolute floor.",
+    "Callaway Pre-Owned": "Callaway's official refurb channel — adds 15-25% premium over generic eBay used-Callaway equivalents because of the certification."
+  }
+}

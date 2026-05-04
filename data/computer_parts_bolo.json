@@ -1,0 +1,983 @@
+{
+  "schema_version": "1.0",
+  "domain": "computer_parts",
+  "last_updated": "2026-05-04",
+  "summary": "PC components and parts. eBay is the dominant marketplace — buyers search by exact model number (RTX 3080, Ryzen 7 5800X3D, Samsung 990 PRO, etc.). Generation matters enormously: a current-gen GPU is worth 5-10x its previous generation. Working condition is mandatory; lots described as 'untested' or 'no display' lose 50%+ unless they're a known easy fix (re-paste, BIOS reflash). For estate-auction and shop-cleanout finds, the hidden-gem case is older premium-tier hardware (Noctua coolers, Seasonic PSUs, vintage-tier GPUs) that the seller doesn't know is still desirable.",
+  "field_workflow": [
+    "ALWAYS verify model number on the part itself — boxes alone aren't enough",
+    "GPU memory size + bus width are diagnostic (8GB vs 12GB vs 16GB drives price)",
+    "Power Supply: check 80+ rating (Bronze/Silver/Gold/Platinum/Titanium) and total wattage",
+    "RAM: speed (MHz) + capacity (8/16/32/64GB) + DDR generation are all part of the search",
+    "SSD: model number on label tells generation (PCIe Gen3/4/5) — major price differential",
+    "HDD: SMART data history if available; bad sectors kill resale",
+    "Working / tested status doubles value — 'powered on, no further testing' is the worst middle ground"
+  ],
+  "skip_list": [
+    "Refurbished / refurb (without warranty)",
+    "Aftermarket / clone / fake",
+    "OEM bulk pull-from-Dell / pull-from-HP (these are mass-produced and don't comp well)",
+    "Counterfeit RAM (always test in a known-good system)",
+    "DDR3 generic-brand RAM (commodity, low resale)",
+    "5400rpm older HDDs (especially below 1TB)",
+    "Pre-2000 PC hardware (mostly e-waste unless retro-collector category)",
+    "Cracked PCBs / blown capacitors (any board)",
+    "GPU with bent fins / missing fans"
+  ],
+  "brands": [
+    {
+      "brand": "AMD CPUs",
+      "category": "cpu",
+      "tier": 2,
+      "models": [
+        "Ryzen 5 5600X", "Ryzen 5 5600", "Ryzen 5 7600X",
+        "Ryzen 7 5800X", "Ryzen 7 5800X3D", "Ryzen 7 7700X",
+        "Ryzen 7 7800X3D", "Ryzen 9 5900X", "Ryzen 9 5950X",
+        "Ryzen 9 7900X", "Ryzen 9 7950X", "Ryzen 9 7950X3D",
+        "Ryzen 9 9950X", "Threadripper", "EPYC"
+      ],
+      "era_markers": [
+        "Model number etched on heat spreader (e.g. 100-000000059)",
+        "Box with Wraith Stealth/Spire/Prism cooler (premium for AMD-included cooler)",
+        "Original retail packaging vs OEM tray",
+        "Production date code on bottom of CPU"
+      ],
+      "comp_ranges_usd": [
+        {"item": "5800X3D / 7800X3D (gaming favorite)", "low": 200, "high": 380},
+        {"item": "Ryzen 9 9950X / 7950X3D", "low": 400, "high": 700},
+        {"item": "Ryzen 5/7 mainstream", "low": 80, "high": 200},
+        {"item": "Threadripper", "low": 300, "high": 1500}
+      ],
+      "target_buy_usd": {"low": 15, "high": 100},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "amd ryzen {model} cpu",
+      "ship_class": "small_box",
+      "notes": "X3D variants are the gaming sweet spot — premium over base models. Always run AIDA64 / Cinebench / OCCT to verify stability before listing.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Intel CPUs",
+      "category": "cpu",
+      "tier": 2,
+      "models": [
+        "Core i5-12600K", "Core i5-13600K", "Core i5-14600K",
+        "Core i7-12700K", "Core i7-13700K", "Core i7-14700K",
+        "Core i9-12900K", "Core i9-13900K", "Core i9-14900K",
+        "Core Ultra 7", "Core Ultra 9", "Xeon", "Pentium",
+        "Core i3-12100", "Core i3-13100"
+      ],
+      "era_markers": [
+        "Generation prefix on model (12th/13th/14th gen)",
+        "K suffix (overclockable) vs F suffix (no iGPU) vs T (low-power)",
+        "Etched model number + S-Spec on heat spreader",
+        "13th/14th gen affected by oxidation/degradation issue (deduct value)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Core i9-13900K / 14900K", "low": 250, "high": 500},
+        {"item": "Core i7 K-series", "low": 180, "high": 380},
+        {"item": "Core i5 K-series", "low": 100, "high": 220},
+        {"item": "Xeon (server)", "low": 50, "high": 800}
+      ],
+      "target_buy_usd": {"low": 15, "high": 80},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "intel core {model} cpu",
+      "ship_class": "small_box",
+      "notes": "13th/14th gen K-series CPUs have a known degradation issue (Intel issued microcode patches). Buyers ask about it — disclose if you know history.",
+      "condition_critical": true
+    },
+    {
+      "brand": "ASUS PC parts",
+      "category": "gpu_motherboard",
+      "tier": 2,
+      "models": [
+        "ROG Strix", "TUF Gaming", "Dual", "Phoenix",
+        "ProArt", "ROG Maximus", "ROG Crosshair", "Prime",
+        "Z690", "Z790", "B550", "B650", "B760", "X670",
+        "RTX 3060", "RTX 3070", "RTX 3080", "RTX 3090",
+        "RTX 4060", "RTX 4070", "RTX 4080", "RTX 4090",
+        "RTX 5070", "RTX 5080", "RTX 5090",
+        "Radeon RX 7800 XT", "Radeon RX 9070 XT"
+      ],
+      "era_markers": [
+        "ASUS branding with ROG / TUF / Prime line label",
+        "Original packaging with model SKU sticker",
+        "GPU PCB etched ASUS marking",
+        "Motherboard chipset (Z690/B550/X670/B760 etc.)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "ROG Strix RTX 4090 / 5090", "low": 1500, "high": 3000},
+        {"item": "TUF Gaming RTX 4070-4080", "low": 500, "high": 900},
+        {"item": "Mid-range RTX 3060-3080", "low": 200, "high": 500},
+        {"item": "ROG Maximus motherboard", "low": 250, "high": 600},
+        {"item": "Prime mainstream motherboard", "low": 100, "high": 250}
+      ],
+      "target_buy_usd": {"low": 15, "high": 200},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "asus {model} {variant}",
+      "ship_class": "medium_box",
+      "notes": "ROG Strix / Maximus are the premium tiers — 20-30% premium over TUF / Prime equivalents. Check fans on GPUs (sagging or bent = deduct), and that motherboard pins are straight (bent CPU socket pins kill resale).",
+      "condition_critical": true
+    },
+    {
+      "brand": "MSI PC parts",
+      "category": "gpu_motherboard",
+      "tier": 2,
+      "models": [
+        "Gaming X", "Gaming X Trio", "Suprim", "Suprim X",
+        "Ventus", "Ventus 2X", "Ventus 3X",
+        "MEG", "MPG", "MAG", "PRO",
+        "Z690 Tomahawk", "Z790 Carbon", "B550 Tomahawk",
+        "X670E Carbon", "B650 Tomahawk",
+        "RTX 3060", "RTX 3070", "RTX 3080", "RTX 3090",
+        "RTX 4060", "RTX 4070", "RTX 4080", "RTX 4090",
+        "RTX 5070", "RTX 5080", "RTX 5090",
+        "Radeon RX 7800 XT", "Radeon RX 9070 XT"
+      ],
+      "era_markers": [
+        "MSI branding with Gaming X / Suprim / Ventus tier",
+        "Original packaging with hologram seal",
+        "GPU PCB MSI marking",
+        "Motherboard MEG / MPG / MAG / PRO designation"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Suprim X RTX 4090 / 5090", "low": 1400, "high": 2900},
+        {"item": "Gaming X Trio RTX 4070-4080", "low": 500, "high": 900},
+        {"item": "Ventus mid-range RTX", "low": 200, "high": 450},
+        {"item": "MEG / MPG motherboard", "low": 250, "high": 550},
+        {"item": "Tomahawk mainstream motherboard", "low": 130, "high": 280}
+      ],
+      "target_buy_usd": {"low": 15, "high": 180},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "msi {model} {variant}",
+      "ship_class": "medium_box",
+      "notes": "Suprim is MSI's flagship (above Gaming X). Tomahawk is the mainstream-favorite mobo line. Check for backplate dents and verify display output works before listing.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Gigabyte PC parts",
+      "category": "gpu_motherboard",
+      "tier": 2,
+      "models": [
+        "AORUS", "AORUS Master", "AORUS Elite", "AORUS Ultra",
+        "Gaming OC", "Eagle", "WindForce", "Vision",
+        "X570 AORUS", "X670E AORUS", "Z790 AORUS",
+        "B550 AORUS Elite", "B650 AORUS Elite",
+        "RTX 3060", "RTX 3070", "RTX 3080", "RTX 3090",
+        "RTX 4060", "RTX 4070", "RTX 4080", "RTX 4090",
+        "RTX 5070", "RTX 5080", "RTX 5090",
+        "Radeon RX 7800 XT", "Radeon RX 9070 XT"
+      ],
+      "era_markers": [
+        "Gigabyte branding with AORUS premium label",
+        "Aurora-orange / falcon graphic for AORUS",
+        "Original packaging with model SKU",
+        "Vision (creator-line) light cream colorway"
+      ],
+      "comp_ranges_usd": [
+        {"item": "AORUS Master/Xtreme top-tier", "low": 1400, "high": 2800},
+        {"item": "Gaming OC mid-tier RTX", "low": 350, "high": 700},
+        {"item": "Eagle / WindForce entry tier", "low": 180, "high": 400},
+        {"item": "AORUS motherboard", "low": 180, "high": 500}
+      ],
+      "target_buy_usd": {"low": 15, "high": 150},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "gigabyte {model} {variant}",
+      "ship_class": "medium_box",
+      "notes": "AORUS is Gigabyte's premium tier — Master/Xtreme top-out the line. Vision is the white/cream creator line, hot for content creators with white-themed builds.",
+      "condition_critical": true
+    },
+    {
+      "brand": "ASRock motherboards",
+      "category": "motherboard",
+      "tier": 2,
+      "models": [
+        "Taichi", "Phantom Gaming", "Steel Legend", "Pro RS",
+        "X670E Taichi", "Z790 Taichi", "B650E Taichi",
+        "B550 Steel Legend", "X570 Taichi",
+        "Phantom Gaming Mini-ITX"
+      ],
+      "era_markers": [
+        "ASRock branding with line label (Taichi / Phantom / Steel Legend)",
+        "Original retail packaging",
+        "Chipset model marked on board"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Taichi flagship", "low": 280, "high": 580},
+        {"item": "Phantom Gaming / Steel Legend", "low": 130, "high": 280},
+        {"item": "Pro RS budget tier", "low": 80, "high": 160}
+      ],
+      "target_buy_usd": {"low": 10, "high": 80},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "asrock {model} motherboard",
+      "ship_class": "small_box",
+      "notes": "ASRock Taichi has loyal following for VRM quality and feature density. Mini-ITX boards from any maker premium over standard ATX (small form-factor builds are hot).",
+      "condition_critical": true
+    },
+    {
+      "brand": "Zotac GPUs",
+      "category": "gpu",
+      "tier": 2,
+      "models": [
+        "AMP Holo", "AMP Extreme", "Trinity", "Twin Edge",
+        "Gaming", "PGF", "Solo", "Spider-Man",
+        "RTX 3060", "RTX 3070", "RTX 3080", "RTX 3090",
+        "RTX 4060", "RTX 4070", "RTX 4080", "RTX 4090",
+        "RTX 5070", "RTX 5080", "RTX 5090"
+      ],
+      "era_markers": [
+        "Zotac branding with AMP / Trinity / Twin Edge tier",
+        "Original packaging",
+        "5-year warranty registration card (transferable)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "AMP Extreme RTX 4090 / 5090", "low": 1300, "high": 2700},
+        {"item": "Trinity mid-range RTX", "low": 250, "high": 600},
+        {"item": "Twin Edge entry tier", "low": 180, "high": 400}
+      ],
+      "target_buy_usd": {"low": 10, "high": 120},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "zotac {model} graphics card",
+      "ship_class": "medium_box",
+      "notes": "Zotac runs cooler/quieter than some competitors but commands slightly less premium. The 5-year warranty (registered) is transferable and adds value.",
+      "condition_critical": true
+    },
+    {
+      "brand": "EVGA PC parts",
+      "category": "gpu_psu",
+      "tier": 2,
+      "models": [
+        "FTW3 Ultra", "FTW3", "XC3 Ultra", "XC3",
+        "SC3 Ultra", "SC2 Hybrid", "KINGPIN",
+        "FTW2", "Hybrid", "Hydro Copper",
+        "GTX 1080 Ti FTW3", "RTX 2080 Ti FTW3",
+        "RTX 3080 FTW3", "RTX 3090 FTW3", "RTX 3090 Ti KINGPIN",
+        "SuperNOVA G+", "SuperNOVA G6", "SuperNOVA P6",
+        "SuperNOVA T2", "GA series", "GD series"
+      ],
+      "era_markers": [
+        "EVGA branding with FTW3 / KINGPIN / XC3 line",
+        "EVGA stopped making GPUs in 2022 — older RTX 30xx EVGA cards are last-of-line collectibles",
+        "EVGA PSU 80+ rating (Gold/Platinum/Titanium) on label",
+        "Made in Taiwan stamping"
+      ],
+      "comp_ranges_usd": [
+        {"item": "KINGPIN / Hydro Copper RTX 3090", "low": 800, "high": 2200},
+        {"item": "FTW3 / XC3 RTX 3070-3090", "low": 350, "high": 800},
+        {"item": "GTX 1080 Ti FTW3 (collectible)", "low": 200, "high": 450},
+        {"item": "SuperNOVA G+ / P+ 850W-1000W", "low": 100, "high": 220},
+        {"item": "SuperNOVA T2 1600W titanium", "low": 280, "high": 500}
+      ],
+      "target_buy_usd": {"low": 10, "high": 200},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "evga {model}",
+      "ship_class": "medium_box",
+      "notes": "EVGA exited the GPU market in 2022 — last-generation EVGA RTX 30-series cards are now end-of-line and sit at premium pricing as collectibles. Their PSUs (especially SuperNOVA G+ and Titanium-rated) are still available and trade well.",
+      "condition_critical": true
+    },
+    {
+      "brand": "PNY",
+      "category": "gpu_storage",
+      "tier": 2,
+      "models": [
+        "PNY XLR8", "PNY VERTO", "PNY EPIC-X",
+        "RTX 4060", "RTX 4070", "RTX 4080", "RTX 4090",
+        "RTX 5070", "RTX 5080", "RTX 5090",
+        "PNY CS3140", "PNY CS3040", "PNY XLR8 CS3140",
+        "PNY Pro Elite SSD", "PNY DUO LINK"
+      ],
+      "era_markers": [
+        "PNY branding with XLR8 / VERTO line label",
+        "PCIe Gen3 vs Gen4 vs Gen5 marked on SSD label",
+        "Capacity sticker (1TB / 2TB / 4TB / 8TB)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "PNY RTX 4090 XLR8", "low": 1300, "high": 2400},
+        {"item": "PNY RTX 4070 / 4080", "low": 400, "high": 800},
+        {"item": "PNY CS3140 4TB Gen4 NVMe", "low": 150, "high": 280},
+        {"item": "PNY 2TB NVMe", "low": 60, "high": 130}
+      ],
+      "target_buy_usd": {"low": 5, "high": 100},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "pny {model}",
+      "ship_class": "small_box",
+      "notes": "Volume play — PNY GPUs trade slightly below premium-tier (ASUS/MSI/Gigabyte) at the same NVIDIA SKU. Their SSDs are mid-tier value but reliable. Quadro Pro line (workstation GPUs) commands much higher than gaming.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Sapphire Radeon GPUs",
+      "category": "gpu",
+      "tier": 2,
+      "models": [
+        "Nitro+", "Nitro+ SE", "Pulse", "Pure", "Toxic",
+        "Limited Edition", "Vapor-X",
+        "RX 6600", "RX 6650 XT", "RX 6700 XT", "RX 6800",
+        "RX 6800 XT", "RX 6900 XT", "RX 6950 XT",
+        "RX 7600", "RX 7700 XT", "RX 7800 XT", "RX 7900",
+        "RX 7900 XT", "RX 7900 XTX", "RX 9070", "RX 9070 XT"
+      ],
+      "era_markers": [
+        "Sapphire Toxic = top-tier (premium over Nitro+)",
+        "Vapor-X chamber cooling marked on label (premium signal)",
+        "Original packaging often blue/silver Sapphire colorway",
+        "Backplate logo style varies by model gen"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Toxic / Nitro+ SE flagship", "low": 600, "high": 1400},
+        {"item": "Nitro+ mid-range", "low": 300, "high": 700},
+        {"item": "Pulse / Pure entry tier", "low": 200, "high": 500}
+      ],
+      "target_buy_usd": {"low": 10, "high": 150},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "sapphire {model} radeon",
+      "ship_class": "medium_box",
+      "notes": "Sapphire is the most-respected AMD board partner — Toxic and Nitro+ command premium even over MSI/ASUS Radeon equivalents. Limited Edition / Anniversary models are collector premium.",
+      "condition_critical": true
+    },
+    {
+      "brand": "XFX Radeon GPUs",
+      "category": "gpu",
+      "tier": 2,
+      "models": [
+        "Speedster MERC", "Speedster QICK",
+        "Speedster SWFT", "Speedster ZERO",
+        "RX 6600", "RX 6650 XT", "RX 6700 XT", "RX 6800",
+        "RX 6800 XT", "RX 6900 XT", "RX 6950 XT",
+        "RX 7600", "RX 7700 XT", "RX 7800 XT", "RX 7900",
+        "RX 7900 XT", "RX 7900 XTX", "RX 9070", "RX 9070 XT"
+      ],
+      "era_markers": [
+        "XFX with Speedster series label",
+        "MERC = top-tier, QICK = mid, SWFT = entry",
+        "Triple-fan vs dual-fan visible from photo",
+        "Original retail box"
+      ],
+      "comp_ranges_usd": [
+        {"item": "MERC / Magnetic Air RX 7900 XTX", "low": 600, "high": 1200},
+        {"item": "QICK mid-tier", "low": 280, "high": 600},
+        {"item": "SWFT entry tier", "low": 200, "high": 400}
+      ],
+      "target_buy_usd": {"low": 10, "high": 130},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "xfx {model} radeon",
+      "ship_class": "medium_box",
+      "notes": "XFX MERC line offers excellent thermals at mid-tier prices. Their double-warranty registration program adds resale value when transferred."
+    },
+    {
+      "brand": "PowerColor Radeon GPUs",
+      "category": "gpu",
+      "tier": 2,
+      "models": [
+        "Red Devil", "Red Devil Limited Edition", "Liquid Devil",
+        "Hellhound", "Fighter", "Reaper",
+        "RX 6600", "RX 6700 XT", "RX 6800 XT",
+        "RX 6900 XT", "RX 6950 XT", "RX 7800 XT",
+        "RX 7900 XT", "RX 7900 XTX", "RX 9070 XT"
+      ],
+      "era_markers": [
+        "PowerColor with Red Devil / Liquid Devil flagship",
+        "Hellhound is the mid-tier sweet spot",
+        "Limited Edition releases (Red Devil LE) are scarce-numbered",
+        "Liquid Devil = AIO water-cooled (collectible)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Red Devil / Liquid Devil flagship", "low": 600, "high": 1300},
+        {"item": "Hellhound mid-tier", "low": 280, "high": 650},
+        {"item": "Fighter / Reaper entry", "low": 200, "high": 450}
+      ],
+      "target_buy_usd": {"low": 10, "high": 130},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "powercolor {model}",
+      "ship_class": "medium_box",
+      "notes": "Red Devil Limited Editions are numbered runs and trade at collector premium. Liquid Devil (AIO water-cooled) versions command 30-50% premium over air-cooled equivalents."
+    },
+    {
+      "brand": "Corsair PC components",
+      "category": "ram_psu_case_cooler",
+      "tier": 2,
+      "models": [
+        "Vengeance LPX", "Vengeance Pro", "Vengeance RGB Pro",
+        "Vengeance RGB", "Dominator Platinum", "Dominator Titanium",
+        "RM850x", "RM1000x", "HX1000", "HX1500i", "AX1600i",
+        "RM Series", "RMx Shift", "HXi Series", "AX Titanium",
+        "iCUE 4000X", "iCUE 5000X", "iCUE 7000X",
+        "Crystal 280X", "Crystal 570X", "Obsidian 1000D",
+        "H100i", "H115i", "H150i", "iCUE H170i",
+        "iCUE Elite Capellix", "Hydro X"
+      ],
+      "era_markers": [
+        "Corsair branding with line label (Vengeance / RM / iCUE)",
+        "80+ certification on PSU label (Gold/Platinum/Titanium)",
+        "Wattage and modular/non-modular status visible",
+        "RAM speed (3200/3600/6000/7200 MT/s) on heat-spreader sticker",
+        "DDR4 vs DDR5 marked on package"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Vengeance DDR5 32GB 6000-7200 kit", "low": 90, "high": 200},
+        {"item": "Vengeance DDR4 32GB 3600 kit", "low": 60, "high": 130},
+        {"item": "RM850x / RM1000x PSU", "low": 110, "high": 220},
+        {"item": "AX1600i Titanium PSU", "low": 350, "high": 600},
+        {"item": "iCUE 5000X / 7000X case", "low": 130, "high": 300},
+        {"item": "iCUE H150i / H170i AIO cooler", "low": 100, "high": 220}
+      ],
+      "target_buy_usd": {"low": 5, "high": 80},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "corsair {model}",
+      "ship_class": "medium_box",
+      "notes": "Corsair spans RAM, PSUs, cases, and AIO coolers — verify which product before listing. AX series PSUs (Platinum/Titanium) hold value well. RGB lighting working = factor (broken RGB = -30%).",
+      "condition_critical": true
+    },
+    {
+      "brand": "G.Skill RAM",
+      "category": "ram",
+      "tier": 2,
+      "models": [
+        "Trident Z", "Trident Z RGB", "Trident Z5", "Trident Z5 RGB",
+        "Trident Z Royal", "Trident Z Neo", "Ripjaws V", "Ripjaws S5",
+        "Aegis", "Sniper X", "F4-3200", "F4-3600", "F5-6000", "F5-7200"
+      ],
+      "era_markers": [
+        "G.Skill branding with Trident / Ripjaws line",
+        "Speed (MT/s) and CL timings on heat-spreader sticker",
+        "Royal series has crystalline diffuser top (collectible)",
+        "DDR4 (Z / Z RGB) vs DDR5 (Z5 / Z5 RGB)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Trident Z5 RGB DDR5 32GB 6000-7200", "low": 110, "high": 250},
+        {"item": "Trident Z DDR4 32GB 3600 kit", "low": 70, "high": 150},
+        {"item": "Trident Z Royal kit", "low": 130, "high": 320},
+        {"item": "Ripjaws V DDR4 16GB", "low": 30, "high": 70}
+      ],
+      "target_buy_usd": {"low": 3, "high": 60},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "g.skill {model}",
+      "ship_class": "small_box",
+      "notes": "Trident Z Royal is the showpiece tier (mirror finish + crystalline LEDs). Z5 (DDR5) at 6000-7200 MT/s is the current sweet spot for AM5/Intel 12-14th gen builds. Test in a known-good system before listing — counterfeits exist.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Crucial",
+      "category": "ram_ssd",
+      "tier": 2,
+      "models": [
+        "Ballistix", "Ballistix Max", "Ballistix MAX RGB",
+        "Pro DDR5", "Pro Overclocking", "Crucial DDR5",
+        "MX500", "P5", "P3", "P5 Plus", "T700", "T705",
+        "BX500", "P310", "X9 Pro", "X10 Pro"
+      ],
+      "era_markers": [
+        "Crucial branding (subsidiary of Micron)",
+        "DDR4 vs DDR5 marked on package",
+        "PCIe Gen3 (P3) / Gen4 (P5/P5 Plus) / Gen5 (T700/T705) on SSD label",
+        "Capacity (1TB / 2TB / 4TB) on label"
+      ],
+      "comp_ranges_usd": [
+        {"item": "T700 / T705 PCIe Gen5 NVMe 2TB", "low": 200, "high": 380},
+        {"item": "P5 Plus PCIe Gen4 2TB", "low": 130, "high": 240},
+        {"item": "MX500 SATA 1TB-2TB", "low": 50, "high": 130},
+        {"item": "Crucial Pro DDR5 32GB 5600", "low": 80, "high": 170}
+      ],
+      "target_buy_usd": {"low": 3, "high": 50},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "crucial {model}",
+      "ship_class": "small_box",
+      "notes": "T705 is the fastest consumer NVMe currently. MX500 is the long-running SATA budget favorite. RAM tier is mid (Pro line) — for premium, look at G.Skill or Corsair Dominator.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Kingston",
+      "category": "ram_ssd",
+      "tier": 2,
+      "models": [
+        "Fury Beast", "Fury Renegade", "Fury Renegade RGB",
+        "FURY DDR5", "ValueRAM", "HyperX Fury",
+        "KC3000", "KC600", "NV2", "NV3", "Fury Renegade SSD",
+        "DC600M", "A2000"
+      ],
+      "era_markers": [
+        "Kingston branding with Fury line label",
+        "Speed (MT/s) and timings on heat-spreader",
+        "PCIe Gen3 (NV2) / Gen4 (KC3000 / NV3 / Renegade)",
+        "Made in USA / Taiwan / Mexico stamps"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Fury Renegade DDR5 32GB 7200", "low": 110, "high": 230},
+        {"item": "Fury Beast DDR4 32GB 3600", "low": 60, "high": 130},
+        {"item": "KC3000 / Fury Renegade SSD 2TB", "low": 110, "high": 220},
+        {"item": "NV2 / NV3 budget NVMe 1TB", "low": 35, "high": 80}
+      ],
+      "target_buy_usd": {"low": 2, "high": 50},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "kingston {model}",
+      "ship_class": "small_box",
+      "notes": "Fury Renegade is Kingston's enthusiast tier (RAM + SSD). KC3000 was the standout NVMe of its generation. Avoid generic Kingston DDR3 / SATA — commodity-tier resale.",
+      "condition_critical": true
+    },
+    {
+      "brand": "TeamGroup",
+      "category": "ram_ssd",
+      "tier": 2,
+      "models": [
+        "T-Force Vulcan", "T-Force Delta RGB", "T-Force Xtreem",
+        "T-Force Cardea", "T-Force Cardea Z44L", "T-Force Z540",
+        "T-Force Vulcan DDR5", "MP44", "MP34", "MP33",
+        "T-Create Classic"
+      ],
+      "era_markers": [
+        "T-Force / TeamGroup with line designation",
+        "Speed and CL timings on RAM",
+        "PCIe Gen4 vs Gen5 on SSD label",
+        "Original packaging w/ hologram"
+      ],
+      "comp_ranges_usd": [
+        {"item": "T-Force Z540 PCIe Gen5 NVMe", "low": 150, "high": 320},
+        {"item": "T-Force Delta RGB DDR5 32GB", "low": 90, "high": 180},
+        {"item": "MP44 / MP34 NVMe 2TB", "low": 80, "high": 160}
+      ],
+      "target_buy_usd": {"low": 2, "high": 40},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "teamgroup t-force {model}",
+      "ship_class": "small_box",
+      "notes": "TeamGroup is value-tier with enthusiast performance. T-Force Vulcan / Delta RGB are the consumer flagships. Quietly excellent for budget-conscious builders — don't write off as no-name.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Samsung SSDs",
+      "category": "ssd",
+      "tier": 2,
+      "models": [
+        "990 PRO", "990 EVO", "980 PRO", "980", "970 EVO Plus",
+        "970 PRO", "960 PRO", "870 EVO", "870 QVO",
+        "T7", "T7 Shield", "T9", "T5", "T7 Touch",
+        "Pro Plus microSD", "PM9A1", "PM9A3"
+      ],
+      "era_markers": [
+        "Samsung branding with model number (980 / 990 / 970 etc.)",
+        "PRO = top-tier, EVO = mainstream, QVO = budget (QLC)",
+        "PCIe Gen3 (970) / Gen4 (980/990) / Gen5 (future)",
+        "T-series = portable, on USB cable"
+      ],
+      "comp_ranges_usd": [
+        {"item": "990 PRO 4TB", "low": 280, "high": 480},
+        {"item": "990 PRO / 980 PRO 2TB", "low": 130, "high": 240},
+        {"item": "T7 Shield 2TB portable", "low": 100, "high": 200},
+        {"item": "870 EVO 4TB SATA", "low": 200, "high": 380},
+        {"item": "Pro Plus 256GB microSD", "low": 25, "high": 60}
+      ],
+      "target_buy_usd": {"low": 5, "high": 80},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "samsung {model} ssd",
+      "ship_class": "poly_mailer",
+      "notes": "Samsung 990 PRO + 980 PRO are reference-tier NVMe drives. Counterfeits exist — verify model number on label and run CrystalDiskMark / Samsung Magician health check before listing. T7 Shield's rugged housing commands premium over plain T7.",
+      "condition_critical": true
+    },
+    {
+      "brand": "WD storage",
+      "category": "ssd_hdd",
+      "tier": 2,
+      "models": [
+        "WD Black", "WD Black SN850X", "WD Black SN770",
+        "WD Blue", "WD Blue SN570", "WD Red", "WD Red Pro",
+        "WD Red Plus", "WD Purple", "WD Gold",
+        "WD Easystore", "WD Elements", "WD My Passport",
+        "WD My Book", "WD Ultrastar", "Western Digital",
+        "SN850X", "SN770", "SN550"
+      ],
+      "era_markers": [
+        "Western Digital / WD branding with color line",
+        "Black = NVMe gaming / Blue = mainstream / Red = NAS / Purple = surveillance / Gold = enterprise",
+        "Capacity stamped on shell (TB rating)",
+        "CMR vs SMR designation on Red Plus / Red"
+      ],
+      "comp_ranges_usd": [
+        {"item": "WD Black SN850X 4TB", "low": 280, "high": 480},
+        {"item": "WD Black SN850X / SN770 2TB", "low": 130, "high": 240},
+        {"item": "WD Red Plus 8TB CMR NAS HDD", "low": 130, "high": 240},
+        {"item": "WD Gold / Ultrastar 16-22TB", "low": 200, "high": 450},
+        {"item": "WD Elements / Easystore 12-18TB shucked", "low": 150, "high": 320}
+      ],
+      "target_buy_usd": {"low": 3, "high": 60},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "wd {model}",
+      "ship_class": "small_box",
+      "notes": "Easystore / Elements externals are commonly 'shucked' for the WD Red CMR drive inside — this is a major hobby and large-capacity examples (12-22TB) trade close to bare-drive prices. WD Gold / Ultrastar enterprise drives have data-center buyer pool.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Seagate",
+      "category": "hdd",
+      "tier": 2,
+      "models": [
+        "IronWolf", "IronWolf Pro", "Exos", "Exos X18", "Exos X20",
+        "BarraCuda", "BarraCuda Pro", "FireCuda", "FireCuda 530",
+        "Skyhawk", "Backup Plus", "Expansion", "One Touch"
+      ],
+      "era_markers": [
+        "Seagate branding with line label (IronWolf / Exos / BarraCuda)",
+        "Capacity stamped (8TB / 16TB / 18TB / 20TB / 22TB)",
+        "Pro suffix = higher MTBF / longer warranty",
+        "Original retail box vs OEM bare drive"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Exos X20 / X22 18-22TB", "low": 200, "high": 400},
+        {"item": "IronWolf Pro 8-12TB CMR NAS", "low": 130, "high": 280},
+        {"item": "FireCuda 530 NVMe 2TB", "low": 130, "high": 240},
+        {"item": "BarraCuda 4-8TB internal HDD", "low": 50, "high": 130}
+      ],
+      "target_buy_usd": {"low": 3, "high": 50},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "seagate {model}",
+      "ship_class": "small_box",
+      "notes": "Exos enterprise drives (16-22TB) are the volume play — recertified or new-pull lots trade well to homelab buyers. Always run SMART check before listing — Seagate has had reliability scrutiny periodically.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Toshiba storage",
+      "category": "hdd",
+      "tier": 2,
+      "models": [
+        "Toshiba MG", "Toshiba N300", "Toshiba P300",
+        "Toshiba Canvio", "Toshiba RC500", "Toshiba RD400",
+        "Toshiba Enterprise", "Toshiba Surveillance"
+      ],
+      "era_markers": [
+        "Toshiba branding with model series",
+        "MG / N300 / P300 line designations (enterprise / NAS / consumer)",
+        "Capacity stamped"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Toshiba MG 16-20TB enterprise", "low": 180, "high": 380},
+        {"item": "N300 NAS 8-12TB", "low": 100, "high": 220},
+        {"item": "Canvio external 4-8TB", "low": 50, "high": 130}
+      ],
+      "target_buy_usd": {"low": 3, "high": 40},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "toshiba {model} hdd",
+      "ship_class": "small_box",
+      "notes": "Toshiba is the third-place HDD maker after WD/Seagate but their enterprise MG-series competes well on $/TB. Lower brand recognition = sometimes-better deals at auction.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Sabrent",
+      "category": "ssd",
+      "tier": 2,
+      "models": [
+        "Rocket 4 Plus", "Rocket 4 Plus G", "Rocket Q",
+        "Rocket Plus-G", "Rocket 5", "Rocket Nano",
+        "Rocket XTRM-Q"
+      ],
+      "era_markers": [
+        "Sabrent branding with Rocket model line",
+        "Rocket 4 Plus = PCIe Gen4 (consumer flagship)",
+        "Rocket 5 = PCIe Gen5 (top-end)",
+        "Capacity on label (1TB / 2TB / 4TB / 8TB)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Rocket 4 Plus 8TB Gen4", "low": 600, "high": 1100},
+        {"item": "Rocket 4 Plus 4TB Gen4", "low": 280, "high": 500},
+        {"item": "Rocket 4 Plus 2TB Gen4", "low": 130, "high": 240},
+        {"item": "Rocket 5 2TB Gen5", "low": 200, "high": 380}
+      ],
+      "target_buy_usd": {"low": 5, "high": 80},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "sabrent rocket {model}",
+      "ship_class": "poly_mailer",
+      "notes": "Sabrent Rocket 4 Plus 8TB is one of the few consumer NVMe drives at that capacity — strong demand from creators who need single-volume large NVMe. Rocket 5 is bleeding-edge Gen5.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Seasonic PSUs",
+      "category": "psu",
+      "tier": 2,
+      "models": [
+        "PRIME PX", "PRIME TX", "PRIME GX", "PRIME Titanium",
+        "FOCUS GX", "FOCUS PX", "FOCUS Plus Gold", "FOCUS Plus Platinum",
+        "VERTEX PX", "VERTEX GX", "VERTEX Titanium",
+        "Snow Silent"
+      ],
+      "era_markers": [
+        "Seasonic branding with PRIME / FOCUS / VERTEX series",
+        "80+ rating (Gold / Platinum / Titanium)",
+        "Wattage on label (650W / 850W / 1000W / 1300W / 1600W)",
+        "PRIME Titanium = highest tier",
+        "Made in Taiwan stamping"
+      ],
+      "comp_ranges_usd": [
+        {"item": "PRIME TX/PX 1000W-1600W Titanium", "low": 280, "high": 580},
+        {"item": "FOCUS GX/PX 850W-1000W Gold/Platinum", "low": 130, "high": 240},
+        {"item": "VERTEX Titanium 1000W-1300W ATX 3.0", "low": 250, "high": 450},
+        {"item": "Snow Silent (white) 850W-1050W", "low": 180, "high": 320}
+      ],
+      "target_buy_usd": {"low": 10, "high": 120},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "seasonic {model} psu",
+      "ship_class": "small_box",
+      "notes": "Seasonic OEMs PSUs for Corsair AX/RM, EVGA SuperNOVA G+, NZXT C series, and others — when you see one branded Corsair AXi or EVGA G7, it's actually Seasonic internally. Their own-brand PRIME line is the gold standard.",
+      "condition_critical": true
+    },
+    {
+      "brand": "be quiet!",
+      "category": "psu_cooler",
+      "tier": 2,
+      "models": [
+        "Dark Power Pro", "Dark Power 13", "Pure Power 12 M",
+        "Straight Power 12", "Straight Power 11",
+        "Dark Rock Pro 4", "Dark Rock Pro 5", "Dark Rock 5",
+        "Shadow Rock 3", "Pure Rock 2", "Silent Loop 2"
+      ],
+      "era_markers": [
+        "be quiet! branding (lowercase, with exclamation mark)",
+        "Dark Power Pro = top-tier PSU",
+        "Dark Rock Pro = top-tier air cooler",
+        "Made in Germany stamping (older)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Dark Power Pro 1500W-1600W Titanium", "low": 380, "high": 680},
+        {"item": "Dark Power 13 850W-1300W Platinum", "low": 230, "high": 420},
+        {"item": "Dark Rock Pro 5 air cooler", "low": 100, "high": 180},
+        {"item": "Silent Loop 2 240/280/360 AIO", "low": 130, "high": 240}
+      ],
+      "target_buy_usd": {"low": 8, "high": 80},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "be quiet {model}",
+      "ship_class": "medium_box",
+      "notes": "be quiet! is the silent-build favorite — Dark Power Pro PSUs and Dark Rock Pro air coolers have dedicated silent-build buyers. Premium German engineering; often 20-30% above Corsair equivalents.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Fractal Design Cases",
+      "category": "case",
+      "tier": 2,
+      "models": [
+        "Define R7", "Define 7", "Define 7 XL", "Define 7 Compact",
+        "Torrent", "Torrent Compact", "Torrent Nano",
+        "Meshify 2", "Meshify 2 XL", "Meshify 2 Compact",
+        "Pop XL", "North", "North XL", "Era 2"
+      ],
+      "era_markers": [
+        "Fractal Design branding (Sweden)",
+        "Tempered glass side vs solid (premium silent vs visible)",
+        "Original retail box",
+        "North series wood front panel (collectible)"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Torrent / Define 7 XL flagship", "low": 150, "high": 320},
+        {"item": "North wood-front", "low": 150, "high": 280},
+        {"item": "Meshify 2 / Define 7 standard", "low": 100, "high": 200},
+        {"item": "Torrent Nano / Compact ITX", "low": 110, "high": 220}
+      ],
+      "target_buy_usd": {"low": 10, "high": 100},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "fractal design {model}",
+      "ship_class": "large_box",
+      "notes": "North series is iconic for warm-wood aesthetic — strong appeal to creator/photographer demographics. Define 7 and Meshify 2 are workhorse premium ATX cases. Note: cases are heavy and hard to ship — only worth it if margin justifies the large_box freight.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Lian Li Cases",
+      "category": "case",
+      "tier": 2,
+      "models": [
+        "O11 Dynamic", "O11 Dynamic Evo", "O11 Dynamic Evo XL",
+        "O11 Air Mini", "O11 Vision", "Lancool 216",
+        "Lancool 215", "Dynamic Mini", "PC-O11",
+        "A4-H2O", "A3-mATX", "Q58", "DAN A4-SFX"
+      ],
+      "era_markers": [
+        "Lian Li branding (Taiwan)",
+        "Dual-chamber layout (O11 series signature)",
+        "Aluminum panels on premium models",
+        "Original packaging w/ accessory baggies"
+      ],
+      "comp_ranges_usd": [
+        {"item": "O11 Dynamic Evo XL", "low": 200, "high": 380},
+        {"item": "O11 Dynamic Evo standard", "low": 130, "high": 220},
+        {"item": "O11 Vision (showcase)", "low": 200, "high": 350},
+        {"item": "DAN A4-SFX / A4-H2O ITX", "low": 180, "high": 380}
+      ],
+      "target_buy_usd": {"low": 10, "high": 120},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "lian li {model}",
+      "ship_class": "large_box",
+      "notes": "Lian Li O11 Dynamic IS the showcase-build case — every modder/streamer running RGB has one. Strong resale even years after original release. SFX (small form factor) cases like DAN A4 trade premium because Lian Li discontinues runs frequently.",
+      "condition_critical": true
+    },
+    {
+      "brand": "NZXT Cases",
+      "category": "case",
+      "tier": 2,
+      "models": [
+        "H7 Flow", "H7 Elite", "H6 Flow", "H5 Flow",
+        "H1 Mini-ITX", "H510i", "H510 Elite", "H510 Flow",
+        "H440", "Phantom 410", "Source 530",
+        "Kraken X53", "Kraken X63", "Kraken X73",
+        "Kraken Z53", "Kraken Z63", "Kraken Z73", "Kraken Elite"
+      ],
+      "era_markers": [
+        "NZXT branding with H-series number",
+        "Flow / Elite suffix indicates airflow vs glass-window variant",
+        "H1 ITX has integrated PSU/cooler (collectible)",
+        "Older Phantom / Source series = legacy"
+      ],
+      "comp_ranges_usd": [
+        {"item": "H7 Elite / H7 Flow", "low": 130, "high": 240},
+        {"item": "H1 ITX (rare)", "low": 250, "high": 480},
+        {"item": "Kraken Z73 / Elite AIO", "low": 200, "high": 380},
+        {"item": "Kraken X53 / X63 AIO", "low": 100, "high": 180}
+      ],
+      "target_buy_usd": {"low": 8, "high": 100},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "nzxt {model}",
+      "ship_class": "large_box",
+      "notes": "NZXT H1 (compact ITX with built-in PSU/cooler) had a recall but the redesigned version is sought-after. Kraken Z (with LCD display) commands big premium over X (no display).",
+      "condition_critical": true
+    },
+    {
+      "brand": "Cooler Master Cases",
+      "category": "case",
+      "tier": 2,
+      "models": [
+        "MasterCase H500", "MasterCase H500 Mesh",
+        "MasterCase H500P Mesh ARGB", "NR200", "NR200P",
+        "NR200P V2", "HAF 700 EVO", "HAF 700",
+        "HAF 922", "HAF X", "Cosmos C700M",
+        "Stryker", "Trooper"
+      ],
+      "era_markers": [
+        "Cooler Master branding with Master/HAF/Cosmos line",
+        "HAF series = high-airflow flagship line",
+        "Cosmos = top-tier showcase case",
+        "NR200 / NR200P = popular SFF-ITX"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Cosmos C700M flagship", "low": 280, "high": 580},
+        {"item": "HAF 700 EVO", "low": 380, "high": 680},
+        {"item": "NR200P / V2 ITX", "low": 110, "high": 220},
+        {"item": "MasterCase H500P Mesh", "low": 150, "high": 280}
+      ],
+      "target_buy_usd": {"low": 10, "high": 130},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "cooler master {model}",
+      "ship_class": "large_box",
+      "notes": "NR200 / NR200P is the dominant ITX case at its price point — discontinued runs trade close to retail. Cosmos C700M and HAF 700 EVO are showpiece flagships. Older HAF (922/X) has a vintage-modder following."
+    },
+    {
+      "brand": "Noctua",
+      "category": "cooler",
+      "tier": 2,
+      "models": [
+        "NH-D15", "NH-D15S", "NH-D15 chromax.black",
+        "NH-U12A", "NH-U12S redux", "NH-L12 Ghost", "NH-L9",
+        "NH-D12L", "NH-P1", "NF-A14", "NF-A12x25",
+        "NF-A12x25 chromax.black", "NF-S12B redux"
+      ],
+      "era_markers": [
+        "Noctua branding (Austria) with brown-on-cream colorway",
+        "chromax.black = all-black variant (premium)",
+        "NF-A12x25 = reference 120mm fan (industry standard)",
+        "Made in Taiwan stamping"
+      ],
+      "comp_ranges_usd": [
+        {"item": "NH-D15 / D15 chromax.black flagship", "low": 100, "high": 180},
+        {"item": "NF-A12x25 single fan", "low": 30, "high": 50},
+        {"item": "NF-A14 single fan", "low": 32, "high": 55},
+        {"item": "NH-U12A premium tower", "low": 90, "high": 160}
+      ],
+      "target_buy_usd": {"low": 5, "high": 80},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "noctua {model}",
+      "ship_class": "small_box",
+      "notes": "Noctua holds value better than ANY other PC component — the brown/cream color is iconic and the NF-A12x25 fan IS the industry-reference 120mm. chromax.black variants are limited stock and trade close to MSRP even years after release.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Thermalright",
+      "category": "cooler",
+      "tier": 2,
+      "models": [
+        "Peerless Assassin 120", "Peerless Assassin 120 SE",
+        "Phantom Spirit 120", "Phantom Spirit 120 SE",
+        "Frost Commander 140", "Frost Spirit 140",
+        "Le Grand Macho", "True Spirit 140", "Silver Arrow"
+      ],
+      "era_markers": [
+        "Thermalright branding (Taiwan)",
+        "SE suffix = Special Edition (premium variant)",
+        "Original packaging with mounting hardware accessories",
+        "Le Grand Macho = legacy cult favorite"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Peerless / Phantom flagship", "low": 50, "high": 110},
+        {"item": "Le Grand Macho RT", "low": 70, "high": 150},
+        {"item": "Frost Commander 140", "low": 60, "high": 120}
+      ],
+      "target_buy_usd": {"low": 3, "high": 50},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "thermalright {model}",
+      "ship_class": "small_box",
+      "notes": "Peerless Assassin 120 is the budget-king dual-tower air cooler — disrupted Noctua's price tier. Quietly excellent value. Le Grand Macho has a vintage-cooler cult following.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Arctic Cooling",
+      "category": "cooler",
+      "tier": 2,
+      "models": [
+        "Liquid Freezer II", "Liquid Freezer III",
+        "Freezer 34 eSports", "Freezer 36",
+        "Freezer 7 X", "BioniX P120 / F120",
+        "P12 PWM PST", "P14 PWM PST"
+      ],
+      "era_markers": [
+        "Arctic branding (Switzerland-designed, Taiwan-made)",
+        "Liquid Freezer II/III = AIO water cooler line",
+        "Freezer 34/36 eSports = air cooler line",
+        "P12/P14 fans are popular with budget builders"
+      ],
+      "comp_ranges_usd": [
+        {"item": "Liquid Freezer III 360/420mm", "low": 100, "high": 200},
+        {"item": "Liquid Freezer II 280/360", "low": 90, "high": 160},
+        {"item": "Freezer 36 air cooler", "low": 35, "high": 60}
+      ],
+      "target_buy_usd": {"low": 3, "high": 40},
+      "platform_primary": "eBay",
+      "platform_secondary": null,
+      "comp_query_template": "arctic {model}",
+      "ship_class": "small_box",
+      "notes": "Arctic Liquid Freezer III is the consensus budget AIO champion — punches up at Corsair / NZXT pricing. P12/P14 fans are mass-market favorites. Don't confuse with Arctic Silver thermal paste."
+    }
+  ],
+  "platform_notes": {
+    "eBay": "Dominant marketplace for PC parts — buyers search by exact model number and convert at high rates. Use sold-listings filter (LH_Sold=1&LH_Complete=1) for accurate comps.",
+    "r/hardwareswap (Reddit)": "Active community for clean used parts — verify with seller's flair / comment history. Not a place to ship stock from but useful for sanity-checking comps.",
+    "Newegg / Best Buy refurb": "These set the floor for refurbished prices. eBay used sells at 70-85% of refurb MSRP."
+  }
+}
