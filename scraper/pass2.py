@@ -8,6 +8,7 @@ import pandas as pd
 
 from .config_loader import load_config
 from .pricecharting import classify_for_pricecharting
+from .auth_check import detect_fashion_jewelry
 
 # Re-check pickup-only language at audit time in case the auction was loaded
 # from cache (where logistics_ease was computed with an older, narrower regex).
@@ -534,6 +535,7 @@ class Phase2Scraper:
         hard_count = 0
         collectible_count = 0
         empty_count = 0
+        fashion_jewelry_count = 0
 
         for i, (t, d, thumb, log) in enumerate(
             zip(titles, descs, thumbs, logistics)
@@ -544,6 +546,17 @@ class Phase2Scraper:
             is_hard = (log == 'HARD') or pickup_only_in_desc
             is_collectible = (
                 not is_hard and bool(classify_for_pricecharting(t))
+            )
+            # Fashion-jewelry detector — Chinese drop-ship costume
+            # jewelry laundered through US auction houses (Property 1
+            # Vegas LLC etc.). Pattern matches "GRA cert", "diamond
+            # moissanite", "gold over silver", "925 + diamond/sapphire",
+            # "adjustable size 6-10", etc. — see auth_check.py for the
+            # full list. Triggered lots get red-flagged here, never
+            # reach AI audit, never reach comps.
+            jewelry_match = (
+                None if (is_hard or is_collectible)
+                else detect_fashion_jewelry(t, d)
             )
             if is_hard:
                 verdicts[i] = "Unshippable (HARD logistics)"
@@ -562,6 +575,15 @@ class Phase2Scraper:
                 sources[i] = "skip_collectible"
                 skip_indices.add(i)
                 collectible_count += 1
+            elif jewelry_match is not None:
+                verdicts[i] = (
+                    f"Fashion jewelry: {jewelry_match}"
+                )
+                confidences[i] = 100.0
+                red_flags[i] = True
+                sources[i] = "fashion_jewelry"
+                skip_indices.add(i)
+                fashion_jewelry_count += 1
             elif (not d or len(d.strip()) < 10) and not thumb:
                 # Nothing to work with — no description, no image
                 verdicts[i] = "Unknown"
@@ -713,6 +735,7 @@ class Phase2Scraper:
         out.attrs['audit_skipped_hard'] = hard_count
         out.attrs['audit_skipped_collectible'] = collectible_count
         out.attrs['audit_skipped_empty'] = empty_count
+        out.attrs['audit_fashion_jewelry'] = fashion_jewelry_count
         out.attrs['audit_keyword_hits'] = keyword_hits
         out.attrs['audit_text_api_calls'] = text_api_count
         out.attrs['audit_image_api_calls'] = image_api_count

@@ -49,21 +49,33 @@ class AuctionCache:
 
     def save(self, auction_id, auction_name: str, df: pd.DataFrame,
              closing_date: str = "",
-             green_pct: Optional[float] = None,
-             green_count: Optional[int] = None,
+             a_count: Optional[int] = None,
+             b_count: Optional[int] = None,
              total_count: Optional[int] = None,
-             bolo_count: Optional[int] = None) -> None:
+             bolo_count: Optional[int] = None,
+             bids_per_lot: Optional[float] = None,
+             dropship_pct: Optional[float] = None) -> None:
         """Persist the analyzed DataFrame for this auction.
 
-        green_pct / green_count / total_count are computed by the caller
-        at save-time (when the full working df with est_roi is available)
-        and stored alongside the slim df so the sidebar auction list can
-        show "X% green" without rehydrating est_roi against fresh bids.
+        a_count / b_count / total_count are computed at save-time from
+        the buy_grade column (the composite "Should I buy?" score).
+        Sidebar reads these to show "5 A · 12 B" badges without
+        rehydrating each auction's full df.
+
+        Replaces the old green_pct / green_count fields that lived
+        here when the app had ROI/STR threshold sliders. Cached
+        analyses from before this rename will return None for these
+        fields — the sidebar gracefully shows no badge in that case
+        until the user re-analyzes the auction.
 
         bolo_count = number of lots in this auction whose title/desc
-        matched a brand on the BOLO list. Stored at save-time using
-        whatever BOLO file is current; sidebar reads this to show a
-        "🎯 N BOLO" badge per cached auction.
+        matched a brand on the BOLO list.
+
+        bids_per_lot = competitiveness proxy (sum(bid_count) / lot_count).
+        Used by the sidebar to show 🔥/🟡/🧊 indicators.
+
+        dropship_pct = % of lots whose titles match SEO-spam dropship
+        patterns. Above ~20% the sidebar shows a 🚨 badge.
         """
         if df is None or df.empty:
             return
@@ -77,10 +89,12 @@ class AuctionCache:
             "cached_at": datetime.now().isoformat(),
             "closing_date": closing_date,
             "df": slim,
-            "green_pct": green_pct,
-            "green_count": green_count,
+            "a_count": a_count,
+            "b_count": b_count,
             "total_count": total_count,
             "bolo_count": bolo_count,
+            "bids_per_lot": bids_per_lot,
+            "dropship_pct": dropship_pct,
         }
         with open(self._path(auction_id), "wb") as f:
             pickle.dump(payload, f)
@@ -140,10 +154,29 @@ class AuctionCache:
 
     def purge_expired(self, ttl_days: int = 14) -> int:
         """Delete cache entries past their TTL or with a closed auction.
-        Returns count deleted."""
+        Returns count deleted.
+
+        Fast path: file mtime older than TTL → delete without
+        unpickling. Slow path (only files with mtime within TTL):
+        unpickle to check the auction's closing_date. Avoids
+        unpickling 30+ auction files on every session init.
+        """
+        import time
         count = 0
+        cutoff_mtime = time.time() - (ttl_days * 86400)
         for p in self.cache_dir.glob("*.pkl"):
             try:
+                # Fast path: file write was older than TTL → can't be
+                # within the cached_at TTL either (which is set at
+                # write time). Delete without reading.
+                stat = p.stat()
+                if stat.st_mtime < cutoff_mtime:
+                    p.unlink()
+                    count += 1
+                    continue
+                # Slow path: file is recent enough by mtime, but
+                # the auction's closing_date might still have passed.
+                # Need to read the payload to check.
                 with open(p, "rb") as f:
                     payload = pickle.load(f)
                 if not self.is_fresh(payload, ttl_days=ttl_days):
@@ -176,10 +209,12 @@ class AuctionCache:
                     "closing_date": payload.get("closing_date", ""),
                     "items": len(payload.get("df", pd.DataFrame())),
                     "fresh": self.is_fresh(payload, ttl_days=ttl_days),
-                    "green_pct": payload.get("green_pct"),
-                    "green_count": payload.get("green_count"),
+                    "a_count": payload.get("a_count"),
+                    "b_count": payload.get("b_count"),
                     "total_count": payload.get("total_count"),
                     "bolo_count": payload.get("bolo_count"),
+                    "bids_per_lot": payload.get("bids_per_lot"),
+                    "dropship_pct": payload.get("dropship_pct"),
                 })
             except Exception:
                 continue

@@ -80,6 +80,28 @@ _STYLIZED_REPLICA_PATTERNS: List[Tuple[str, re.Pattern]] = [
     ("non-authentic",   re.compile(r"\bnon[-\s]?authentic\b",  re.IGNORECASE)),
     ("not genuine",     re.compile(r"\bnot\s+genuine\b",       re.IGNORECASE)),
     ("authenticity not", re.compile(r"\bauthenticity\s+not\b", re.IGNORECASE)),
+    # Synthetic-stone disclosures — the canonical jewelry-replica
+    # signal. Auctioneers list "1ct pink diamond moissanite ring" and
+    # post a $850 estimate; eBay returns wide-spread comps that mix
+    # genuine-diamond and moissanite listings, pulling the median into
+    # the genuine-diamond zone. Flagging these as stylized prevents the
+    # comp pipeline from treating them as real-diamond comparables.
+    # Whole-word matching avoids false positives on "moissanite-style"
+    # or "lab" appearing in other contexts.
+    ("moissanite",      re.compile(r"\bmoissanite\b",          re.IGNORECASE)),
+    ("CZ",              re.compile(r"\bCZ\b",                  re.IGNORECASE)),
+    ("cubic zirconia",  re.compile(r"\bcubic\s+zirconi[ae]\b", re.IGNORECASE)),
+    ("lab-grown",       re.compile(r"\blab[-\s]?grown\b",      re.IGNORECASE)),
+    ("lab-created",     re.compile(r"\blab[-\s]?created\b",    re.IGNORECASE)),
+    ("lab diamond",     re.compile(r"\blab\s+diamond\b",       re.IGNORECASE)),
+    ("synthetic",       re.compile(r"\bsynthetic\b",           re.IGNORECASE)),
+    ("simulated",       re.compile(r"\bsimulated\s+(?:diamond|sapphire|ruby|emerald|pearl|stone)\b",
+                                   re.IGNORECASE)),
+    ("faux",            re.compile(r"\bfaux\b",                re.IGNORECASE)),
+    # White Sapphire is a common diamond stand-in in costume jewelry.
+    # Real diamond rings rarely advertise stones as "white sapphire";
+    # auctioneers using this language are flagging the synthetic.
+    ("white sapphire",  re.compile(r"\bwhite\s+sapphire\b",    re.IGNORECASE)),
 ]
 
 
@@ -127,6 +149,183 @@ def detect_stylized_replica(title: Optional[str],
         if pattern.search(haystack):
             return label
     return None
+
+
+# ---------------------------------------------------------------------
+# Fashion-jewelry detector — Chinese drop-shipped costume jewelry
+# laundered through US auction houses (Property 1 Vegas LLC, etc.).
+# Every pattern below is a near-zero-false-positive tell that the
+# lot is silver-plated lab-stone fashion jewelry being marketed as
+# something more valuable.
+#
+# Real precious-metal jewelry NEVER:
+#   - Sets diamonds/sapphires/emeralds in sterling silver (silver
+#     tarnishes; diamonds get 14k+ gold or platinum)
+#   - Comes with a "GRA Certificate" — GRA certifies moissanite, not
+#     diamond. Real diamonds get GIA, IGI, AGS, AGL.
+#   - Uses the phrase "Diamond Moissanite" — moissanite is not diamond.
+#   - Says "Plated in white gold" / "gold over 925 silver" — these
+#     describe silver-plated costume jewelry.
+#   - Uses "Adjustable size 6-10" — adjustable rings are made of soft
+#     costume metal that bends.
+#
+# Triggered lots get red-flagged at the audit stage with
+# audit_source='fashion_jewelry' — never reach AI audit, never reach
+# comps. Eliminates the entire class of "$1000 estimate, $25-90
+# realized, $30 actual resale" auction-house traps in one pass.
+# ---------------------------------------------------------------------
+_FASHION_JEWELRY_PATTERNS: List[Tuple[str, re.Pattern]] = [
+    # GRA = Gemological Research Association — certifies moissanite
+    # ONLY. Real diamonds get GIA, IGI, AGS, AGL. Seeing "GRA" near
+    # "certificate" or "diamond" or "moissanite" = lab moissanite.
+    ("GRA cert (moissanite)", re.compile(
+        r"\bGRA\b\s*(?:certificate|certified|cert\b|certif)",
+        re.IGNORECASE)),
+    # "Diamond Moissanite" — moissanite is NOT diamond. SEO spam from
+    # Chinese fashion-jewelry drop-shippers.
+    ("'diamond moissanite'", re.compile(
+        r"\bdiamond\s+moissanite\b", re.IGNORECASE)),
+    # "[Color] gold over 925 / sterling / silver" — silver plated.
+    ("gold-over-silver (plated)", re.compile(
+        r"\b(?:white|yellow|rose)\s+gold\s+over\s+"
+        r"(?:925|sterling|silver)\b",
+        re.IGNORECASE)),
+    # "Plated in [color] gold" — explicit gold plating.
+    ("gold plated", re.compile(
+        r"\bplated\s+in\s+(?:white\s+|yellow\s+|rose\s+)?gold\b",
+        re.IGNORECASE)),
+    # NOTE: "gold filled" and "gold overlay" patterns intentionally
+    # removed (after Estate Deceased 5/9 audit). They false-positive
+    # on legit antique vintage jewelry — antique 12K gold-filled chains
+    # ($40-150 resale), vintage gold-filled watches ($30-200), etc.
+    # The Chinese fashion-jewelry drop-shippers we're targeting say
+    # "plated in white gold" or "white gold over 925", never "gold
+    # filled" — so removing GF/GO patterns loses zero true positives.
+    # "Stamped S925" / "Stamped 925" with a precious-stone claim
+    # within ~80 chars — fashion stamping. Real jewelry is hallmarked,
+    # not "stamped."
+    ("stamped 925 + stone", re.compile(
+        r"\bstamped\s+s?\.?925\b[^.]{0,80}\b"
+        r"(?:diamond|sapphire|ruby|emerald|moissanite)\b",
+        re.IGNORECASE | re.DOTALL)),
+    # "Sterling silver" / "925 silver" + precious-stone claim within
+    # ~80 chars. Real diamonds, sapphires, etc. aren't set in silver.
+    # Bidirectional check (silver-then-stone OR stone-then-silver).
+    ("silver + precious stone", re.compile(
+        r"\b(?:925\s+silver|sterling\s+silver|s925)\b[^.]{0,80}\b"
+        r"(?:diamond|sapphire|ruby|emerald)\b",
+        re.IGNORECASE | re.DOTALL)),
+    ("precious stone + silver", re.compile(
+        r"\b(?:diamond|sapphire|ruby|emerald)\b[^.]{0,80}\b"
+        r"(?:925\s+silver|sterling\s+silver|s925)\b",
+        re.IGNORECASE | re.DOTALL)),
+    # "Adjustable size 6-10" / "size 6 to 10" — costume soft-metal ring.
+    # Real precious-metal rings are sized to one number.
+    ("adjustable ring", re.compile(
+        r"\badjustable\s+size\s+\d+\s*[\-to]+\s*\d+\b",
+        re.IGNORECASE)),
+    # "925 Sterling silver plated" / "Sterling silver plated" — Chinese
+    # dropship signature (DOTEFFIL etc.). Different from honest "silver
+    # plated" antique flatware because of the "925/sterling" prefix that
+    # tries to imply real silver content. Caught after Mystery Mega
+    # Auction 5/9 audit revealed 11 lots like "Hot 925 Sterling silver
+    # plated Photo Frame" slipping through the existing patterns.
+    ("silver-plated (dropship)", re.compile(
+        r"\b(?:925|sterling|s925)\s+silver\s+plated",
+        re.IGNORECASE)),
+    # Known Chinese dropship vendor brands. These are pure-fabricated
+    # SEO names that never appear on real jewelry. Cheap to add, near-
+    # zero false-positive risk because they're nonsense English.
+    ("dropship brand prefix", re.compile(
+        r"\b(?:DOTEFFIL|JIAYIQI|VRIUA|QIHE|MOSTYLE|EUQEE|RUIYUNS)\b",
+        re.IGNORECASE)),
+]
+
+
+def detect_fashion_jewelry(title: Optional[str],
+                           description: Optional[str] = None
+                           ) -> Optional[str]:
+    """Return the matched fashion-jewelry phrase or None.
+
+    Used by the audit pre-classify step to red-flag silver-plated
+    fashion jewelry (Chinese drop-ship channels — Property 1 Vegas
+    LLC and similar) before any AI / comp credits are spent.
+
+    Returns the FIRST matched label so the UI can surface what tripped
+    the flag (e.g. "fashion jewelry: GRA cert (moissanite)").
+    """
+    haystack = " ".join(filter(None, [title or "", description or ""]))
+    if not haystack:
+        return None
+    for label, pattern in _FASHION_JEWELRY_PATTERNS:
+        if pattern.search(haystack):
+            return label
+    return None
+
+
+# ---------------------------------------------------------------------
+# Drop-ship-channel signature — broader than fashion-jewelry detection.
+# Used at the AUCTION level to flag whole auctions whose lots are
+# overwhelmingly Chinese SEO-spam product (DOTEFFIL silver-plated
+# jewelry, hot-compress towels, eye masks, acrylic mirror stickers,
+# etc.). When >30% of lots match, the auction gets a 🚨 dropship badge
+# in the sidebar so the user can skip without analyzing.
+#
+# Each pattern below is an INDEPENDENT signal — a lot only needs ONE
+# hit to count toward the auction-level percentage. The patterns are
+# cheap regex; no per-lot iteration cost beyond the existing audit
+# loop. Maintained as a separate set from fashion-jewelry because
+# these patterns are non-jewelry-specific (towels, mats, gadgets).
+# ---------------------------------------------------------------------
+_DROPSHIP_LOT_PATTERNS = [
+    # Marketing-adjective leads at start-of-title. "Hot 925", "Hot Sale",
+    # "Wholesale", etc. — real auctions don't open this way. Trailing
+    # `\d+\b` (not just `\d\b`) because "Hot 925" must match the FULL
+    # number — `\b` between digits doesn't exist.
+    re.compile(
+        r"^\s*(?:Hot\s+(?:Sale|Selling|Compress|\d+)|"
+        r"Fashion\s+Hot|Wholesale|Premium\s+Quality|Brand\s+New)\b",
+        re.IGNORECASE),
+    # Quantity-prefix titles ("60pcs Eye Mask", "5 Pairs Cat Lashes").
+    re.compile(
+        r"^\s*\d+\s*(?:pcs|pairs|sets|bag|box)\b",
+        re.IGNORECASE),
+    # Silver-plated product (catches auctioneer-style listings of the
+    # dropship-jewelry pattern). No trailing `\b` because the dropship
+    # CSVs frequently concatenate "plated" with the next word
+    # ("silver platedPhoto Frame"), which would otherwise miss.
+    re.compile(
+        r"\b(?:925|sterling|s925)\s+silver\s+plated",
+        re.IGNORECASE),
+    # Common dropship product types. Bath(room) Mat handles both the
+    # "Bath Mat" and the more common "Bathroom Mat" wording.
+    re.compile(
+        r"\b(?:Cat\s+Eye\s+Lashes|Faux\s+Lashes|Eye\s+Mask\s+Anti|"
+        r"Hot\s+compress|Acrylic\s+Mirror\s+(?:Wall\s+)?Sticker|"
+        r"Bath(?:room)?\s+Mat\s+(?:Cobblestone|Embossed)|"
+        r"Refrigerator\s+Liner\s+Mat|"
+        r"Aloe\s+Vera\s+Collagen|EVA\s+Waterproof)\b",
+        re.IGNORECASE),
+    # Made-up Chinese vendor brands.
+    re.compile(
+        r"\b(?:DOTEFFIL|JIAYIQI|VRIUA|QIHE|MOSTYLE|EUQEE|RUIYUNS)\b",
+        re.IGNORECASE),
+]
+
+
+def is_dropship_lot(title: Optional[str]) -> bool:
+    """True when a lot's title carries any drop-ship-channel signature.
+
+    Run this against every lot title; aggregate the True-rate per
+    auction to get a `dropship_pct`. Above ~30% the auction is almost
+    certainly a Chinese SEO-spam dumping ground.
+    """
+    if not title:
+        return False
+    for pattern in _DROPSHIP_LOT_PATTERNS:
+        if pattern.search(title):
+            return True
+    return False
 
 
 # ---------------------------------------------------------------------

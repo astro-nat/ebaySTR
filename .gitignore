@@ -28,3 +28,5 @@ exports/
 
 # Auction analysis cache (persistent memory across sessions)
 .cache/
+# Python virtual env (never commit)
+.venv/

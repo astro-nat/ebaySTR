@@ -5,7 +5,62 @@ import re
 import json
 import os
 from datetime import datetime, timedelta, timezone
-from typing import List, Dict
+from typing import List, Dict, Optional
+
+
+# HiBid lot.lotState.timeLeft strings look like:
+#   "2d 5h 30m"  /  "5h 30m"  /  "30m 12s"  /  "Bidding Closed"
+# Compact regex: capture an optional integer + a unit letter for each
+# of d/h/m/s. Missing units default to 0. Returns a timedelta or None.
+_TIMELEFT_RE = re.compile(
+    r'(?:(?P<d>\d+)\s*d)?\s*(?:(?P<h>\d+)\s*h)?\s*'
+    r'(?:(?P<m>\d+)\s*m)?\s*(?:(?P<s>\d+)\s*s)?',
+    re.IGNORECASE,
+)
+
+
+def _parse_time_left(time_left: str) -> Optional[timedelta]:
+    """Parse a HiBid timeLeft string into a timedelta.
+
+    Returns None for closed/empty/unparseable strings. Used as a
+    fallback closing-time signal when the auction's eventDateEnd is
+    missing — every individual lot still carries `timeLeft` and we
+    can derive an auction-level closing time from the first lot.
+    """
+    if not time_left or not isinstance(time_left, str):
+        return None
+    s = time_left.strip().lower()
+    if not s or 'closed' in s:
+        return None
+    m = _TIMELEFT_RE.fullmatch(s)
+    if not m:
+        return None
+    parts = m.groupdict()
+    if not any(parts.values()):
+        return None
+    return timedelta(
+        days=int(parts['d'] or 0),
+        hours=int(parts['h'] or 0),
+        minutes=int(parts['m'] or 0),
+        seconds=int(parts['s'] or 0),
+    )
+
+
+def _derive_auction_closing_from_lots(lots: List[Dict]) -> Optional[datetime]:
+    """Compute an auction-level closing datetime from its lots.
+
+    Returns the FIRST lot's closing time (lots in HiBid auctions
+    typically close in lot-number order, with subsequent lots
+    spaced 10-30 seconds apart). Falls back to scanning subsequent
+    lots if the first lot's `time_left` doesn't parse. Returns
+    None if no lot in the auction has a parseable timeLeft.
+    """
+    now = datetime.now()
+    for lot in lots:
+        delta = _parse_time_left(lot.get('time_left') or lot.get('timeLeft', ''))
+        if delta is not None:
+            return now + delta
+    return None
 
 AUCTION_MAP_QUERY = """
 query AuctionMap($zip: String, $miles: Int, $searchText: String, $categoryId: CategoryId, $filter: AuctionLotFilter, $status: AuctionLotStatus, $eventIds: [Int!] = null) {
@@ -262,18 +317,90 @@ class Phase1Scraper:
         cutoff = now + timedelta(days=self.closing_within_days)
         filtered = []
         for a in auctions:
-            date_end = a.get('date_end', '')
-            if not date_end:
-                filtered.append(a)  # Keep auctions with no end date (can't filter)
+            end_dt = self._resolve_auction_end(a, now=now)
+            if end_dt is None:
+                # Couldn't resolve a closing time from any field —
+                # keep the auction (err on inclusion). The downstream
+                # lot-fetch step recomputes closing time from the
+                # first lot's `timeLeft` and writes it back.
+                filtered.append(a)
                 continue
-            try:
-                # HiBid returns naive datetimes like "2026-04-16T00:00:00"
-                end_dt = datetime.fromisoformat(date_end.replace('Z', ''))
-                if now <= end_dt <= cutoff:
-                    filtered.append(a)
-            except (ValueError, TypeError):
-                filtered.append(a)  # Keep if we can't parse the date
+            if now <= end_dt <= cutoff:
+                filtered.append(a)
         return filtered
+
+    @staticmethod
+    def _resolve_auction_end(a: Dict, now: Optional[datetime] = None) -> Optional[datetime]:
+        """Resolve an auction-level closing datetime from available fields.
+
+        Tries in order:
+          1. `date_end` parsed as ISO (HiBid's `eventDateEnd`)
+          2. `date_info` free-text scanned for date-like patterns
+             ("Closes Wed May 6 7:00 PM", "Ends 5/6/2026", etc.)
+
+        Lot-level `timeLeft` fallback can't fire here because the
+        candidate-discovery step doesn't fetch lots. That fallback
+        runs in `_fetch_lots_for_auction` after lots arrive.
+        """
+        date_end = a.get('date_end') or ''
+        if date_end:
+            try:
+                return datetime.fromisoformat(date_end.replace('Z', ''))
+            except (ValueError, TypeError):
+                pass
+
+        date_info = (a.get('date_info') or '').strip()
+        if not date_info:
+            return None
+
+        # Strip leading prepositions/verbs to leave a date-shaped tail.
+        # HiBid date_info commonly looks like:
+        #   "Closes Wed May 6, 2026 7:00 PM CDT"
+        #   "Bidding ends May 6 at 7:00 PM"
+        #   "Begins May 1 — Ends May 6"
+        # We pluck out the part after "ends"/"closes" if present.
+        s = date_info
+        m = re.search(r'(?:ends|closes)[:\s]+(.+)$', s, re.IGNORECASE)
+        if m:
+            s = m.group(1).strip()
+
+        # Try a handful of common formats. Year defaults to current
+        # year if missing — this is risky around year-end but matches
+        # how a human reads "Closes Jan 4" in late December.
+        ref_year = (now or datetime.now()).year
+        formats = [
+            "%a %b %d, %Y %I:%M %p %Z",  # "Wed May 6, 2026 7:00 PM CDT"
+            "%a %b %d, %Y %I:%M %p",     # "Wed May 6, 2026 7:00 PM"
+            "%b %d, %Y %I:%M %p",        # "May 6, 2026 7:00 PM"
+            "%b %d, %Y",                 # "May 6, 2026"
+            "%b %d %I:%M %p",            # "May 6 7:00 PM"  (no year)
+            "%b %d",                     # "May 6"          (no year)
+            "%m/%d/%Y %I:%M %p",         # "5/6/2026 7:00 PM"
+            "%m/%d/%Y",                  # "5/6/2026"
+            "%m/%d %I:%M %p",            # "5/6 7:00 PM"    (no year)
+            "%m/%d",                     # "5/6"            (no year)
+        ]
+        # Strip filler words ("at"), then strip trailing timezone
+        # abbreviations the strptime parser can't handle (CDT, EST,
+        # PST, etc.). EXCLUDE AM/PM from the strip — those are part
+        # of the time format, not a timezone, and an earlier version
+        # of this code ate them and broke 7:00 PM parsing.
+        cleaned = re.sub(r'\s+at\s+', ' ', s, flags=re.IGNORECASE)
+        cleaned = re.sub(
+            r'\s+(?!(?:AM|PM)\b)(?:[A-Z]{2,4})\s*$',
+            '',
+            cleaned,
+        ).strip()
+        for fmt in formats:
+            try:
+                parsed = datetime.strptime(cleaned, fmt)
+                # Backfill year if format omitted it.
+                if '%Y' not in fmt:
+                    parsed = parsed.replace(year=ref_year)
+                return parsed
+            except (ValueError, TypeError):
+                continue
+        return None
 
     async def _fetch_all_lot_pages(self, client: httpx.AsyncClient, auction_id: int) -> List[Dict]:
         """Fetch every lot in an auction.
@@ -353,10 +480,31 @@ class Phase1Scraper:
             lots = await self._fetch_all_lot_pages(client, auction_id)
             result["raw_count"] = len(lots)
 
-            try:
-                closing_fmt = datetime.fromisoformat(date_end).strftime("%b %d") if date_end else ""
-            except (ValueError, TypeError):
-                closing_fmt = date_end
+            # Compute closing_fmt for the auction. Primary source: the
+            # `date_end` we already had from auctionMap discovery. When
+            # that's missing (some HiBid responses omit eventDateEnd
+            # for in-progress timed auctions), fall back to deriving it
+            # from the first lot's `lotState.timeLeft` — every lot
+            # carries a "Nd Nh Nm" countdown that resolves to a real
+            # closing datetime relative to now. Lots within an auction
+            # close sequentially in lot-number order, so the first
+            # lot's countdown is the earliest auction-level closing.
+            closing_fmt = ""
+            if date_end:
+                try:
+                    closing_fmt = datetime.fromisoformat(
+                        date_end.replace('Z', '')
+                    ).strftime("%b %d")
+                except (ValueError, TypeError):
+                    closing_fmt = date_end
+            else:
+                # Fallback: derive from first lot's timeLeft. Walks
+                # the lot list looking for the first parseable
+                # countdown. Returns None if every lot is closed/
+                # missing — leaves closing_fmt blank in that case.
+                derived = _derive_auction_closing_from_lots(lots)
+                if derived is not None:
+                    closing_fmt = derived.strftime("%b %d")
 
             cat_keywords = [c.strip().lower() for c in (self.category_filter or []) if c and c.strip()]
 
@@ -768,10 +916,14 @@ class Phase1Scraper:
 
         async with httpx.AsyncClient() as client:
             if local_auctions:
+                # Phase label gets joined with "{label} — {current}/{total}
+                # auctions fetched" downstream, so keep the label compact
+                # and human-readable. e.g. "Local-pickup phase (9 auctions)".
                 local_label = (
-                    f"Local pickup ({len(local_auctions)})"
+                    f"Local-pickup phase ({len(local_auctions)} auctions)"
                     if not remote_auctions
-                    else f"Local pickup ({len(local_auctions)} of {grand_total})"
+                    else f"Local-pickup phase "
+                         f"({len(local_auctions)} of {grand_total} are pickup-only)"
                 )
                 r = await self._fetch_lots_batch(
                     client, local_auctions, "Local Pickup",
@@ -785,7 +937,11 @@ class Phase1Scraper:
                 errors.extend(r["errors"])
 
             if remote_auctions:
-                nationwide_label = f"Nationwide ({len(remote_auctions)} of {grand_total})"
+                # e.g. "Nationwide-shipping phase (993 of 1002 are shippable)"
+                nationwide_label = (
+                    f"Nationwide-shipping phase "
+                    f"({len(remote_auctions)} of {grand_total} are shippable)"
+                )
                 r = await self._fetch_lots_batch(
                     client, remote_auctions, "Ship",
                     progress_callback=progress_callback,

@@ -167,7 +167,20 @@
       "platform_secondary": "Swappa",
       "comp_query_template": "iphone {model} {storage} unlocked",
       "ship_class": "small_box",
-      "notes": "Activation Lock kills resale — verify the seller has signed out of iCloud BEFORE bidding. Carrier-locked iPhones sell at 30-50% discount vs unlocked equivalents. Pro / Pro Max command 1.5-2x base model premium.",
+      "_disqualifiers": [
+        "wireless microphone", "wireless mic",
+        "lavalier microphone", "lavalier mic",
+        "lapel microphone", "lapel mic",
+        "lark a1", "lark m2", "lark c1", "lark m1",
+        "microphone for iphone", "mic for iphone",
+        "lightning kit for iphone", "compatible with iphone",
+        "for iphone 15/16",
+        "phone case", "iphone case", "case for iphone",
+        "screen protector", "tempered glass",
+        "iphone charger", "lightning cable",
+        "iphone power bank", "iphone stand"
+      ],
+      "notes": "Activation Lock kills resale — verify the seller has signed out of iCloud BEFORE bidding. Carrier-locked iPhones sell at 30-50% discount vs unlocked equivalents. Pro / Pro Max command 1.5-2x base model premium. Disqualifiers reject iPhone-compatible accessories (microphones, cases, chargers) — same iPhone model number in the title but different domain.",
       "condition_critical": true
     },
     {

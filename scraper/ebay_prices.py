@@ -11,21 +11,52 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
 
 
+# Title-specificity markers — when present in a lot title, single-comp
+# catalog matches (PriceCharting / GoCollect, count=1) are usually
+# trustworthy because the title carries enough info to disambiguate the
+# match. When ABSENT, single-comp catalog matches can drift catastrophic-
+# ally — see the Pokemon dropship audit (5 lots matched the 1999 Base
+# Set Booster Box catalog at $10,736 each because their generic
+# "1 Box Pokémon Cards English – Surprise Gift Box" titles got mapped
+# to the actual Base Set product). Specificity gating preserves
+# legitimate matches like "X-Men #281 Jim Lee Auto" while caging the
+# generic dropship pattern.
+_TITLE_SPECIFICITY_MARKERS = (
+    re.compile(r"#\d+", re.IGNORECASE),                   # issue/lot number
+    re.compile(r"\b(?:CGC|PSA|BGS|SGC|CBCS|ANACS)\b", re.IGNORECASE),
+    re.compile(r"\b1st\s+edition\b", re.IGNORECASE),
+    re.compile(r"\b(?:base|jungle|fossil|gym|neo|EX|XY|"
+               r"sun\s+&\s+moon|sword\s+&\s+shield|"
+               r"scarlet\s+&\s+violet)\s+set\b", re.IGNORECASE),
+    re.compile(r"\b(?:19|20)\d{2}\b"),                    # 4-digit year
+    re.compile(r"\b(?:autograph(?:ed)?|signed|auto)\b", re.IGNORECASE),
+    re.compile(r"\bsealed\b", re.IGNORECASE),
+)
+
+
+def _has_title_specificity(title: str) -> bool:
+    """True when the title carries an identifier that disambiguates a
+    single-comp catalog match (issue#, grading code, set name, year,
+    autograph/sealed callout)."""
+    if not title:
+        return False
+    return any(p.search(title) for p in _TITLE_SPECIFICITY_MARKERS)
+
+
 class EbayPriceLookup:
-    # Class-level scrape stats. Updated by _scrape_ebay_sold_prices and
-    # _scrape_mercari_sold_prices on every call. Read by the UI after a
-    # comp run finishes so the user can see when the scraper is being
-    # blocked (eBay returns HTTP 403 for almost every request from a
-    # non-residential IP). Without this, the silent fall-through to the
-    # eBay-Browse-API "active listings" path looks like normal data when
-    # in fact the entire sold-history pipeline is dead.
+    # Class-level scrape stats. Updated by _scrape_ebay_sold_prices on
+    # every call. Read by the UI after a comp run finishes so the user
+    # can see when the scraper is being blocked (eBay returns HTTP 403
+    # for almost every request from a non-residential IP). Without
+    # this, the silent fall-through to the eBay-Browse-API "active
+    # listings" path looks like normal data when in fact the entire
+    # sold-history pipeline is dead.
+    # NOTE: Mercari integration was removed; counters retained only
+    # for eBay/ScrapingBee.
     _scrape_stats = {
         'ebay_sold_attempts': 0,
         'ebay_sold_blocked': 0,
         'ebay_sold_success': 0,
-        'mercari_attempts': 0,
-        'mercari_blocked': 0,
-        'mercari_success': 0,
         # ScrapingBee usage tracking — surface in the UI so the user
         # knows how many credits a comp run burned.
         'scrapingbee_calls': 0,
@@ -53,36 +84,34 @@ class EbayPriceLookup:
                  scrapingbee_key: Optional[str] = None,
                  gocollect=None,
                  mercari_enabled: bool = False):
-        """eBay/Mercari price lookup, optionally augmented with PriceCharting.
+        """eBay-only price lookup, optionally augmented with PriceCharting.
 
         Args:
             app_id, cert_id: eBay developer credentials.
             pricecharting: Optional PriceChartingLookup instance. When set,
                 lots whose titles classify as games / cards / comics get a
-                PriceCharting lookup BEFORE the eBay/Mercari scrape. PC's
+                PriceCharting lookup BEFORE the eBay scrape. PC's
                 aggregated sold data is materially better for these niches.
                 Pass None (or omit) to disable.
             scrapingbee_key: Optional ScrapingBee API key. When set, the
-                eBay-sold and Mercari-sold scrapes route through their
-                rotating-residential-proxy API (~10 credits each) instead
-                of direct httpx.get. Direct requests get 403'd from most
+                eBay-sold scrape routes through their rotating-
+                residential-proxy API (~10 credits each) instead of
+                direct httpx.get. Direct requests get 403'd from most
                 non-residential IPs, so without this key the sold-history
                 pipeline is effectively dead and prices fall through to
                 eBay's Browse-API active listings. None disables proxying
                 — direct request, current behavior preserved.
-            mercari_enabled: Default False. Mercari's scraper has had a
-                0% success rate across 7,700+ lookups in production —
-                their JSON shape probably changed and/or they're
-                blocking ScrapingBee proxies hard. Every Mercari call
-                still costs ~25 ScrapingBee credits even when it returns
-                nothing. Defaults OFF; the user can flip on if Mercari
-                ever recovers (or to retest periodically).
+            mercari_enabled: Deprecated/no-op. Mercari integration has
+                been removed; this parameter is retained only for
+                signature compatibility with existing call sites.
         """
         self.app_id = app_id
         self.cert_id = cert_id
         self.pricecharting = pricecharting
         self.scrapingbee_key = scrapingbee_key
-        self.mercari_enabled = bool(mercari_enabled)
+        # Mercari integration removed; flag retained as no-op for
+        # backward compatibility with existing call sites.
+        self.mercari_enabled = False
         # GoCollect: curated CGC/BGS-graded comic prices. Tried FIRST
         # for graded comic lots — its grade-specific data outperforms
         # both PriceCharting (which matches at the series level, not
@@ -217,8 +246,8 @@ class EbayPriceLookup:
 
         Returns the response object (or None on transport failure).
         ScrapingBee charges ~10 credits per request with premium proxy
-        (which is what eBay/Mercari require) — that's ~10,000 lookups
-        per 100k-credit Freelance plan. Without a key this falls back
+        (which is what eBay requires) — that's ~10,000 lookups per
+        100k-credit Freelance plan. Without a key this falls back
         to the direct httpx.get path that eBay tends to 403.
         """
         if self.scrapingbee_key:
@@ -245,9 +274,9 @@ class EbayPriceLookup:
                 type(self)._scrape_stats['scrapingbee_calls'] += 1
                 type(self)._scrape_stats['scrapingbee_credits'] += cost
                 # Detect ScrapingBee-side failures separately from
-                # downstream eBay/Mercari blocks so the UI can show a
-                # targeted error: 401 = bad key OR plan exhausted; 402
-                # is sometimes used for billing failures.
+                # downstream eBay blocks so the UI can show a targeted
+                # error: 401 = bad key OR plan exhausted; 402 is
+                # sometimes used for billing failures.
                 if resp.status_code in (401, 402):
                     body_lower = (resp.text or '').lower()[:200]
                     if 'limit reached' in body_lower or 'quota' in body_lower:
@@ -361,104 +390,10 @@ class EbayPriceLookup:
         except Exception:
             return []
 
-    def _scrape_mercari_sold_prices(self, query: str, max_prices: int = 30) -> list:
-        """Scrape sold prices from Mercari search results.
-
-        Mercari's search page renders a Next.js app with initial state JSON
-        embedded in a __NEXT_DATA__ script tag. We parse that JSON and extract
-        sold item prices.
-
-        Returns a list of sold prices (float). Empty list if scraping fails.
-        """
-        type(self)._scrape_stats['mercari_attempts'] += 1
-        params = {
-            "keyword": query,
-            "itemStatuses": "ITEM_STATUS_SOLD_OUT",
-        }
-        try:
-            resp = self._proxied_get(
-                "https://www.mercari.com/search/",
-                params=params,
-                timeout=30,
-            )
-            if resp is None:
-                return []
-            # 403 / 429 = anti-bot block; track separately from "no results".
-            if resp.status_code in (403, 429) or len(resp.text) < 500:
-                type(self)._scrape_stats['mercari_blocked'] += 1
-                return []
-            if resp.status_code != 200 or len(resp.text) < 1000:
-                return []
-
-            html = resp.text
-            prices = []
-
-            # 1. Try __NEXT_DATA__ JSON blob (Mercari uses Next.js)
-            next_data_match = re.search(
-                r'<script[^>]*id="__NEXT_DATA__"[^>]*>({.*?})</script>',
-                html,
-                flags=re.DOTALL,
-            )
-            if next_data_match:
-                try:
-                    data = json.loads(next_data_match.group(1))
-                    # Walk the JSON tree looking for items with numeric 'price'
-                    prices = self._extract_mercari_prices(data, max_prices)
-                except (json.JSONDecodeError, ValueError):
-                    prices = []
-
-            # 2. Fallback: regex for prices in specific Mercari markup
-            if not prices:
-                # Mercari inline prices: "price":"1234" (cents) or "price":12.34
-                for m in re.finditer(r'"price":\s*"?(\d+(?:\.\d+)?)"?', html):
-                    try:
-                        raw = float(m.group(1))
-                        # Mercari sometimes stores price in cents — heuristic normalize
-                        p = raw / 100 if raw > 1000 else raw
-                        if 0.99 < p < 50000:
-                            prices.append(round(p, 2))
-                    except ValueError:
-                        pass
-                    if len(prices) >= max_prices:
-                        break
-
-            if prices:
-                type(self)._scrape_stats['mercari_success'] += 1
-            return prices[:max_prices]
-        except Exception:
-            return []
-
-    def _extract_mercari_prices(self, node, max_prices: int, found=None) -> list:
-        """Recursively walk Mercari's JSON tree collecting item prices."""
-        if found is None:
-            found = []
-        if len(found) >= max_prices:
-            return found
-
-        if isinstance(node, dict):
-            # Mercari items have 'price' and 'status' fields
-            # status is typically 'ITEM_STATUS_SOLD_OUT' for sold items
-            if 'price' in node:
-                price_val = node.get('price')
-                status = node.get('status', '')
-                # Accept if explicitly sold or if we don't know status (already filtered URL)
-                if status in ('ITEM_STATUS_SOLD_OUT', '', None) or 'SOLD' in str(status):
-                    try:
-                        p = float(price_val)
-                        if 0.99 < p < 50000:
-                            found.append(round(p, 2))
-                    except (TypeError, ValueError):
-                        pass
-            for v in node.values():
-                if len(found) >= max_prices:
-                    break
-                self._extract_mercari_prices(v, max_prices, found)
-        elif isinstance(node, list):
-            for v in node:
-                if len(found) >= max_prices:
-                    break
-                self._extract_mercari_prices(v, max_prices, found)
-        return found
+    # NOTE: Mercari sold-listings integration was removed. The previous
+    # _scrape_mercari_sold_prices and _extract_mercari_prices helpers
+    # have been deleted; the comp pipeline is now eBay-only (with
+    # PriceCharting / GoCollect tiers preserved).
 
     def _price_stats(self, prices: list) -> Optional[dict]:
         """Compute median, low (Q1), high (Q3) from a list of prices."""
@@ -484,7 +419,7 @@ class EbayPriceLookup:
 
     def lookup_price_range(self, title: str, limit: int = 8,
                            pc_only: bool = False) -> Optional[dict]:
-        """Look up combined resale price statistics from eBay + Mercari sold data.
+        """Look up resale price statistics from eBay sold data (eBay only).
 
         Uses progressive query shortening: we try the full cleaned title first
         (6 words), then fall back to 4 words and finally 3 words if no matches
@@ -493,8 +428,8 @@ class EbayPriceLookup:
         return hundreds. We stop as soon as we clear the ≥3 sold-comp bar.
 
         ``pc_only=True`` restricts the lookup to GoCollect + PriceCharting
-        (curated catalogs only) and skips the eBay + Mercari sold-listings
-        scrape entirely. Used for stylized/replica lots where eBay scraped
+        (curated catalogs only) and skips the eBay sold-listings scrape
+        entirely. Used for stylized/replica lots where eBay scraped
         comps would return authentic-brand contamination, but PC's
         catalog-keyed matching is safe — PC simply returns None for
         products it doesn't cover (handbags, jewelry, decorative
@@ -508,7 +443,8 @@ class EbayPriceLookup:
                 "count": int,           # Total comp count
                 "source": str,          # Combined source label
                 "ebay_count": int,      # eBay sold comps contributed
-                "mercari_count": int,   # Mercari sold comps contributed
+                "mercari_count": int,   # Always 0 (Mercari removed; key
+                                        # retained for app.py compat)
                 "query": str,           # The query variant that produced hits
             }
             or None if no data available.
@@ -540,9 +476,9 @@ class EbayPriceLookup:
             except Exception:
                 pass  # Don't let PC outages break the scan
 
-        # PC-only mode bails here: eBay/Mercari sold-comps would
-        # contaminate stylized/replica lookups with authentic-brand
-        # prices that don't apply.
+        # PC-only mode bails here: eBay sold-comps would contaminate
+        # stylized/replica lookups with authentic-brand prices that
+        # don't apply.
         if pc_only:
             return None
 
@@ -554,11 +490,10 @@ class EbayPriceLookup:
         # clear the ≥3-comp bar wins. Also remember the best "partial"
         # (1-2 comp) result in case nothing clears the bar — still better
         # than falling all the way through to active listings.
-        best_partial = None  # (combined, ebay, mercari, query)
+        best_partial = None  # (combined, ebay, query)
 
         for idx, query in enumerate(variants):
             ebay_prices = []
-            mercari_prices = []
             try:
                 time.sleep(0.3)
                 ebay_prices = self._scrape_ebay_sold_prices(query)
@@ -566,30 +501,13 @@ class EbayPriceLookup:
             except Exception:
                 ebay_prices = []
 
-            # Mercari is gated behind mercari_enabled because their
-            # scraper has had a 0% success rate in production — every
-            # call costs ~25 ScrapingBee credits and returns nothing.
-            # Default off; user can flip on if Mercari ever recovers.
-            if self.mercari_enabled:
-                try:
-                    time.sleep(0.3)
-                    mercari_prices = self._scrape_mercari_sold_prices(query)
-                    mercari_prices = self._filter_outliers(mercari_prices)
-                except Exception:
-                    mercari_prices = []
-
-            combined = ebay_prices + mercari_prices
+            combined = list(ebay_prices)
 
             if len(combined) >= 3:
                 combined = self._filter_outliers(combined)
                 stats = self._price_stats(combined)
                 if stats:
-                    if ebay_prices and mercari_prices:
-                        source = "sold (eBay+Mercari)"
-                    elif ebay_prices:
-                        source = "sold (eBay)"
-                    else:
-                        source = "sold (Mercari)"
+                    source = "sold (eBay)"
                     # Annotate source with the fallback level if we had to
                     # drop down — helps the user eyeball whether the comps
                     # were for the specific product vs a generic keyword.
@@ -600,20 +518,20 @@ class EbayPriceLookup:
                         "count": len(combined),
                         "source": source,
                         "ebay_count": len(ebay_prices),
-                        "mercari_count": len(mercari_prices),
+                        # Mercari integration removed; zero-out for app.py compat.
+                        "mercari_count": 0,
                         "query": query,
                     }
 
             # Remember the first variant that produced ANY comps so we can
             # surface at least a rough number if none hit the ≥3 bar.
             if combined and best_partial is None:
-                best_partial = (list(combined), list(ebay_prices),
-                                list(mercari_prices), query)
+                best_partial = (list(combined), list(ebay_prices), query)
 
         # All sold-comp variants failed to clear ≥3. Use the best partial
         # if we have one (1-2 comps) before falling back to active listings.
         if best_partial is not None:
-            combined, ebay_prices, mercari_prices, matched_q = best_partial
+            combined, ebay_prices, matched_q = best_partial
             stats = self._price_stats(combined)
             if stats:
                 return {
@@ -621,7 +539,8 @@ class EbayPriceLookup:
                     "count": len(combined),
                     "source": "sold (thin comps)",
                     "ebay_count": len(ebay_prices),
-                    "mercari_count": len(mercari_prices),
+                    # Mercari integration removed; zero-out for app.py compat.
+                    "mercari_count": 0,
                     "query": matched_q,
                 }
 
@@ -937,7 +856,7 @@ class EbayPriceLookup:
             callbacks fire only from the main thread.
           - The per-call `time.sleep(0.3)` inside lookup_price_range is kept
             as a per-worker throttle; with 8 workers that's ~8 req/sec,
-            which eBay/Mercari scraping tolerates well.
+            which eBay scraping tolerates well.
 
         Args:
             df: DataFrame with a 'title' column (or 'enriched_title')
@@ -974,10 +893,10 @@ class EbayPriceLookup:
         )
         # Per-row "PC only" flag — set by _apply_comps_filters when a lot
         # is stylized/replica. The lookup runs GoCollect + PriceCharting
-        # but skips eBay/Mercari, because authentic-brand sold-comps
-        # don't apply to a "Gucci style" lot. PC will return None when
-        # it doesn't cover the product (handbags, jewelry, etc.) — that's
-        # the safe outcome.
+        # but skips eBay, because authentic-brand sold-comps don't apply
+        # to a "Gucci style" lot. PC will return None when it doesn't
+        # cover the product (handbags, jewelry, etc.) — that's the safe
+        # outcome.
         pc_only_flags = (
             df['_pc_only_stylized'].fillna(False).astype(bool).tolist()
             if '_pc_only_stylized' in df.columns else [False] * total
@@ -1121,32 +1040,107 @@ class EbayPriceLookup:
                     else:
                         str_results[idx] = payload
 
-        # Unpack price_results into column lists
+        # Unpack price_results into column lists.
+        # NOTE: Mercari integration removed — mercari_counts is no
+        # longer accumulated per-row; the df['mercari_comps'] column
+        # is zero-filled below for app.py back-compat.
         medians, lows, highs, counts = [], [], [], []
-        ebay_counts, mercari_counts, pc_counts, gc_counts, price_sources = (
-            [], [], [], [], []
+        ebay_counts, pc_counts, gc_counts, price_sources = (
+            [], [], [], []
         )
-        for info in price_results:
+        variance_flags = []
+        for idx, info in enumerate(price_results):
             if info:
-                medians.append(info["median"])
-                lows.append(info["low"])
-                highs.append(info["high"])
-                counts.append(info["count"])
+                median = info["median"]
+                low = info["low"]
+                high = info["high"]
+                count = info["count"]
+                source = info["source"]
+                title = titles[idx] if idx < len(titles) else ""
+                # ---- Variance contamination guard ----
+                # Wide low/high spread (>3× Q3/Q1 ratio) on a population
+                # of ≥5 comps is the signature of variant contamination
+                # in eBay search results: the query "Funko Pop Batwing
+                # #500" pulls in the regular vinyl figure, Comic-Con
+                # exclusives, chase variants, sealed multi-lots, signed
+                # editions, etc. Median sits on the MIX, not on the
+                # actual lot — for the regular figure the user probably
+                # has, the comp lies high by 5-10×.
+                #
+                # Cap est_resale at 2.5 × the Q1 (low) so the resale
+                # estimate stays anchored to the cheaper end of the
+                # distribution where the regular product sits. Annotate
+                # the source string with a ⚠ marker so the warning is
+                # visible in the results table without a new column
+                # being required for display.
+                variance_flag = False
+                if (low and high and count and count >= 5
+                        and low > 0 and (high / low) > 3.0):
+                    variance_flag = True
+                    # Tier the cap by spread severity. A 3-5× spread is
+                    # mild contamination — the median is still mostly
+                    # right, just a little inflated. A 10×+ spread is
+                    # near-total contamination (variant + outlier
+                    # comps) and the median is essentially noise; the
+                    # honest floor is closer to Q1 itself. Funko Pop
+                    # Batwing #500 case: $24-$399 = 16.8× spread, real
+                    # eBay value $7-14, our prior 2.5×-low cap of $59
+                    # was still 5× too high.
+                    spread = high / low
+                    if spread > 10.0:
+                        cap_mult = 1.0
+                    elif spread > 5.0:
+                        cap_mult = 1.5
+                    else:
+                        cap_mult = 2.5
+                    cap = round(cap_mult * low, 2)
+                    if median is not None and median > cap:
+                        median = cap
+                        source = f"{source} ⚠ wide-spread (capped)"
+                    else:
+                        source = f"{source} ⚠ wide-spread"
+
+                # ---- Single-comp catalog match ceiling ----
+                # PriceCharting / GoCollect catalog matches return count=1
+                # by design (one product → one price). When the lot title
+                # is GENERIC enough that the catalog match probably mis-
+                # fired, the median can be wildly wrong (Pokemon dropship
+                # audit 5/3 — five "1 Box Pokémon Cards English – Surprise
+                # Gift Box" lots matched the 1999 Base Set Booster Box
+                # catalog at $10,736 each).
+                #
+                # Specificity gate: trust single-comp matches when the
+                # title contains an issue#, grading code, set name, year,
+                # autograph/sealed callout — these disambiguate the match.
+                # When NO specificity marker is present, cap est_resale at
+                # the catalog low (= same as median for single-comp) and
+                # re-route to a "generic-title single-comp" warning. The
+                # downstream manual_check flag will surface this.
+                if (count == 1 and median is not None and median > 100
+                        and not _has_title_specificity(title)):
+                    if low is not None and low < median:
+                        median = low
+                    source = f"{source} ⚠ generic-title single-comp"
+
+                medians.append(median)
+                lows.append(low)
+                highs.append(high)
+                counts.append(count)
                 ebay_counts.append(info.get("ebay_count", 0))
-                mercari_counts.append(info.get("mercari_count", 0))
                 pc_counts.append(info.get("pricecharting_count", 0))
                 gc_counts.append(info.get("gocollect_count", 0))
-                price_sources.append(info["source"])
+                price_sources.append(source)
+                variance_flags.append(variance_flag)
             else:
                 medians.append(None)
                 lows.append(None)
                 highs.append(None)
                 counts.append(0)
                 ebay_counts.append(0)
-                mercari_counts.append(0)
                 pc_counts.append(0)
                 gc_counts.append(0)
                 price_sources.append(None)
+                variance_flags.append(False)
 
         str_values = [s[0] for s in str_results]
         str_sources = [s[1] for s in str_results]
@@ -1156,10 +1150,13 @@ class EbayPriceLookup:
         df['price_high'] = highs
         df['comp_count'] = counts
         df['ebay_comps'] = ebay_counts
-        df['mercari_comps'] = mercari_counts
+        # Mercari integration removed; column kept zero-filled because
+        # app.py's _COMP_COLUMNS still references it downstream.
+        df['mercari_comps'] = [0] * len(df)
         df['pricecharting_comps'] = pc_counts
         df['gocollect_comps'] = gc_counts
         df['price_source'] = price_sources
+        df['comp_variance_flag'] = variance_flags
         df['ebay_str'] = str_values
         df['str_source'] = str_sources
         return df

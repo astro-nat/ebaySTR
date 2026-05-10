@@ -1,95 +1,295 @@
+# =============================================================================
+# Auction Intelligence Dashboard — Streamlit app entry point.
+#
+# File layout (search by these section markers to jump around):
+#   IMPORTS + CONSTANTS                  — top of file
+#   STATE MANAGEMENT                     — `# --- STATE MANAGEMENT ---`
+#   PERSISTENT DISCOVERY CACHE           — `# --- Persistent discovery-result cache ---`
+#   ASYNC WRAPPER + RUN HELPERS          — `# --- ASYNC WRAPPER ---`
+#   PAGE CONFIG + CSS                    — `# --- PAGE CONFIGURATION ---`
+#   AUDIT / IMAGE / COMP / FILTER FNS    — `def _run_ai_audit`, `def _run_ebay_comps`
+#                                          `def _apply_comps_filters`, etc.
+#   RENDER HELPERS                       — `def _render_results_table`,
+#                                          `def _render_live_status_panel`,
+#                                          `def _render_live_hibid_view`, etc.
+#   HEADER + STICKY BANNER               — `# --- MAIN DASHBOARD UI ---`
+#   AUTO-DISCOVER TRIGGER                — `# Auto-discover on first page load`
+#   PHASE WORK BLOCKS                    — `# WORK BLOCK: Phase 1a discovery`
+#                                          (1a / 1b / 2 / 3 / 4 / 5)
+#   ANALYSIS VIEW                        — `# ---- ANALYSIS VIEW`
+#   DEFAULT VIEW (no auction loaded)     — `# ---- DEFAULT VIEW`
+#
+# Companion modules in scraper/:
+#   bolo.py            — BOLO matcher with hot-reload + chunked match
+#   cache.py           — per-auction analyzed-DataFrame pickle cache
+#   comped_lots.py     — lot-level comp registry (.cache/comped_lots.json)
+#   my_bids.py         — bid tracker (.cache/my_bids.json)
+#   pass1.py           — HiBid GraphQL discovery + lot fetch
+#   pass2.py           — Anthropic-based audit (verdict / red_flag)
+#   ebay_prices.py     — eBay sold-listings comp scraper
+#   pricecharting.py   — curated TCG/video-game/comic prices (free)
+#   gocollect.py       — graded-comic prices (when API approved)
+#   vision_enrich.py   — Claude Vision title rewriter for vague lots
+#
+# Data files in data/*.json:
+#   13 BOLO category files (clothing, household_parts, watch_accessories,
+#   precious_metals, nostalgia_collectibles, vintage_video_games, etc.)
+# =============================================================================
 import streamlit as st # type: ignore
-import streamlit.components.v1 as components # type: ignore
 import numpy as np
 import pandas as pd
 import asyncio
 import os
 import pickle
 import re
+import sys
+import time as _time
 from datetime import datetime, timedelta
 from pathlib import Path
 
-# Plotly is optional — the BOLO live pie chart degrades to the
-# existing markdown brand-tally line if plotly isn't installed.
-try:
-    import plotly.express as px  # type: ignore
-    _HAS_PLOTLY = True
-except ImportError:
-    _HAS_PLOTLY = False
+
+# ---------------------------------------------------------------------
+# Terminal logging helper. Streamlit reruns the script on every user
+# interaction, so naive prints are noisy. `tlog()` writes a timestamped
+# tag-prefixed line straight to stderr (which Streamlit pipes to the
+# terminal where you ran `streamlit run`). Use it at PHASE TRANSITIONS
+# (start/end of discovery, fetch, audit, comps) — not inside hot loops.
+# ---------------------------------------------------------------------
+def tlog(tag: str, *parts) -> None:
+    """Print a timestamped log line to the terminal (stderr).
+
+    Examples:
+        tlog("DISCOVER", "Phase 1a starting", f"radius={radius}")
+        tlog("FETCH", f"got {len(df)} lots in {elapsed:.1f}s")
+    """
+    msg = " ".join(str(p) for p in parts)
+    ts = datetime.now().strftime("%H:%M:%S")
+    print(f"[{ts}] [{tag}] {msg}", file=sys.stderr, flush=True)
 
 
-def _build_brand_pie(brand_counts: dict, title: str = "BOLO matches by brand"):
-    """Build a Plotly pie chart for brand counts. Returns the figure or
-    None if plotly isn't available / no data. Top 12 slices + everything
-    else aggregated as 'Other' so the chart stays readable on auctions
-    with very long brand tails."""
-    if not _HAS_PLOTLY or not brand_counts:
-        return None
-    items = sorted(
-        brand_counts.items(), key=lambda kv: kv[1], reverse=True
-    )
+# Print one banner per Streamlit script run so the user can see how often
+# the rerun loop fires when interacting with widgets. Cheap (1 line, no
+# work) and useful for diagnosing "is it stuck" vs "is it working".
+tlog("RUN", f"Streamlit script run #{st.session_state.get('_run_count', 0) + 1}")
+st.session_state._run_count = st.session_state.get('_run_count', 0) + 1
+
+def _render_brand_bar_chart(brand_counts: dict, title: str = "BOLO matches by brand"):
+    """Render a brand-count bar chart using Streamlit's native st.bar_chart.
+
+    Replaces an earlier plotly.express pie chart — same data, smaller
+    dependency footprint, and faster page loads. Top 12 brands plus a
+    rolled-up 'Other' bucket so the chart stays readable on long-tail
+    scans.
+
+    Returns the brand→count dict that was rendered (caller may want to
+    use it for follow-up display); returns empty dict + does nothing if
+    `brand_counts` is empty.
+    """
+    if not brand_counts:
+        return {}
+    items = sorted(brand_counts.items(), key=lambda kv: kv[1], reverse=True)
     if len(items) > 12:
         head = items[:11]
         tail_total = sum(v for _, v in items[11:])
         head.append((f"Other ({len(items) - 11} brands)", tail_total))
         items = head
-    labels = [k for k, _ in items]
-    values = [v for _, v in items]
-    fig = px.pie(
-        names=labels, values=values, title=title, hole=0.4,
-    )
-    fig.update_traces(
-        textinfo="label+value",
-        textposition="outside",
-        hovertemplate="<b>%{label}</b><br>%{value} matches "
-                      "(%{percent})<extra></extra>",
-    )
-    fig.update_layout(
-        margin=dict(t=40, l=0, r=0, b=0),
-        height=380,
-        showlegend=True,
-        legend=dict(orientation="v", x=1.02, y=0.5),
-    )
-    return fig
+    if title:
+        st.caption(f"**{title}**")
+    chart_df = pd.DataFrame(
+        {'Brand': [k for k, _ in items],
+         'Matches': [v for _, v in items]}
+    ).set_index('Brand')
+    st.bar_chart(chart_df, height=300, horizontal=True)
+    return dict(items)
 
 # --- IMPORT MODULES ---
 from scraper import Phase1Scraper
-from scraper.cache import AuctionCache, merge_cached_analysis
+from scraper.cache import AuctionCache, merge_cached_analysis, CACHED_ANALYSIS_COLS
 from scraper.bolo import BoloMatcher
 from scraper.auth_check import (
     analyze_description as _auth_analyze_description,
     analyze_photo as _auth_analyze_photo,
     merge_results as _auth_merge_results,
     detect_stylized_replica as _detect_stylized_replica,
+    is_dropship_lot as _is_dropship_lot,
 )
+
+
+def _hibid_module():
+    """Lazy import of the HiBid live-bids module so cold start doesn't
+    pay for it until the user opens the My Bids popover."""
+    from scraper import hibid_account as _hibid_account
+    return _hibid_account
+
+
+def _lookup_est_resale_in_session(lot_id):
+    """Find est_resale for a lot_id in the current session's audit_results.
+
+    The Live HiBid stop signal can only fire on lots the user has
+    analyzed in the current session — anything else shows "❓ NO COMP"
+    and the user is prompted to run comps on the source auction.
+    """
+    if not lot_id:
+        return None
+    ar = st.session_state.get('audit_results')
+    if ar is None or 'lot_id' not in ar.columns or 'est_resale' not in ar.columns:
+        return None
+    matches = ar[ar['lot_id'].astype(str) == str(lot_id)]
+    if matches.empty:
+        return None
+    val = matches['est_resale'].iloc[0]
+    if pd.isna(val):
+        return None
+    return float(val)
 
 # Single shared cache instance; auto-creates the dir on first touch
 _AUCTION_CACHE = AuctionCache()
 
-# Single shared BOLO matcher. Hot-reloads from data/clothing_brand_bolo.json
-# whenever the file's mtime changes — the user can swap in a new quarterly
-# brand list without restarting Streamlit. The matcher is cheap (regex
-# patterns compiled once at load) so reading it per-row during render is fine.
-_BOLO_MATCHER = BoloMatcher()
+
+def _get_cached_auction_list_memo():
+    """Return a session-memoized list of every cached auction's metadata.
+
+    Shared by the 💾 Memory popover and the auction-picker — both
+    used to call ``_AUCTION_CACHE.list_all()`` separately, doing the
+    same disk-glob + pickle-unpack twice per render. This single memo
+    is keyed on the cache-dir mtime and always fetches with a 365-day
+    TTL (effectively unfiltered) so callers can derive their own
+    'fresh' buckets without invalidating each other.
+    """
+    try:
+        mtime = _AUCTION_CACHE.cache_dir.stat().st_mtime
+    except (OSError, AttributeError):
+        mtime = 0
+    memo = st.session_state.get('_auction_list_memo')
+    if memo is not None and memo.get('mtime') == mtime:
+        return memo['entries']
+    try:
+        entries = _AUCTION_CACHE.list_all(ttl_days=365)
+    except Exception:
+        entries = []
+    st.session_state._auction_list_memo = {
+        'mtime': mtime,
+        'entries': entries,
+    }
+    return entries
+
+# Single shared BOLO matcher. Hot-reloads from data/*.json whenever
+# any file's mtime changes — the user can drop in new quarterly
+# brand lists without restarting Streamlit.
+#
+# Wrapped in a lazy-load proxy because eager construction reads 15+
+# JSON files + compiles ~750 regex patterns (~1-2s of blocking work)
+# on every first Streamlit script run. The header, sticky banner,
+# auto-discover trigger, and Phase 1a/1b work blocks DON'T need the
+# matcher. Lazy-loading lets the "🔍 Discovering open auctions"
+# banner appear ~2 seconds sooner on first open. The first call to
+# any matcher attribute (typically the sidebar's BOLO-only filter
+# label rendering its brand_count) triggers the actual load.
+@st.cache_resource(show_spinner=False)
+def _build_bolo_matcher():
+    """Construct (or return the cached) BoloMatcher singleton.
+
+    `@st.cache_resource` survives Streamlit reruns — without it, the
+    module-level `_BOLO_MATCHER = _LazyBoloMatcher()` line re-runs on
+    every page interaction and the underlying BoloMatcher() constructor
+    re-reads 17 JSON files + recompiles ~750 regex patterns (~1-2s).
+    The matcher's own `_load_if_stale()` mtime check keeps hot-reload
+    working — edits to the BOLO JSONs still pick up on the next match()
+    call without needing a full restart.
+    """
+    return BoloMatcher()
+
+
+class _LazyBoloMatcher:
+    __slots__ = ('_instance',)
+
+    def __init__(self):
+        self._instance = None
+
+    def _real(self):
+        if self._instance is None:
+            # cache_resource means this is free on every rerun after
+            # the first construction. The lazy wrapper still defers
+            # the FIRST call so the discovery banner paints first.
+            self._instance = _build_bolo_matcher()
+        return self._instance
+
+    @property
+    def loaded(self):
+        # IMPORTANT: do NOT route through __getattr__ for `loaded` —
+        # that would trigger a build just to answer "are you loaded?".
+        # `loaded` returning False on first render is exactly what we
+        # want: it tells the sidebar render to skip the matcher-heavy
+        # paths and render the auction list immediately. The matcher
+        # builds the first time someone actually NEEDS it (during the
+        # BOLO scan, post-fetch matching, audit scope, etc.).
+        return self._instance is not None
+
+    def __getattr__(self, name):
+        if name in ('_instance', 'loaded'):
+            raise AttributeError(name)
+        return getattr(self._real(), name)
+
+
+_BOLO_MATCHER = _LazyBoloMatcher()
 
 
 def _compute_bolo_columns(df: pd.DataFrame) -> pd.DataFrame:
     """Add bolo_brand / bolo_tier / bolo_target_buy_low/high columns.
 
-    Idempotent: returns the df unchanged if already populated AND the
-    matcher mtime hasn't moved (we still recompute on file edit so a
-    swapped BOLO list takes effect).
+    Vectorized over duplicate (title, description) pairs: the BOLO
+    matcher is called ONCE per unique (title, desc) tuple within a
+    given dataframe, then the result is broadcast back to every row
+    sharing that pair. In dedup-rich datasets (estate-sale jewelry,
+    repeated commodity Pyrex titles) this often cuts the work 50%+.
 
-    Done lazily (during render) rather than baked into the audit pipeline
-    so the user can swap the JSON file at any time and have results
-    reflect the new list on the next rerun. No API cost, just regex.
+    Done lazily (during render) rather than baked into the audit
+    pipeline so the user can swap the JSON file at any time and have
+    results reflect the new list on the next rerun. No API cost,
+    just regex.
     """
     if df is None or len(df) == 0 or 'title' not in df.columns:
         return df
     titles = df['title'].fillna('').astype(str)
-    descs = (df['description'].fillna('').astype(str)
-             if 'description' in df.columns
-             else pd.Series([''] * len(df), index=df.index))
+    descs = (
+        df['description'].fillna('').astype(str)
+        if 'description' in df.columns
+        else pd.Series([''] * len(df), index=df.index)
+    )
+
+    # Per-call cache: BOLO match + stylized check are identical for
+    # identical haystacks, so memoize keyed on (title, description).
+    _match_cache: dict = {}
+    _stylized_cache: dict = {}
+    _auth_cache: dict = {}
+
+    def _cached_match(t: str, d: str):
+        key = (t, d)
+        cached = _match_cache.get(key, _SENTINEL)
+        if cached is _SENTINEL:
+            cached = _BOLO_MATCHER.match(t, d)
+            _match_cache[key] = cached
+        return cached
+
+    def _cached_stylized(t: str, d: str):
+        key = (t, d)
+        cached = _stylized_cache.get(key, _SENTINEL)
+        if cached is _SENTINEL:
+            cached = _detect_stylized_replica(t, d)
+            _stylized_cache[key] = cached
+        return cached
+
+    def _cached_auth(t: str, d: str, match):
+        # Auth analysis only runs for auth_required brands; key on
+        # (t, d, brand) so a different brand on the same haystack
+        # gets its own score.
+        key = (t, d, match.get('brand') if match else None)
+        cached = _auth_cache.get(key, _SENTINEL)
+        if cached is _SENTINEL:
+            cached = _auth_analyze_description(t, d, match)
+            _auth_cache[key] = cached
+        return cached
+
     brands = []
     categories = []
     tiers = []
@@ -104,12 +304,12 @@ def _compute_bolo_columns(df: pd.DataFrame) -> pd.DataFrame:
     stylized_flags = []
     stylized_phrases = []
     for t, d in zip(titles, descs):
-        match = _BOLO_MATCHER.match(t, d)
-        # Run the stylized/replica detector on EVERY row, not just BOLO
-        # matches — a "Rolex style watch" lot might not match our BOLO
-        # for Rolex but still has the contamination problem in comps.
-        # The flag downstream gates whether comps actually run.
-        stylized = _detect_stylized_replica(t, d)
+        match = _cached_match(t, d)
+        # Run the stylized/replica detector on EVERY row, not just
+        # BOLO matches — a "Rolex style watch" lot might not match our
+        # BOLO for Rolex but still has the contamination problem in
+        # comps. The flag downstream gates whether comps actually run.
+        stylized = _cached_stylized(t, d)
         stylized_flags.append(stylized is not None)
         stylized_phrases.append(stylized or "")
         if match:
@@ -124,15 +324,9 @@ def _compute_bolo_columns(df: pd.DataFrame) -> pd.DataFrame:
             auth_required.append(auth_req)
             # Description-based authenticity scoring runs only on
             # auth-required brands (tier 3 luxury + Polo sublines).
-            # The other tiers don't have a counterfeit-market problem
-            # worth scoring against, and analyze_description for them
-            # would return scores skewed by green-flag noise.
             if auth_req:
-                auth = _auth_analyze_description(t, d, match)
+                auth = _cached_auth(t, d, match)
                 auth_scores.append(auth['auth_score'] if auth else None)
-                # Compress red/green hits into compact strings for the
-                # results-table column. Full lists live on the match
-                # dict if we ever want richer surfacing.
                 auth_red_summaries.append(
                     ", ".join(auth['red_flags']) if auth and auth.get('red_flags') else ""
                 )
@@ -169,7 +363,17 @@ def _compute_bolo_columns(df: pd.DataFrame) -> pd.DataFrame:
     df['bolo_auth_green'] = auth_green_summaries
     df['is_stylized_replica'] = stylized_flags
     df['stylized_phrase'] = stylized_phrases
+    # Tag CPU-category lots as bare_cpu / system / unclear so the
+    # results table can show whether a lot is a chip or a whole
+    # machine — those comp very differently.
+    df = _compute_cpu_form_factor_columns(df)
     return df
+
+
+# Sentinel for the per-call memoization in _compute_bolo_columns —
+# need a distinct value because `None` is a valid match() result
+# (means "no BOLO match for this lot").
+_SENTINEL = object()
 
 
 def _compute_bolo_columns_chunked(df: pd.DataFrame, chunk_size: int = 2000,
@@ -208,7 +412,12 @@ def _compute_bolo_columns_chunked(df: pd.DataFrame, chunk_size: int = 2000,
     for start in range(0, n, chunk_size):
         end = min(start + chunk_size, n)
         chunk = _compute_bolo_columns(df.iloc[start:end])
-        parts.append(chunk)
+        # Skip empty chunks — pandas 2.x emits a FutureWarning when
+        # concat sees empty/all-NA frames because it'll change dtype
+        # behavior in a future release. Filtering here is a no-op for
+        # results but silences the warning.
+        if not chunk.empty:
+            parts.append(chunk)
         if 'bolo_brand' in chunk.columns:
             chunk_brands = chunk['bolo_brand'].dropna()
             hits_so_far += len(chunk_brands)
@@ -216,6 +425,8 @@ def _compute_bolo_columns_chunked(df: pd.DataFrame, chunk_size: int = 2000,
         if progress_callback is not None:
             top = dict(brand_counter.most_common(8))
             progress_callback(end, n, hits_so_far, top)
+    if not parts:
+        return df.iloc[0:0]
     return pd.concat(parts, ignore_index=False)
 
 # --- Persistent discovery-result cache ---
@@ -283,162 +494,7 @@ def _load_cached_discovery():
         return None
 
 
-# --- CATEGORY GROUPING ---
-# HiBid emits 30+ fine-grained category labels per discovery run (Halloween
-# Decor, Other Baby, Linens / Curtains, Outdoor Games & Sports Equipment,
-# …). Showing 30 checkboxes is unusable, so we collapse similar categories
-# into ~12 broad groups via keyword match. Groups are checked in order —
-# first match wins — and anything that matches no group falls into "Other".
-#
-# Each entry: (emoji + label, [lowercase keywords]). Keywords are matched
-# as substrings against the lowercased HiBid category; grouping a new
-# category that HiBid starts emitting just requires its label containing
-# one of these keywords.
-_CATEGORY_GROUPS = [
-    ("🎮 Electronics", [
-        "electronic", "computer", "laptop", "tablet", "phone", "camera",
-        "audio", "video", "tv ", " tv", "gaming", "console", "headphone",
-        "speaker", "drone",
-    ]),
-    ("🔧 Tools & Hardware", [
-        "tool", "hardware", "power tool", "workshop", "garage", "drill",
-        "saw", "welding", "mechanic",
-    ]),
-    ("🏠 Home & Kitchen", [
-        "kitchen", "cookware", "bakeware", "appliance", "linen", "curtain",
-        "bedding", "bath", "lighting", "lamp", "cleaning", "vacuum",
-        "laundry", "storage", "organizer", "home decor", "decor ", " decor",
-        "furniture", "rug",
-    ]),
-    ("🧥 Clothing & Accessories", [
-        "clothing", "apparel", "shoe", "footwear", "jewelry", "watch",
-        "handbag", "purse", "wallet", "accessories", "hat", "scarf",
-    ]),
-    ("🧸 Toys & Baby", [
-        "toy", "game", "baby", "infant", "kid", "children", "nursery",
-        "stroller", "puzzle", "doll", "lego", "action figure",
-    ]),
-    ("🎯 Sporting & Outdoors", [
-        "sport", "fitness", "exercise", "hunting", "fishing", "camping",
-        "hiking", "bike", "cycling", "golf", "outdoor games", "archery",
-        "firearm", "ammo",
-    ]),
-    ("🚗 Automotive", [
-        "automotive", "auto ", " auto", "vehicle", "motorcycle", "atv",
-        "utv", "boat", "rv ", " rv", "trailer", "tire", "car ",
-    ]),
-    ("🎃 Seasonal & Decor", [
-        "halloween", "christmas", "holiday", "easter", "thanksgiving",
-        "seasonal", "party", "wedding",
-    ]),
-    ("🎨 Art & Collectibles", [
-        "art", "antique", "vintage", "collectible", "coin", "currency",
-        "stamp", "glassware", "pottery", "sculpture", "painting",
-        "memorabilia", "trading card",
-    ]),
-    ("🎵 Music, Books & Media", [
-        "music", "musical instrument", "guitar", "piano", "record",
-        "vinyl", "cd", "dvd", "book", "magazine", "movie",
-    ]),
-    ("🍔 Food, Health & Beauty", [
-        "food", "beverage", "drink", "snack", "supplement", "vitamin",
-        "health", "beauty", "cosmetic", "skincare", "personal care",
-        "hair", "bath & body",
-    ]),
-    ("🐕 Pets", [
-        "pet", "dog", "cat", "aquarium", "bird", "animal",
-    ]),
-    ("🌱 Yard & Garden", [
-        "garden", "lawn", "yard", "landscap", "plant", "patio",
-        "greenhouse", "mower",
-    ]),
-    ("🏢 Business & Industrial", [
-        "office", "industrial", "commercial", "medical equipment",
-        "janitorial", "retail fixture", "restaurant equipment",
-    ]),
-]
 
-
-def _classify_category(raw_category: str) -> str:
-    """Return the group label for a HiBid category. 'Other' if nothing matches."""
-    if not raw_category:
-        return "❓ Uncategorized"
-    low = str(raw_category).lower()
-    for label, keywords in _CATEGORY_GROUPS:
-        for kw in keywords:
-            if kw in low:
-                return label
-    return "📦 Other"
-
-
-def _build_category_filter(df, state_key: str = "category_group_picks"):
-    """Render a checkbox row for category filtering, return the filtered df.
-
-    The UI shows one checkbox per group that has lots in the current df,
-    labeled with the per-group count. Selections persist in session_state
-    so they survive reruns. When nothing is ticked, everything passes
-    through — same semantics as the old multiselect.
-    """
-    if 'category' not in df.columns or df.empty:
-        return df
-
-    # Classify every row and count per group
-    groups = df['category'].fillna('').astype(str).apply(_classify_category)
-    counts = groups.value_counts()
-    if counts.empty:
-        return df
-
-    # Order: keep _CATEGORY_GROUPS order, then Other, then Uncategorized.
-    # Only show groups that actually have lots.
-    ordered_labels = [g[0] for g in _CATEGORY_GROUPS] + ["📦 Other", "❓ Uncategorized"]
-    visible = [g for g in ordered_labels if g in counts.index]
-
-    # Seed session state if empty
-    if state_key not in st.session_state:
-        st.session_state[state_key] = set()
-
-    with st.expander(
-        f"🏷️ Filter by category group ({len(visible)} groups, "
-        f"{len(st.session_state[state_key])} selected)",
-        expanded=False,
-    ):
-        # Toolbar row: Select all / Clear
-        tc1, tc2, _ = st.columns([1, 1, 4])
-        with tc1:
-            if st.button("Select all", key=f"{state_key}_all",
-                         use_container_width=True):
-                st.session_state[state_key] = set(visible)
-                st.rerun()
-        with tc2:
-            if st.button("Clear", key=f"{state_key}_clear",
-                         use_container_width=True):
-                st.session_state[state_key] = set()
-                st.rerun()
-
-        # Checkbox grid — 4 per row on wide screens, wraps on mobile via CSS
-        cols_per_row = 4
-        for i in range(0, len(visible), cols_per_row):
-            chunk = visible[i:i + cols_per_row]
-            cols = st.columns(cols_per_row)
-            for label, col in zip(chunk, cols):
-                with col:
-                    checked_now = label in st.session_state[state_key]
-                    new = st.checkbox(
-                        f"{label} ({counts[label]})",
-                        value=checked_now,
-                        key=f"{state_key}_cb_{label}",
-                    )
-                    if new and not checked_now:
-                        st.session_state[state_key].add(label)
-                    elif not new and checked_now:
-                        st.session_state[state_key].discard(label)
-
-    picks = st.session_state[state_key] & set(visible)
-    if not picks:
-        return df
-    # Keep rows whose computed group is in picks
-    mask = groups.isin(picks)
-    return df[mask]
 
 
 # --- PAGE CONFIGURATION ---
@@ -539,214 +595,113 @@ button[data-baseweb="tab"] {
 """, unsafe_allow_html=True)
 
 # --- STATE MANAGEMENT ---
-if 'phase1_leads' not in st.session_state:
-    st.session_state.phase1_leads = pd.DataFrame()
+# All session-state defaults consolidated into a single dict. setdefault()
+# is idempotent: if the key exists in session state (e.g. user already
+# tweaked the slider), the default is ignored. Comments organize the keys
+# by purpose so it's easy to add/remove without scrolling 200 lines.
+_STATE_DEFAULTS = {
+    # --- Pipeline result frames ---
+    'phase1_leads':              pd.DataFrame(),
+    'selected_leads':            pd.DataFrame(),
+    'current_auction':           None,
+    'audit_results':             {},
 
-if 'selected_leads' not in st.session_state:
-    st.session_state.selected_leads = pd.DataFrame()
+    # --- Pipeline running flags ---
+    'discover_running':          False,
+    'fetch_lots_running':        False,
+    '_sampling_pending':         False,   # Phase 1b background sampling
+    'audit_running':             False,
+    'comps_running':             False,
 
-if 'current_auction' not in st.session_state:
-    st.session_state.current_auction = None
+    # --- Audit knobs ---
+    # Phase 4 parallelism. 12 = Haiku-tier sweet spot (~33% faster than
+    # the old 8-default; 16+ starts hitting rate limits).
+    'audit_workers':             12,
 
-if 'audit_results' not in st.session_state:
-    st.session_state.audit_results = {}
+    # --- Pre-comps filter knobs ---
+    # Defaults match the 🌐 Aggressive preset — no top-N cap, no
+    # min-bid floor, no bid-ceiling. Per user preference: maximum
+    # coverage out of the box. Tighter modes (Standard / Conservative)
+    # are still one click away in the spend-confirm gate.
+    'comps_max_lots':            0,       # 0 = no cap
+    'comps_skip_above_bid':      0.0,     # 0 = no skip-above-bid cap
+    'comps_skip_below_str':      0.0,     # skip categories below X% STR
+    'comps_dedup_titles':        True,    # fingerprint dedup
+    'comps_use_melt_floor':      False,   # melt-value for precious metals
+    'comps_melt_premium_factor': 1.4,
+    'comps_exclude_hard':        True,    # drop HARD logistics
+    'comps_easy_ship_only':      True,    # drop anything not mailbox-easy
+    'comps_pc_check_stylized':   True,
+    'comps_use_mercari':         False,   # 0% success rate; off by default
+    'comps_chunk_size':          5000,    # process N at a time
+    'comps_use_auction_str':     True,    # auction-level STR sampling
+    'comps_workers':             8,       # comp thread-pool size
 
-if 'audit_running' not in st.session_state:
-    st.session_state.audit_running = False
+    # --- Multi-auction BOLO scan flow ---
+    '_comps_free_only_mode':     False,
+    '_bolo_scan_all_pending':    False,
+    '_bolo_scan_summary':        None,
 
-# --- Audit knobs ---
-# `audit_workers` controls how many parallel Claude API calls run during
-# the AI tier of the condition audit. 8 hits a sweet spot — fast without
-# tripping rate limits. The legacy `audit_fast_mode` and `audit_batch_size`
-# keys are kept (no-ops) so older session state from before the API
-# migration doesn't crash on read.
-if 'audit_workers' not in st.session_state:
-    st.session_state.audit_workers = 8
-if 'audit_fast_mode' not in st.session_state:
-    st.session_state.audit_fast_mode = False
-if 'audit_batch_size' not in st.session_state:
-    st.session_state.audit_batch_size = 8
+    # --- Cache TTLs ---
+    'cache_ttl_days':            1,
+}
 
-if 'comps_running' not in st.session_state:
-    st.session_state.comps_running = False
+for _k, _v in _STATE_DEFAULTS.items():
+    st.session_state.setdefault(_k, _v)
 
-if 'img_enrich_running' not in st.session_state:
-    st.session_state.img_enrich_running = False
-
-if 'img_enrich_min_bid' not in st.session_state:
-    # Skip image enrichment on lots below this bid (junk filter). Tunable
-    # from the Step 1.5 UI panel.
-    st.session_state.img_enrich_min_bid = 5.0
-
-# --- Pre-comps filter knobs (Step 2 panel) ---
-# Comps are the most expensive step — letting the user prune the target set
-# before launch can cut runtime by 2–10x on big auctions.
-if 'comps_max_lots' not in st.session_state:
-    # 0 = no cap
-    st.session_state.comps_max_lots = 0
-
-# Skip comps for lots whose next-bid floor exceeds this dollar
-# threshold. Lots already bid up that high have squeezed margins
-# and rarely repay the comp spend; skipping them is a cheap
-# spend-saver. 0 = no cap (comp everything that survives the
-# other filters). Default $100 — bid-up lots above this clear
-# the bargain-finder lane and shouldn't be the auto-target.
-if 'comps_skip_above_bid' not in st.session_state:
-    st.session_state.comps_skip_above_bid = 100.0
-if 'comps_exclude_hard' not in st.session_state:
-    st.session_state.comps_exclude_hard = True
-if 'comps_only_img_promoted' not in st.session_state:
-    st.session_state.comps_only_img_promoted = False
-if 'comps_pc_check_stylized' not in st.session_state:
-    st.session_state.comps_pc_check_stylized = True
-# Mercari scraper has had a 0% success rate across thousands of
-# lookups in production — defaults OFF so we don't burn ScrapingBee
-# credits on a dead source. User can flip on to retest periodically.
-if 'comps_use_mercari' not in st.session_state:
-    st.session_state.comps_use_mercari = False
-# When True, the comp run uses ONLY free curated sources
-# (GoCollect + PriceCharting) and skips eBay/Mercari for every
-# row. Set by clicking "🆓 Free comps only" at the credit gate.
-# Per-auction (cleared on every new auction load).
-if '_comps_free_only_mode' not in st.session_state:
-    st.session_state._comps_free_only_mode = False
-# When True, the next fetch_lots completion will trigger a
-# multi-auction BOLO scan: filter all fetched lots to BOLO
-# matches and load that subset as a synthetic "🎯 BOLO scan"
-# analysis view. Set by the sidebar "Scan all for BOLO" button.
-if '_bolo_scan_all_pending' not in st.session_state:
-    st.session_state._bolo_scan_all_pending = False
-# Stash for the multi-auction scan summary (count/auctions/etc.)
-# rendered in the analysis-view header.
-if '_bolo_scan_summary' not in st.session_state:
-    st.session_state._bolo_scan_summary = None
-if 'comps_chunk_size' not in st.session_state:
-    # Process eligible lots N at a time. The pipeline hides the results
-    # table between chunks (cooking screen), so multi-chunk runs feel
-    # like the table never appears. Default 5000 makes virtually every
-    # auction complete in a single chunk — the user sees one cooking
-    # screen, then full results. Multi-chunk is still available via the
-    # Comps tab settings for very large auctions where progress visibility
-    # matters more than layout stability.
-    st.session_state.comps_chunk_size = 5000
-if 'comps_use_auction_str' not in st.session_state:
-    # When True, sample STR per-auction (3 lots each) instead of scraping
-    # STR for every lot. Huge speedup for big auctions.
-    st.session_state.comps_use_auction_str = True
-if 'comps_workers' not in st.session_state:
-    # Thread-pool size for parallel price comps. 8 hits a good balance:
-    # ~8x speedup without getting throttled by eBay/Mercari scraping.
-    st.session_state.comps_workers = 8
-
-if 'cache_ttl_days' not in st.session_state:
-    st.session_state.cache_ttl_days = 1
-
+# --- Special-case initializations ---
+# `cache_purged_this_session` triggers a side effect (purge_expired) the
+# first time per session, so it can't go through setdefault.
 if 'cache_purged_this_session' not in st.session_state:
-    # Purge expired entries once per session, not every rerun
     _AUCTION_CACHE.purge_expired(ttl_days=st.session_state.cache_ttl_days)
     st.session_state.cache_purged_this_session = True
 
+# `auction_candidates` rehydrates from disk on first load if there's a
+# fresh cached discovery — saves the user a Discover click on tab refresh.
 if 'auction_candidates' not in st.session_state:
-    # List of dicts from Phase1Scraper.fetch_auction_candidates() — the
-    # "step 1" output, before the user picks which auctions to deep-scan.
-    # First-load hydration: if a successful discovery <24h old is on disk,
-    # restore it so the user doesn't have to re-click "Discover Auctions"
-    # every time they reopen the app / refresh the tab.
     _cached_disc = _load_cached_discovery()
     if _cached_disc and _cached_disc["candidates"]:
         st.session_state.auction_candidates = _cached_disc["candidates"]
         st.session_state._discovery_restored_from = _cached_disc["saved_at"]
         st.session_state._sourcing_cfg = _cached_disc["sourcing_cfg"]
-        # Also rehydrate the sampled lot previews so the picker's
-        # "What's in this auction" column works after a tab refresh.
         st.session_state.category_samples = _cached_disc.get(
             "category_samples", {}
         )
+        tlog("CACHE",
+             f"restored {len(_cached_disc['candidates'])} auctions from disk",
+             f"(saved {_cached_disc['saved_at']})")
     else:
         st.session_state.auction_candidates = []
+        st.session_state.category_samples = {}
+        tlog("CACHE", "no cached discovery on disk — auto-discover will fire")
 
-if 'category_samples' not in st.session_state:
-    # {auction_id: {"categories": [...], "cat_counts": {...}, "titles": [...]}}
-    # from sample_categories_batch(). Older versions stored a plain list of
-    # category names — the picker reader tolerates both shapes.
-    st.session_state.category_samples = {}
+# `category_samples` may not have been set by the rehydration branch
+# (when there's no cached discovery), so guard separately.
+st.session_state.setdefault('category_samples', {})
 
-if 'discover_running' not in st.session_state:
-    st.session_state.discover_running = False
+# `known_categories` — starter list of HiBid categories the picker uses.
+# Grows over time from scrape results, so it's stored in session state
+# rather than being a constant.
+st.session_state.setdefault('known_categories', [
+    "Antiques", "Art", "Automotive", "Books & Media",
+    "Clothing & Accessories", "Coins & Currency", "Collectibles",
+    "Electronics", "Firearms", "Fishing", "Furniture",
+    "Glassware", "Home & Garden", "Hunting", "Jewelry",
+    "Kitchen", "Music & Instruments", "Outdoors", "Pottery",
+    "Sporting Goods", "Sports Memorabilia", "Tools",
+    "Toys & Games", "Vintage",
+])
 
-if 'fetch_lots_running' not in st.session_state:
-    st.session_state.fetch_lots_running = False
-
-# Phase 1b — background auction-content sampling. Set by the
-# discovery work block immediately after the candidate list is
-# fetched + saved to session state. The picker can render with
-# the candidate list while this background phase fills in the
-# per-auction "What's in this auction" previews + BOLO hints.
-if '_sampling_pending' not in st.session_state:
-    st.session_state._sampling_pending = False
-
-if 'known_categories' not in st.session_state:
-    # Common HiBid lot categories as a starter set. Grown over time from any
-    # unique category strings we see in scrape results.
-    st.session_state.known_categories = [
-        "Antiques", "Art", "Automotive", "Books & Media",
-        "Clothing & Accessories", "Coins & Currency", "Collectibles",
-        "Electronics", "Firearms", "Fishing", "Furniture",
-        "Glassware", "Home & Garden", "Hunting", "Jewelry",
-        "Kitchen", "Music & Instruments", "Outdoors", "Pottery",
-        "Sporting Goods", "Sports Memorabilia", "Tools",
-        "Toys & Games", "Vintage",
-    ]
-
-# --- SCREEN WAKE LOCK (mobile keep-awake) ---
+# Stub left in place so existing call sites don't error. The mobile
+# wake-lock JS injection was removed in the simplification pass —
+# this is a desktop-first app and the script was firing the Streamlit
+# components.html deprecation warning on every long op.
 def _keep_screen_awake():
-    """Ask the browser to keep the screen on during a long-running op.
-
-    Uses the Wake Lock API (Chrome/Android, iOS 16.4+). The earlier button
-    click counts as the user gesture most browsers require. On devices
-    where Wake Lock isn't supported this is a silent no-op — users need
-    to set their phone's auto-lock setting manually.
-
-    The script is injected into a zero-height component iframe; it also
-    re-requests the lock when the tab becomes visible again (handy if
-    the user briefly switches apps).
-    """
-    components.html(
-        """
-        <script>
-        (async () => {
-            if (!('wakeLock' in navigator)) return;
-            try {
-                const lock = await navigator.wakeLock.request('screen');
-                window._htFindsWakeLock = lock;
-                lock.addEventListener('release', () => {
-                    window._htFindsWakeLock = null;
-                });
-            } catch (e) { /* user-gesture / permission issue; fail silent */ }
-        })();
-        document.addEventListener('visibilitychange', async () => {
-            if (document.visibilityState === 'visible' &&
-                !window._htFindsWakeLock &&
-                'wakeLock' in navigator) {
-                try {
-                    window._htFindsWakeLock = await navigator.wakeLock.request('screen');
-                } catch (e) {}
-            }
-        });
-        </script>
-        """,
-        height=0,
-    )
+    """No-op (was a mobile keep-awake script; removed for desktop)."""
+    pass
 
 
 # --- ASYNC WRAPPER ---
-def run_async_scraper(scraper_instance, progress_callback=None):
-    """Safely runs the asyncio scraper within Streamlit's synchronous thread."""
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    return loop.run_until_complete(scraper_instance.run(progress_callback=progress_callback))
-
-
 def run_async(coro):
     """Run an arbitrary coroutine from Streamlit's sync thread."""
     loop = asyncio.new_event_loop()
@@ -773,6 +728,126 @@ def _extract_auction_id(auction_df: pd.DataFrame):
         return int(link.rsplit('/auction/', 1)[1].split('/')[0].split('?')[0])
     except (ValueError, IndexError):
         return None
+
+
+def _aid_from_link(link) -> int | None:
+    """Parse a HiBid auction_link → integer auction_id (None if unparseable).
+
+    Row-level helper used by the multi-auction cache merge to identify
+    which auction each lot belongs to without an extra join.
+    """
+    s = str(link or '')
+    if '/auction/' not in s:
+        return None
+    try:
+        return int(s.rsplit('/auction/', 1)[1].split('/')[0].split('?')[0])
+    except (ValueError, IndexError):
+        return None
+
+
+def _merge_cached_analysis_multi(df: pd.DataFrame):
+    """Overlay cached analysis onto a multi-auction DataFrame.
+
+    Walks every unique auction_id in ``df``, loads the per-auction
+    cache pickle (skipping stale ones), and merges the cached analysis
+    columns (verdict, est_resale, etc.) onto matching rows by ``lot_id``.
+
+    The downstream BOLO scan + audit + comps see lots with
+    pre-populated ``verdict`` / ``est_resale`` / ``red_flag`` and skip
+    them automatically (audit fast-path on lots with verdicts; comps
+    skip lots with non-NaN ``est_resale``). On a re-scan of mostly the
+    same auctions, this turns a 30-min comp run into a sub-minute
+    pass over just the new auctions.
+
+    Returns ``(merged_df, stats)`` where stats is a dict with:
+        cached_auctions, new_auctions, cached_lots, total_auctions
+    Stats are ``{}`` when the input is empty or unmergeable.
+    """
+    if (
+        df is None or df.empty
+        or 'auction_link' not in df.columns
+        or 'lot_id' not in df.columns
+    ):
+        return df, {}
+
+    ttl_days = int(st.session_state.cache_ttl_days)
+
+    # Per-row auction_id, then unique list of auctions in this batch.
+    aids = df['auction_link'].apply(_aid_from_link)
+    unique_aids = sorted({a for a in aids.tolist() if a is not None})
+    if not unique_aids:
+        return df, {}
+
+    # Walk each auction's cache, collect just the analysis columns.
+    cached_slim_frames: list = []
+    cached_aids: set = set()
+    for aid in unique_aids:
+        try:
+            payload = _AUCTION_CACHE.load(aid)
+        except Exception:
+            continue
+        if not payload or not _AUCTION_CACHE.is_fresh(
+            payload, ttl_days=ttl_days
+        ):
+            continue
+        cached_df = payload.get('df')
+        if (
+            not isinstance(cached_df, pd.DataFrame)
+            or cached_df.empty
+            or 'lot_id' not in cached_df.columns
+        ):
+            continue
+        keep_cols = ['lot_id'] + [
+            c for c in CACHED_ANALYSIS_COLS if c in cached_df.columns
+        ]
+        if len(keep_cols) <= 1:
+            continue
+        cached_slim_frames.append(
+            cached_df[keep_cols].drop_duplicates(subset=['lot_id'])
+        )
+        cached_aids.add(aid)
+
+    stats = {
+        'total_auctions': len(unique_aids),
+        'cached_auctions': len(cached_aids),
+        'new_auctions': len(unique_aids) - len(cached_aids),
+        'cached_lots': 0,
+    }
+
+    if not cached_slim_frames:
+        return df, stats
+
+    # Build one combined cache lookup keyed by lot_id (HiBid lot_ids
+    # are globally unique so we can dedup across auctions safely).
+    combined = pd.concat(cached_slim_frames, ignore_index=True)
+    combined = combined.drop_duplicates(subset=['lot_id'])
+
+    # Drop columns from fresh df that the cache will provide so the
+    # merge doesn't create _x/_y suffix collisions. Phase 1 doesn't
+    # populate any of CACHED_ANALYSIS_COLS, but be defensive.
+    fresh = df.copy()
+    overlap = [c for c in combined.columns if c != 'lot_id' and c in fresh.columns]
+    if overlap:
+        fresh = fresh.drop(columns=overlap)
+
+    merged = fresh.merge(combined, on='lot_id', how='left')
+
+    # Recompute est_roi from FRESH est_cost + CACHED est_resale so it
+    # reflects whatever the bid has climbed to since the cache landed.
+    if 'est_resale' in merged.columns and 'est_cost' in merged.columns:
+        resale = pd.to_numeric(merged['est_resale'], errors='coerce')
+        cost = pd.to_numeric(merged['est_cost'], errors='coerce')
+        mask = resale.notna() & cost.notna() & (cost > 0)
+        if mask.any():
+            roi = ((resale - cost) / cost * 100).round(0)
+            if 'est_roi' not in merged.columns:
+                merged['est_roi'] = pd.NA
+            merged.loc[mask, 'est_roi'] = roi[mask]
+
+    if 'est_resale' in merged.columns:
+        stats['cached_lots'] = int(merged['est_resale'].notna().sum())
+
+    return merged, stats
 
 
 def _load_auction_for_analysis(auction_name, auction_df):
@@ -820,7 +895,6 @@ def _load_auction_for_analysis(auction_name, auction_df):
     # buttons on the new auction. Belt-and-suspenders reset here.
     st.session_state.audit_running = False
     st.session_state.comps_running = False
-    st.session_state.img_enrich_running = False
     # Reset the auto-pipeline tracker so a new auction starts fresh
     # (audit auto-fires, then first comp chunk auto-fires). Failed
     # attempts on the previous auction don't poison this one.
@@ -854,7 +928,6 @@ discover_running = st.session_state.get('discover_running', False)
 fetch_lots_running = st.session_state.get('fetch_lots_running', False)
 _audit_running = st.session_state.get('audit_running', False)
 _comps_running = st.session_state.get('comps_running', False)
-_img_enrich_running = st.session_state.get('img_enrich_running', False)
 _sampling_pending = st.session_state.get('_sampling_pending', False)
 
 # --- WATCHDOG: detect wedged "running" flags ---
@@ -937,7 +1010,7 @@ _first_open_pending_discover = (
 
 any_running = (
     discover_running or fetch_lots_running or _sampling_pending
-    or _audit_running or _comps_running or _img_enrich_running
+    or _audit_running or _comps_running
 )
 _restored_at = st.session_state.get('_discovery_restored_from')
 
@@ -981,16 +1054,16 @@ if any_running or _scan_kickoff:
             100% { border-left-color: #fbbf24; box-shadow: 0 0 0 0 rgba(251,191,36,0.5); }
         }
         .hto-running-banner {
-            position: sticky; top: 0; z-index: 999;
+            position: sticky; top: 3.5rem; z-index: 999;
             background: linear-gradient(90deg, #1e3a8a 0%, #1e40af 100%);
-            color: white; padding: 12px 18px; border-radius: 6px;
-            margin-bottom: 12px; font-size: 14px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
-            border-left: 5px solid #fbbf24;
+            color: white; padding: 6px 14px; border-radius: 4px;
+            margin-bottom: 8px; font-size: 13px;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.15);
+            border-left: 4px solid #fbbf24;
             animation: hto_pulse 1.6s ease-in-out infinite;
         }
         .hto-kickoff-banner {
-            position: sticky; top: 0; z-index: 1000;
+            position: sticky; top: 3.5rem; z-index: 1000;
             background: linear-gradient(90deg, #166534 0%, #15803d 60%, #16a34a 100%);
             color: white; padding: 14px 20px; border-radius: 8px;
             margin-bottom: 12px; font-size: 15px;
@@ -1036,10 +1109,10 @@ if any_running or _scan_kickoff:
                     "as it lands."
                 )
             else:
-                _phase_label = "🔍 Phase 1 of 5: Discovering open auctions on HiBid"
+                _phase_label = "🔍 Discovering open auctions on HiBid"
                 _phase_detail = "Querying nationwide + local listings, filtering by closing date…"
         elif _sampling_pending:
-            _phase_label = "🔍 Phase 1b: Loading content previews in background"
+            _phase_label = "🔍 Loading content previews in background"
             _phase_detail = (
                 "The auction list is already usable — go ahead and "
                 "scan or click an auction. This step just fills in "
@@ -1048,23 +1121,20 @@ if any_running or _scan_kickoff:
         elif fetch_lots_running:
             _scan_all = st.session_state.get('_bolo_scan_all_pending', False)
             if _scan_all:
-                _phase_label = "📥 Phase 2 of 5: Fetching every lot for BOLO scan"
+                _phase_label = "📥 Fetching every lot for BOLO scan"
                 _phase_detail = (
                     "Pulling all lots from HiBid GraphQL in batches of 20 "
                     "(free, no ScrapingBee credits). BOLO regex match runs "
                     "next once lots are in."
                 )
             else:
-                _phase_label = "📥 Phase 2 of 5: Fetching lots for selected auctions"
+                _phase_label = "📥 Fetching lots for selected auctions"
                 _phase_detail = "Pulling lot data from HiBid GraphQL (free, no credits)…"
-        elif _img_enrich_running:
-            _phase_label = "🖼️ Phase 3 of 5: Image enrichment (Claude vision)"
-            _phase_detail = "Asking Claude to read photos for higher-confidence titles…"
         elif _audit_running:
-            _phase_label = "🧠 Phase 4 of 5: AI condition audit"
+            _phase_label = "🧠 AI condition audit"
             _phase_detail = "Claude reviewing each lot's title/description for verdicts + red flags…"
         elif _comps_running:
-            _phase_label = "💰 Phase 5 of 5: Price comps + sell-through rate"
+            _phase_label = "💰 Price comps + sell-through rate"
             _phase_detail = (
                 "Fetching eBay sold comps + STR (uses ScrapingBee credits). "
                 "PriceCharting/GoCollect routed lots are free."
@@ -1135,52 +1205,543 @@ if st.session_state.get('_sidebar_force_collapsed', False):
         unsafe_allow_html=True,
     )
 
-header_title_col, header_actions_col = st.columns([3, 2])
+def _hibid_popover_label() -> str:
+    """Compute the 💰 My Bids popover label inline.
+
+    Cheap (session_state lookup + a filter count) so no cache layer
+    needed — runs on every script rerun. Shows the count of currently-
+    OPEN bids when we have cached data, falls through to 🔐 when the
+    user hasn't pasted a HiBid token.
+    """
+    try:
+        from pathlib import Path
+        has_token = (Path(".cache") / "hibid_session.json").exists()
+        if not has_token:
+            return "💰 My Bids 🔐"
+        cache = st.session_state.get("_hibid_live_cache")
+        if not cache:
+            return "💰 My Bids"
+        lots = cache.get("lots") or []
+        n_open = sum(
+            1 for l in lots
+            if not l.get("is_closed") and not l.get("is_archived")
+        )
+        if n_open:
+            return f"💰 My Bids ({n_open})"
+        return "💰 My Bids"
+    except Exception:
+        return "💰 My Bids"
+
+
+def _compute_max_bid_single(est_resale, auction_buyer_premium_pct,
+                            ship_cost, target_roi):
+    """Single-lot max-bid calculator — mirrors `_compute_max_bid`.
+
+    Returns the max bid amount (rounded $) such that paying it lands
+    at exactly target_roi × cost. Returns None when:
+      - est_resale missing / non-positive
+      - shipping + premium eat the entire margin (negative max_bid)
+
+    HiBid's `auction_buyer_premium_pct` is the multiplier form
+    (1.18 = 18% premium). When HiBid returns 1.0 the rate wasn't
+    parseable from the auction's free-text buyer-premium description —
+    fall back to cfg default ~1.15 so we don't massively over-state
+    the stop signal.
+    """
+    if est_resale is None:
+        return None
+    try:
+        est_resale = float(est_resale)
+    except (TypeError, ValueError):
+        return None
+    if est_resale <= 0:
+        return None
+    EBAY_FEE_PCT = 0.1325
+    EBAY_FEE_FLAT = 0.30
+    net_resale = est_resale * (1 - EBAY_FEE_PCT) - EBAY_FEE_FLAT
+    bp_mult = float(auction_buyer_premium_pct or 1.0)
+    if bp_mult <= 1.0:
+        bp_mult = 1.15
+    max_bid = (net_resale / float(target_roi) - float(ship_cost)) / bp_mult
+    return round(max_bid, 2) if max_bid > 0 else None
+
+
+def _render_live_hibid_view():
+    """Render the contents of the 💰 My Bids popover.
+
+    Primary view: currently-OPEN HiBid bids with a STOP / NEAR MAX /
+    GO indicator per lot, computed by comparing the current high_bid
+    to the max_bid that hits target ROI for the lot's est_resale
+    (pulled from the comped_lots registry). The user explicitly
+    asked to keep live bids visible — token-management setup lives
+    in a collapsed expander at the bottom.
+    """
+    _hibid_account = _hibid_module()
+    st.markdown("### 💰 My Bids")
+
+    token_meta = _hibid_account.session_metadata()
+    has_token = bool(token_meta.get("has_token"))
+
+    if not has_token:
+        st.warning(
+            "🔐 Not signed in. Paste a HiBid authToken in **Setup** "
+            "below to see your live bids and stop signals."
+        )
+        st.divider()
+        _render_hibid_setup_panel(_hibid_account, expand_token=True)
+        return
+
+    # ---- Refresh row + cache age ----------------------------------
+    cache = st.session_state.get("_hibid_live_cache")
+    cache_ts = st.session_state.get("_hibid_live_cache_ts", 0.0)
+    cache_age_s = (_time.time() - cache_ts) if cache_ts else None
+
+    rb1, rb2 = st.columns([1, 3])
+    with rb1:
+        if st.button(
+            "🔄 Refresh", key="hibid_live_refresh",
+            help="Pull fresh HiBid bids now (bypasses the 5-min "
+                 "background sync).",
+            width='stretch',
+        ):
+            st.session_state.pop("_hibid_autosync_at", None)
+            st.session_state.pop("_hibid_live_cache", None)
+            st.session_state.pop("_hibid_live_cache_ts", None)
+            _maybe_auto_sync_hibid(force=True)
+            st.rerun()
+    with rb2:
+        if cache_age_s is None:
+            st.caption("_No bid data cached — click Refresh._")
+        else:
+            mins = int(cache_age_s // 60)
+            secs = int(cache_age_s % 60)
+            st.caption(f"Last sync: {mins}m {secs}s ago")
+
+    # ---- Stop-signal table ---------------------------------------
+    if cache:
+        _render_active_bids_with_stop_signal(cache)
+
+    # ---- Setup section (collapsed) -------------------------------
+    st.divider()
+    _render_hibid_setup_panel(_hibid_account, expand_token=False)
+
+
+def _render_active_bids_with_stop_signal(cache):
+    """Show open HiBid bids + STOP / NEAR MAX / GO per lot.
+
+    Status logic (per lot):
+      - missing est_resale  → ❓ NO COMP (can't compute max)
+      - high_bid >= max_bid → 🛑 STOP (next bid loses money at target ROI)
+      - high_bid >= 85% max → 🟡 NEAR MAX (small headroom, watch closely)
+      - else                → 🟢 GO (safe to bid up to max)
+
+    max_bid uses the same formula as `_compute_max_bid` in the main
+    results table: backs out from net resale (after eBay fees) /
+    target_roi, less shipping, divided by the auction's buyer's
+    premium multiplier.
+    """
+    from scraper.config_loader import load_config
+
+    cfg = load_config()
+    ship_cost_default = float(
+        cfg.get("shipping", {}).get("bundled_ship_cost", 25.0)
+    )
+    target_roi = float(st.session_state.get("target_roi_live", 3.0) or 3.0)
+
+    auctions = cache.get("auctions") or []
+    auctions_by_id = {a.get("id"): a for a in auctions}
+    lots = cache.get("lots") or []
+
+    # Filter: open = not closed AND not archived. The cached payload
+    # spans 3 months including closed lots (used by auto-record).
+    open_lots = [
+        l for l in lots
+        if not l.get("is_closed") and not l.get("is_archived")
+    ]
+
+    if not open_lots:
+        st.info("No open HiBid bids right now. ✅")
+        # Compact tail: surface recent closures so the user knows the
+        # cache is alive — without rebuilding the (deleted) outcomes
+        # dashboard.
+        won = sum(1 for l in lots if l.get("may_have_won"))
+        lost = sum(1 for l in lots
+                   if l.get("is_closed") and not l.get("may_have_won"))
+        if won or lost:
+            st.caption(
+                f"Recent closed (3 mo): 🏆 {won} won · ❌ {lost} lost"
+            )
+        return
+
+    # Score each open lot
+    rows = []
+    for lot in open_lots:
+        lot_id = str(lot.get("lot_id"))
+        title = (lot.get("title") or "(untitled)").strip()
+        high_bid = float(lot.get("high_bid") or 0)
+        my_bid = float(lot.get("my_bid") or 0)
+        bid_status = lot.get("bid_status") or "?"
+        time_left = (lot.get("time_left") or "").strip()
+        auction_id = lot.get("auction_id")
+        bp_mult = float(lot.get("auction_buyer_premium_pct") or 1.0)
+        auction = auctions_by_id.get(auction_id) or {}
+        auction_name = (auction.get("eventName")
+                        or f"Auction {auction_id}")
+
+        # Pull est_resale from the current session's audit_results
+        # (if any). With the cross-session comped_lots registry gone,
+        # the stop signal only fires on lots the user has analyzed
+        # in the current session — uncomped lots show "❓ NO COMP".
+        est_resale = _lookup_est_resale_in_session(lot_id)
+        max_bid = _compute_max_bid_single(
+            est_resale, bp_mult, ship_cost_default, target_roi,
+        )
+
+        if est_resale is None or max_bid is None:
+            status = "no_comp"
+        elif high_bid >= max_bid:
+            status = "stop"
+        elif high_bid >= 0.85 * max_bid:
+            status = "caution"
+        else:
+            status = "go"
+
+        rows.append({
+            "lot_id": lot_id,
+            "title": title,
+            "auction_name": auction_name,
+            "auction_id": auction_id,
+            "high_bid": high_bid,
+            "my_bid": my_bid,
+            "bid_status": bid_status,
+            "time_left": time_left,
+            "est_resale": float(est_resale) if est_resale else None,
+            "max_bid": max_bid,
+            "status": status,
+        })
+
+    # Summary chips at the top
+    n_stop = sum(1 for r in rows if r["status"] == "stop")
+    n_caution = sum(1 for r in rows if r["status"] == "caution")
+    n_go = sum(1 for r in rows if r["status"] == "go")
+    n_nocomp = sum(1 for r in rows if r["status"] == "no_comp")
+    chip_bits = []
+    if n_stop:
+        chip_bits.append(f"🛑 **{n_stop} stop**")
+    if n_caution:
+        chip_bits.append(f"🟡 {n_caution} near max")
+    if n_go:
+        chip_bits.append(f"🟢 {n_go} go")
+    if n_nocomp:
+        chip_bits.append(f"❓ {n_nocomp} uncomped")
+    st.markdown(
+        " · ".join(chip_bits) if chip_bits else f"{len(rows)} active bids"
+    )
+    st.caption(
+        f"Stop signal uses target ROI **{target_roi:.1f}×** "
+        f"(set in the comps panel) and ${ship_cost_default:.0f} default "
+        "ship cost. Adjust ROI to retighten."
+    )
+
+    # ---- CSV export of the live-bid view ---------------------------
+    # Same in-memory data we use to render the cards, materialized
+    # to a flat DataFrame. Includes derived columns (status_label,
+    # headroom, lot_url) so the CSV is useful in Excel without
+    # post-processing.
+    status_label_map = {
+        "stop": "STOP",
+        "caution": "NEAR MAX",
+        "go": "GO",
+        "no_comp": "NO COMP",
+    }
+    export_rows = []
+    for r in rows:
+        max_bid = r["max_bid"]
+        high_bid = r["high_bid"]
+        export_rows.append({
+            "status": status_label_map[r["status"]],
+            "lot_id": r["lot_id"],
+            "title": r["title"],
+            "auction_name": r["auction_name"],
+            "auction_id": r["auction_id"],
+            "current_high": high_bid,
+            "my_bid": r["my_bid"],
+            "bid_status": r["bid_status"],
+            "time_left": r["time_left"],
+            "est_resale": r["est_resale"],
+            "max_bid": max_bid,
+            "headroom": (
+                round(max_bid - high_bid, 2)
+                if max_bid is not None else None
+            ),
+            "lot_url": f"https://hibid.com/lot/{r['lot_id']}",
+        })
+    export_df = pd.DataFrame(export_rows)
+    csv_bytes = export_df.to_csv(index=False).encode("utf-8")
+    fname = f"htown-hibid-live-{datetime.now():%Y%m%d-%H%M}.csv"
+    st.download_button(
+        f"📥 Export {len(export_rows)} live bids to CSV",
+        data=csv_bytes,
+        file_name=fname,
+        mime="text/csv",
+        key="hibid_live_export_csv",
+        width="stretch",
+        help="Download the table above with one row per open bid, "
+             "plus status + headroom columns for spreadsheet filtering.",
+    )
+
+    # Sort: stop first (most urgent), then near-max, no-comp, go last
+    sort_priority = {"stop": 0, "caution": 1, "no_comp": 2, "go": 3}
+    rows.sort(key=lambda r: (sort_priority[r["status"]], r["title"]))
+
+    status_label = {
+        "stop": "🛑 STOP",
+        "caution": "🟡 NEAR MAX",
+        "go": "🟢 GO",
+        "no_comp": "❓ NO COMP",
+    }
+    for r in rows:
+        # Leading vs outbid is the FIRST visual signal — bigger anxiety
+        # driver than the stop signal itself. When someone else bid $590
+        # on a lot where the user only bid $50, the user shouldn't have
+        # to puzzle out "is that 'Current high $590' MY bid or theirs?"
+        # — the chip + plain-language summary line below resolve it.
+        is_leading = r["bid_status"] == "WINNING"
+        is_outbid = r["bid_status"] == "OUTBID"
+        leading_chip = (
+            "🏆 LEADING" if is_leading
+            else "🚨 OUTBID" if is_outbid
+            else f"❓ {r['bid_status']}"
+        )
+
+        with st.container(border=True):
+            c1, c2 = st.columns([4, 1])
+            with c1:
+                st.markdown(
+                    f"**{leading_chip}** · "
+                    f"**{status_label[r['status']]}** — "
+                    f"{r['title'][:75]}"
+                )
+                tail = f" · ⏱ {r['time_left']}" if r["time_left"] else ""
+                st.caption(f"{r['auction_name'][:55]}{tail}")
+                # Plain-language summary — the anti-anxiety line.
+                # Reframes "current high $590 / max $92 / -$498 over"
+                # so the user sees instantly that the $590 is the
+                # LEADER's bid, not theirs.
+                if is_leading:
+                    if (r["max_bid"] is not None
+                            and r["my_bid"] is not None
+                            and r["my_bid"] > r["max_bid"]):
+                        over = r["my_bid"] - r["max_bid"]
+                        summary = (
+                            f"🏆 **You're leading at "
+                            f"${r['my_bid']:,.0f}** — "
+                            f"but ${over:,.0f} over your max"
+                        )
+                    else:
+                        summary = (
+                            f"🏆 **You're leading at "
+                            f"${r['my_bid']:,.0f}**"
+                        )
+                elif is_outbid:
+                    gap = r["high_bid"] - (r["my_bid"] or 0)
+                    summary = (
+                        f"🚨 Leader is at **${r['high_bid']:,.0f}** "
+                        f"· you bid ${r['my_bid'] or 0:,.0f} "
+                        f"(${gap:,.0f} below)"
+                    )
+                else:
+                    summary = f"Current high: ${r['high_bid']:,.0f}"
+                st.markdown(summary)
+            with c2:
+                lot_url = f"https://hibid.com/lot/{r['lot_id']}"
+                st.markdown(f"[Open ↗]({lot_url})")
+
+            cm1, cm2, cm3 = st.columns(3)
+            with cm1:
+                # Always primary: YOUR bid. Label changes based on
+                # leading state so the user knows whether the dollar
+                # figure is "you're winning" or "you got outbid".
+                first_label = (
+                    "Your bid (leading)" if is_leading
+                    else "Your bid (outbid)" if is_outbid
+                    else "Your bid"
+                )
+                first_value = r["my_bid"] if r["my_bid"] is not None else 0
+                st.metric(first_label, f"${first_value:,.0f}")
+            with cm2:
+                if r["max_bid"] is not None:
+                    headroom = r["max_bid"] - r["high_bid"]
+                    # "normal" colors negative deltas red-down, positive
+                    # green-up. Headroom uses the leader's high_bid as
+                    # the floor — meaningful for both leading (your
+                    # cushion before someone else outbids you past
+                    # max) and outbid (whether you can counter-bid
+                    # without going over).
+                    if headroom > 0:
+                        delta_text = f"+${headroom:,.0f} room"
+                    else:
+                        delta_text = f"-${abs(headroom):,.0f} over"
+                    st.metric(
+                        "Max bid", f"${r['max_bid']:,.0f}",
+                        delta=delta_text, delta_color="normal",
+                    )
+                else:
+                    st.metric("Max bid", "—",
+                              delta="no comp", delta_color="off")
+            with cm3:
+                if r["est_resale"]:
+                    st.metric("Est resale", f"${r['est_resale']:,.0f}")
+                else:
+                    st.metric("Est resale", "—")
+
+
+def _render_hibid_setup_panel(_hibid_account, *, expand_token: bool):
+    """Render the HiBid token-management expander below the live-bid view."""
+    token_meta = _hibid_account.session_metadata()
+    has_token = bool(token_meta.get("has_token"))
+
+    with st.expander(
+        "🔐 HiBid token",
+        expanded=expand_token and not has_token,
+    ):
+        if has_token:
+            try:
+                acct = _hibid_account.fetch_account_info()
+                st.success(
+                    f"Signed in as **{acct.get('username') or '?'}**"
+                )
+            except Exception as e:
+                st.error(f"⚠️ Token invalid: {e}")
+            st.caption(
+                f"Saved {token_meta.get('saved_at')} · "
+                f"{token_meta.get('token_length')} chars"
+            )
+            if st.button("🗑️ Clear token", key="hibid_clear_token"):
+                _hibid_account.clear_auth_token()
+                st.session_state.pop("_hibid_live_cache", None)
+                st.session_state.pop("_hibid_live_cache_ts", None)
+                st.session_state.pop("_hibid_autosync_at", None)
+                st.rerun()
+        else:
+            st.caption(
+                "Log into hibid.com → DevTools → Network → /graphql "
+                "POST → `GetAccountInfo` response → copy the `authToken` "
+                "field (long hex string ~768 chars)."
+            )
+        new_token = st.text_area(
+            "Paste HiBid authToken",
+            value="",
+            height=100,
+            key="hibid_token_paste",
+        )
+        if st.button(
+            "💾 Save token", key="hibid_save_token",
+            disabled=not (new_token or "").strip(),
+            width="stretch",
+        ):
+            _hibid_account.set_auth_token(new_token)
+            tlog("HIBID", "authToken saved")
+            st.session_state.pop("_hibid_autosync_at", None)
+            st.rerun()
+
+
+# ---------------------------------------------------------------------
+# Background HiBid sync — fires on page render with debounce
+# ---------------------------------------------------------------------
+# Default: every 5 minutes since the last successful sync. Without this,
+# auto-record only fired when the user opened the (now-deleted) Live
+# HiBid bids tab. Now it runs invisibly: token saved + auto-record
+# toggled on + 5min elapsed → fetch + auto-record.
+
+_HIBID_AUTOSYNC_INTERVAL_SECONDS = 300  # 5 minutes
+
+
+def _maybe_auto_sync_hibid(force: bool = False) -> None:
+    """Pull HiBid current bids into the live cache, debounced.
+
+    Safe to call on every Streamlit script run. Returns immediately
+    when no HiBid token is saved or the last sync was within
+    `_HIBID_AUTOSYNC_INTERVAL_SECONDS`. Pass ``force=True`` to bypass
+    the time-window check.
+    """
+    _hibid_account = _hibid_module()
+    if not _hibid_account.session_metadata().get("has_token"):
+        return
+    last = st.session_state.get("_hibid_autosync_at", 0.0)
+    now = _time.time()
+    if not force and (now - last) < _HIBID_AUTOSYNC_INTERVAL_SECONDS:
+        return
+    try:
+        cache_full = _hibid_account.fetch_all_current_bids(
+            only_open=False, only_winning=False,
+        )
+        st.session_state._hibid_live_cache = cache_full
+        st.session_state._hibid_live_cache_ts = now
+        st.session_state._hibid_autosync_at = now
+    except Exception as e:
+        # Don't crash the page over a network blip — log + back off.
+        tlog("HIBID", f"auto-sync failed: {type(e).__name__}: {e}")
+        st.session_state._hibid_autosync_at = now
+
+
+# ---------------------------------------------------------------------
+# TOP BAR: title + Sourcing / Memory / My Bids popovers + sidebar toggle.
+# Defined here at module scope so the widget return values
+# (user_zip, radius, include_nationwide, closing_days, category_filter)
+# are visible to `_render_sidebar_refresh_button()` later in the script
+# — Streamlit widget returns are scoped to the `with` block they're
+# defined in, but module-level assignments stay in module-level scope.
+# Placed after the My Bids helper functions so all referenced helpers
+# (_hibid_popover_label, _render_live_hibid_view) are already defined.
+# ---------------------------------------------------------------------
+header_title_col, header_actions_col = st.columns([3, 4])
 with header_title_col:
     st.markdown("## 🛰️ Auction Intelligence Dashboard")
 
 with header_actions_col:
-    # Four slots: Sourcing popover, Memory popover, BOLO Suggestions
-    # popover (mines the cache for brand candidates not yet on the
-    # watch list), and a sidebar toggle that's always reachable so
-    # the user can manually reopen the auction list after the
-    # auto-collapse fires.
-    pop_sourcing, pop_memory, pop_bolo, btn_sidebar = st.columns(4)
+    pop_sourcing, pop_memory, pop_mybids, btn_sidebar = st.columns(4)
 
     with pop_sourcing:
-        with st.popover("📍 Sourcing", use_container_width=True):
-            user_zip = st.text_input("Home Zip Code", value="77058")
-            radius = st.slider("Local Pickup Radius (mi)", 5, 100, 20)
+        with st.popover("📍 Sourcing", width='stretch'):
+            user_zip = st.text_input(
+                "Home Zip Code", value="77058", key="sb_user_zip",
+            )
+            radius = st.slider(
+                "Local Pickup Radius (mi)", 5, 100, 20, key="sb_radius",
+            )
             include_nationwide = st.checkbox(
                 "Include Nationwide (Ship-to-Me)", value=True,
+                key="sb_include_nationwide",
             )
-            closing_days = st.slider("Closing Within (days)", 1, 30, 1)
+            closing_days = st.slider(
+                "Closing Within (days)", 1, 30, 1, key="sb_closing_days",
+            )
             category_filter = st.multiselect(
                 "🏷️ Categories (optional)",
-                options=sorted(set(st.session_state.known_categories)),
+                options=sorted(set(st.session_state.get('known_categories', []) or [])),
                 placeholder="All categories",
-                help=(
-                    "Only keep lots whose category matches any selected term "
-                    "(substring, case-insensitive). Saves time in Phase 2 by "
-                    "dropping irrelevant items. Leave blank to fetch everything."
-                ),
+                key="sb_category_filter",
+                help="Only keep lots whose category matches any selected "
+                     "term (substring, case-insensitive). Leave blank to "
+                     "fetch everything.",
             )
 
     with pop_memory:
-        with st.popover("💾 Memory", use_container_width=True):
-            cached_list = _AUCTION_CACHE.list_all(ttl_days=st.session_state.cache_ttl_days)
+        with st.popover("💾 Memory", width='stretch'):
+            cached_list = _AUCTION_CACHE.list_all(
+                ttl_days=st.session_state.cache_ttl_days
+            )
             fresh_count = sum(1 for c in cached_list if c['fresh'])
             st.caption(
-                f"**{fresh_count}** auction(s) cached. "
-                "Audit + price-comp results are reused when you re-open an auction — "
-                "current bids refresh every discovery run."
+                f"**{fresh_count}** auction(s) cached. Audit + comp "
+                "results are reused when you re-open an auction."
             )
             st.session_state.cache_ttl_days = st.slider(
                 "Auto-purge after (days)",
                 min_value=1, max_value=30,
                 value=int(st.session_state.cache_ttl_days),
-                help="Cached analyses older than this get deleted automatically. "
-                     "Auctions are also purged as soon as their closing date passes.",
+                key="memory_cache_ttl_days",
             )
             if cached_list:
                 with st.expander(
@@ -1188,9 +1749,9 @@ with header_actions_col:
                     expanded=False,
                 ):
                     st.caption(
-                        "Click any entry to re-open its previous analysis "
-                        "without burning a single ScrapingBee credit — the "
-                        "audit + comp results are read straight from disk."
+                        "Click any entry to re-open its previous "
+                        "analysis — zero credits, audit + comp data "
+                        "read from disk."
                     )
                     for entry in cached_list[:25]:
                         aid = entry.get('auction_id')
@@ -1207,24 +1768,11 @@ with header_actions_col:
                             )
                         except Exception:
                             age_str = "?"
-                        # One button per cached auction. The cache only
-                        # stores the slim analysis columns (title /
-                        # current_bid / thumbnail are deliberately
-                        # excluded so they always come from a fresh
-                        # Phase 1 fetch), so we route through the same
-                        # single-auction fetch_lots path the header
-                        # Refresh button uses: queue the fetch, let it
-                        # populate phase1_leads, and the auto-load step
-                        # at the top of the dispatch picks it up and
-                        # merges the cached audit + comp columns onto
-                        # the fresh lots via _load_auction_for_analysis.
-                        # Costs zero ScrapingBee credits — Phase 1 is
-                        # free HiBid GraphQL.
                         if st.button(
                             f"{badge} **{auction_name}** — "
                             f"{items} items · {age_str}",
                             key=f"open_cached_{aid}",
-                            use_container_width=True,
+                            width='stretch',
                         ):
                             if aid is not None:
                                 st.session_state._selected_auction_ids = [aid]
@@ -1233,183 +1781,37 @@ with header_actions_col:
                                 st.session_state.phase1_leads = pd.DataFrame()
                                 st.session_state.fetch_lots_running = True
                                 st.rerun()
-                            else:
-                                st.error(
-                                    "This cache entry has no auction_id, "
-                                    "so we can't refetch its lots. Try "
-                                    "re-running the audit."
-                                )
                     if len(cached_list) > 25:
                         st.caption(
                             f"...and {len(cached_list) - 25} more "
                             "(showing newest 25)."
                         )
-            if st.button("🗑️ Clear all memory", use_container_width=True,
-                         help="Delete every cached auction analysis. Use if results feel stale."):
+            if st.button(
+                "🗑️ Clear all memory", width='stretch',
+                help="Delete every cached auction analysis.",
+            ):
                 removed = _AUCTION_CACHE.clear_all()
                 st.success(f"Cleared {removed} cached auction(s).")
                 st.rerun()
 
-    with pop_bolo:
-        with st.popover("🔭 BOLO Suggestions", use_container_width=True):
-            # Mines every cached auction for brand candidates not
-            # already on the BOLO list, ranked by occurrences ×
-            # avg_resale × log(avg_comps + 1). Free — no API calls,
-            # just regex over the cached pickles.
-            from scraper.bolo_suggester import (
-                suggest_from_cache,
-                to_bolo_entry_scaffold,
-                format_scaffold_json,
-                scan_cache as _suggester_scan_cache,
-            )
-            st.caption(
-                "Mines your cached audit history for brand candidates "
-                "that **comp well but aren't yet on the BOLO list**. "
-                "Use this quarterly to graduate winners into "
-                "`data/clothing_brand_bolo.json` or "
-                "`data/household_parts_bolo.json`."
-            )
-            sugg_c1, sugg_c2, sugg_c3 = st.columns(3)
-            with sugg_c1:
-                sb_min_resale = st.number_input(
-                    "Min est_resale", value=20.0, min_value=0.0, step=5.0,
-                    key="bolo_sugg_min_resale",
-                )
-            with sugg_c2:
-                sb_min_comps = st.number_input(
-                    "Min comps", value=3, min_value=1, step=1,
-                    key="bolo_sugg_min_comps",
-                )
-            with sugg_c3:
-                sb_min_occur = st.number_input(
-                    "Min occurrences", value=2, min_value=1, step=1,
-                    key="bolo_sugg_min_occur",
-                    help="How many cached lots a brand candidate has to "
-                         "appear in before it surfaces. Higher = less "
-                         "noise, fewer suggestions.",
-                )
-            cache_total = len(_suggester_scan_cache())
-            st.caption(
-                f"Scanning **{cache_total:,}** lots across all cached "
-                "auctions."
-            )
-            sugg_df = suggest_from_cache(
-                _BOLO_MATCHER,
-                min_resale=float(sb_min_resale),
-                min_comps=int(sb_min_comps),
-                min_occurrences=int(sb_min_occur),
-                max_results=30,
-            )
-            if sugg_df is None or sugg_df.empty:
-                st.info(
-                    "No suggestions yet — either the cache is empty, "
-                    "the thresholds are too tight, or every well-comping "
-                    "brand is already on the BOLO list."
-                )
-            else:
-                # Render as a tight table. Sample titles + auctions
-                # are list-typed so we render them as comma-separated
-                # strings for st.dataframe.
-                disp = sugg_df.copy()
-                disp['sample_titles'] = disp['sample_titles'].apply(
-                    lambda L: " · ".join(s[:50] for s in (L or []))
-                )
-                disp['auctions_seen'] = disp['auctions_seen'].apply(
-                    lambda L: " · ".join((L or [])[:2])
-                )
-                st.dataframe(
-                    disp[[
-                        'brand_candidate', 'occurrences',
-                        'avg_resale', 'max_resale',
-                        'avg_comps', 'avg_str', 'score',
-                        'sample_titles',
-                    ]],
-                    use_container_width=True,
-                    column_config={
-                        'brand_candidate': st.column_config.TextColumn("Candidate"),
-                        'occurrences': st.column_config.NumberColumn("Hits", format="%d"),
-                        'avg_resale': st.column_config.NumberColumn("Avg $", format="$%.2f"),
-                        'max_resale': st.column_config.NumberColumn("Max $", format="$%.2f"),
-                        'avg_comps': st.column_config.NumberColumn("Avg comps", format="%.1f"),
-                        'avg_str': st.column_config.NumberColumn("Avg STR", format="%.0f%%"),
-                        'score': st.column_config.NumberColumn("Score", format="%d"),
-                        'sample_titles': st.column_config.TextColumn(
-                            "Sample lot titles", width="large",
-                        ),
-                    },
-                    hide_index=True,
-                )
-
-                # JSON scaffolding for one selected candidate
-                st.markdown("---")
-                st.markdown("**Generate JSON scaffold for a candidate**")
-                pick_idx = st.selectbox(
-                    "Candidate",
-                    options=list(range(len(sugg_df))),
-                    format_func=lambda i: (
-                        f"{sugg_df.iloc[i]['brand_candidate']}  "
-                        f"(×{sugg_df.iloc[i]['occurrences']}, "
-                        f"avg ${sugg_df.iloc[i]['avg_resale']:.0f})"
-                    ),
-                    key="bolo_sugg_pick",
-                )
-                picked = sugg_df.iloc[pick_idx]
-                scaffold = to_bolo_entry_scaffold(
-                    brand_candidate=picked['brand_candidate'],
-                    sample_titles=picked['sample_titles'],
-                    avg_resale=float(picked['avg_resale'] or 0),
-                    max_resale=float(picked['max_resale'] or 0),
-                )
-                st.code(format_scaffold_json(scaffold), language="json")
-                st.caption(
-                    "Copy → fill in TODO fields → paste into the "
-                    "`brands` array in the appropriate BOLO file → "
-                    "save. The matcher hot-reloads on file mtime "
-                    "change, so the next render picks up the new "
-                    "brand without restart."
-                )
-
-    # The Refresh / Discover button moved to the top of the sidebar
-    # auction list (see _render_sidebar_refresh_button below) so it's
-    # adjacent to the list it refreshes.
+    with pop_mybids:
+        with st.popover(_hibid_popover_label(), width='stretch'):
+            _render_live_hibid_view()
 
     with btn_sidebar:
-        # Manual sidebar toggle so the user can override the auto-
-        # collapse behavior in either direction. Label flips based on
-        # the current force-collapsed state.
-        _is_hidden = bool(st.session_state.get('_sidebar_force_collapsed', False))
+        # Manual sidebar toggle. Override the auto-collapse-on-analysis
+        # behavior in either direction.
+        _is_hidden = bool(
+            st.session_state.get('_sidebar_force_collapsed', False)
+        )
         _toggle_label = "📋 Show auctions" if _is_hidden else "🔽 Hide auctions"
         if st.button(
-            _toggle_label,
-            use_container_width=True,
-            key="sidebar_toggle_btn",
-            help=("Show the auction-list sidebar."
-                  if _is_hidden else
-                  "Hide the auction-list sidebar to free up screen space."),
+            _toggle_label, width='stretch', key="sidebar_toggle_btn",
         ):
             st.session_state._sidebar_force_collapsed = not _is_hidden
             st.rerun()
 
-# Auto-discover on first page load when there's no cached discovery to
-# show — saves the user a click. The flag prevents re-triggering across
-# Streamlit reruns within the same session if the discover fails or
-# returns zero candidates.
-if (
-    not st.session_state.get('_auto_discover_triggered', False)
-    and not any_running
-    and st.session_state.phase1_leads.empty
-    and not st.session_state.get('auction_candidates')
-):
-    st.session_state._auto_discover_triggered = True
-    st.session_state._sourcing_cfg = {
-        "zip": user_zip,
-        "radius": radius,
-        "include_nationwide": include_nationwide,
-        "closing_days": closing_days,
-        "category_filter": category_filter,
-    }
-    st.session_state.discover_running = True
-    st.rerun()
+
 
 # ================================================================
 # SIDEBAR: persistent auction list. Always visible while there are
@@ -1466,6 +1868,10 @@ def _estimate_comp_cost_for_audit(audit_df) -> tuple:
     Eligibility: not red-flagged AND est_resale is currently null
     (un-comped). PC-covered lots cost 0 credits; everything else
     burns ~50 credits (eBay sold + Mercari sold).
+
+    Per-title PC classification is cached in session state so
+    spend-cap knob bumps don't re-run the classifier for every
+    keystroke.
     """
     from scraper.pricecharting import classify_for_pricecharting
     if not isinstance(audit_df, pd.DataFrame) or audit_df.empty:
@@ -1481,10 +1887,21 @@ def _estimate_comp_cost_for_audit(audit_df) -> tuple:
         return 0, 0, 0.0
     title_col = 'enriched_title' if 'enriched_title' in eligible.columns else 'title'
     titles = eligible[title_col].fillna('').astype(str).tolist()
-    pc_hits = sum(
-        1 for t in titles
-        if classify_for_pricecharting(t) in ('tcg', 'video_game', 'comic')
-    )
+    try:
+        _pc_cache = st.session_state.setdefault('_pc_classify_cache', {})
+    except Exception:
+        _pc_cache = {}
+
+    def _is_pc(t: str) -> bool:
+        cached = _pc_cache.get(t)
+        if cached is None:
+            cached = classify_for_pricecharting(t) in (
+                'tcg', 'video_game', 'comic',
+            )
+            _pc_cache[t] = cached
+        return cached
+
+    pc_hits = sum(1 for t in titles if _is_pc(t))
     pc_pct = pc_hits / max(len(titles), 1)
     est_credits = int(len(titles) * (1 - pc_pct) * _CREDITS_PER_NON_PC_LOT)
     return len(titles), est_credits, pc_pct
@@ -1591,18 +2008,45 @@ def _detect_dropship_signal(sample_titles):
     return True, ratio, top_phrase
 
 
-def _auction_signal(name, items, closes_dt, last_run_dt, sample_titles=None):
+# Canadian-province codes — auctions located in Canada are flagged
+# 'avoid' for a US-based buyer because most don't ship to US (or
+# import/clearance fees make it uneconomical).
+_CANADIAN_PROVINCE_CODES = frozenset({
+    'ON', 'QC', 'BC', 'AB', 'MB', 'SK',
+    'NS', 'NB', 'NL', 'PE', 'YT', 'NT', 'NU',
+})
+
+
+def _auction_signal(name, items, closes_dt, last_run_dt,
+                    sample_titles=None, state=None, city=None):
     """Return (rank, reason) where rank is 'good' | 'caution' | 'avoid'.
 
     Heuristics, ranked first-match-wins:
-      - 'avoid': name matches commoditized-source keywords, dropship
-        template language detected in lot titles, lot count > 1500,
-        or closing in <2 hours (comp run wouldn't finish).
+      - 'avoid': Canadian-located auction (most don't ship to US),
+        name matches commoditized-source keywords, dropship template
+        language detected in lot titles, lot count > 1500, or closing
+        in <2 hours.
       - 'caution': already analyzed in the last 24h, or outside the
         100-500 lot sweet spot but otherwise fine.
       - 'good': in the sweet spot, optionally with a 'prefer' keyword.
     """
     nm = (name or '').lower()
+    state_upper = (state or '').strip().upper()
+    if state_upper and state_upper in _CANADIAN_PROVINCE_CODES:
+        return 'avoid', (
+            f"Located in {state_upper} (Canada) — most Canadian "
+            "auctioneers don't ship to US"
+        )
+    if (
+        'canada' in nm
+        or ' canadian ' in f' {nm} '
+        or 'ontario' in nm or 'quebec' in nm
+        or 'british columbia' in nm or 'alberta' in nm
+    ):
+        return 'avoid', (
+            "Auction name suggests Canadian location — most don't "
+            "ship to US"
+        )
     for kw in _AVOID_KEYWORDS:
         if kw in nm:
             return 'avoid', f"Name contains '{kw}' — base prices typically too compressed for arbitrage"
@@ -1678,7 +2122,7 @@ def _render_sidebar_refresh_button():
     if st.button(
         refresh_label,
         type="primary",
-        use_container_width=True,
+        width='stretch',
         disabled=any_running,
         key="discover_btn",
         help=refresh_help,
@@ -1778,16 +2222,16 @@ def _render_sidebar_auction_list():
             label_visibility="collapsed",
         ).strip().lower()
         sb_sort = st.selectbox(
-            "Sort",
+            "Sort by",
             options=[
-                "🎯 Most BOLO hits first",
-                "🎯 Best fit first",
-                "💸 Highest PC % first",
-                "💸 Lowest credit cost first",
-                "🔢 Most items first",
-                "⏰ Closing soonest",
-                "🔢 Fewest items first",
-                "⏰ Closing latest",
+                "BOLO hits",
+                "Best Match",
+                "Highest PC %",
+                "Lowest credit cost",
+                "Most items",
+                "Closing soonest",
+                "Fewest items",
+                "Closing latest",
             ],
             key="sidebar_picker_sort",
             label_visibility="collapsed",
@@ -1805,7 +2249,7 @@ def _render_sidebar_auction_list():
         )
         sb_hide_local_pickup = st.checkbox(
             "Hide 📦 ALL local pickup",
-            value=True,
+            value=False,
             key="sidebar_hide_local_pickup",
             help="Filter out every Local Pickup auction, even ones "
                  "within your sourcing radius. Default ON — uncheck "
@@ -1823,19 +2267,13 @@ def _render_sidebar_auction_list():
                  "500 mi for a pickup-only auction is rarely worth it. "
                  "Uncheck if you're traveling to that area.",
         )
-        sb_only_bolo = st.checkbox(
-            f"🎯 Only BOLO matches ({_BOLO_MATCHER.brand_count} brands)",
-            value=True,
-            key="sidebar_only_bolo",
-            disabled=not _BOLO_MATCHER.loaded,
-            help="Show only auctions with at least one lot matching the "
-                 "brand BOLO list. For cached auctions the count comes "
-                 "from a full scan; for uncached auctions we scan the "
-                 "auction name + sample lot titles, so it's a hint, "
-                 "not a guarantee. Default ON — uncheck to see every "
-                 "discovered auction. Replace the JSON files quarterly "
-                 "to refresh the lists.",
-        )
+        # The "Only BOLO matches" sidebar toggle was removed — at the
+        # discovery stage the BOLO hints are based on auction NAME +
+        # 8-lot title sample, so they hide auctions that may actually
+        # have BOLO content in lots we haven't sampled yet. Better UX:
+        # show every discovered auction, let the user click "🔍 Search
+        # for BOLOs" to do the full scan, and surface the hit counts
+        # in the auction list afterwards.
 
         # Scan-all-for-BOLO button placeholder — the actual button is
         # rendered below, AFTER all visibility filters are applied to
@@ -1933,7 +2371,9 @@ def _render_sidebar_auction_list():
                 'closes_dt': closes_dt,
                 'summary': summary or '',
                 'source': effective_source,
-                'raw_source': raw_source,  # for debug / future use
+                'raw_source': raw_source,  # used by REMOTE-pickup filter below
+                'city': c.get('city') or '',
+                'state': c.get('state') or '',
                 'pc_pct': pc_pct,
                 'est_credits': est_credits,
                 'sample_titles': sample_titles_for_signal,
@@ -1955,8 +2395,9 @@ def _render_sidebar_auction_list():
         sb_fetch_lots_running = st.session_state.get('fetch_lots_running', False)
 
         # Build a {auction_id: cached_at_datetime} map for the "last
-        # analyzed" labels + a {auction_id: (green_pct, green_count,
-        # total_count)} map so cached auctions can show their hit rate.
+        # analyzed" labels + a {auction_id: (a_count, b_count,
+        # total_count)} map so cached auctions can show their grade
+        # summary (replaces the old green_pct / green_count fields).
         # Single list_all() call, then we look up by id in the loop.
         # Pass a generous TTL so stale entries still surface a timestamp
         # — the user wants to see "12 days ago" on a stale auction, not
@@ -1964,35 +2405,21 @@ def _render_sidebar_auction_list():
         #
         # PERFORMANCE: list_all() unpickles every cached auction file
         # (~50-200KB each). With 30+ cached auctions that's ~5MB of
-        # pickle parsing on every render. Memoize per-session keyed on
-        # the cache-dir's directory mtime — rebuild only when a new
-        # auction is cached or one is purged. Fast path is a dict
-        # lookup.
-        _cache_dir_mtime = 0
-        try:
-            _cache_dir_mtime = _AUCTION_CACHE.cache_dir.stat().st_mtime
-        except (OSError, AttributeError):
-            pass
-        _cache_list_memo = st.session_state.get('_auction_cache_list_memo')
-        if (
-            _cache_list_memo is None
-            or _cache_list_memo.get('mtime') != _cache_dir_mtime
-        ):
-            try:
-                _entries = list(_AUCTION_CACHE.list_all(ttl_days=365))
-            except Exception:
-                _entries = []
-            st.session_state._auction_cache_list_memo = {
-                'mtime': _cache_dir_mtime,
-                'entries': _entries,
-            }
-            _cache_list_memo = st.session_state._auction_cache_list_memo
+        # pickle parsing on every render. The shared
+        # `_get_cached_auction_list_memo()` helper memoizes per-session
+        # keyed on the cache-dir's directory mtime — rebuild only when
+        # a new auction is cached or one is purged. The 💾 Memory
+        # popover hits the same memo, so we only do that pickle parse
+        # once per cache-dir change.
+        _entries = _get_cached_auction_list_memo()
 
         last_run_map = {}
-        green_map = {}
+        grade_map = {}
         bolo_cached_map = {}
+        bids_per_lot_map = {}
+        dropship_pct_map = {}
         try:
-            for entry in _cache_list_memo['entries']:
+            for entry in _entries:
                 ts_raw = entry.get('cached_at') or ''
                 try:
                     last_run_map[entry.get('auction_id')] = (
@@ -2000,16 +2427,22 @@ def _render_sidebar_auction_list():
                     )
                 except (ValueError, TypeError):
                     pass
-                gp = entry.get('green_pct')
-                if gp is not None:
-                    green_map[entry.get('auction_id')] = (
-                        gp,
-                        entry.get('green_count'),
-                        entry.get('total_count'),
+                ac = entry.get('a_count')
+                bc_grade = entry.get('b_count')
+                tc = entry.get('total_count')
+                if ac is not None or bc_grade is not None:
+                    grade_map[entry.get('auction_id')] = (
+                        ac or 0, bc_grade or 0, tc or 0,
                     )
                 bc = entry.get('bolo_count')
                 if bc is not None:
                     bolo_cached_map[entry.get('auction_id')] = bc
+                bpl = entry.get('bids_per_lot')
+                if bpl is not None:
+                    bids_per_lot_map[entry.get('auction_id')] = bpl
+                dpc = entry.get('dropship_pct')
+                if dpc is not None:
+                    dropship_pct_map[entry.get('auction_id')] = dpc
         except Exception:
             pass  # Cache read failure shouldn't break the picker
 
@@ -2031,50 +2464,21 @@ def _render_sidebar_auction_list():
         # or when fresh samples land for an auction (fingerprint).
         bolo_hint_map = {}  # aid -> (count, is_full_scan)
 
-        if _BOLO_MATCHER.loaded:
-            # Per-session memo, keyed on a tuple that captures every
-            # input that could change the result.
-            memo = st.session_state.setdefault('_bolo_hint_memo', {})
-            # Mtime fingerprint = the matcher's loaded-files combined
-            # mtime. Stored on the matcher as `_mtimes` (dict). When
-            # the user edits a JSON file, the mtime changes and the
-            # cache is naturally invalidated.
-            try:
-                matcher_fp = tuple(sorted(_BOLO_MATCHER._mtimes.items()))
-            except (AttributeError, TypeError):
-                matcher_fp = None
-            for c in candidates:
-                aid_local = c['auction_id']
-                cached_count = bolo_cached_map.get(aid_local)
-                if cached_count is not None:
-                    bolo_hint_map[aid_local] = (int(cached_count), True)
-                    continue
-                raw = cat_samples.get(aid_local) or {}
-                titles = raw.get('titles') if isinstance(raw, dict) else []
-                titles_capped = tuple((titles or [])[:50])
-                # Memo key: auction_id + samples + matcher mtime
-                memo_key = (aid_local, c.get('name') or '',
-                            titles_capped, matcher_fp)
-                cached = memo.get(memo_key)
-                if cached is not None:
-                    if cached > 0:
-                        bolo_hint_map[aid_local] = (cached, False)
-                    continue
-                # Cold: compute hits.
-                hits = 0
-                seen = set()
-                if _BOLO_MATCHER.match(c.get('name') or '', None):
-                    hits += 1
-                    seen.add('__name__')
-                for t in titles_capped:
-                    if t in seen:
-                        continue
-                    if _BOLO_MATCHER.match(t, None):
-                        hits += 1
-                        seen.add(t)
-                memo[memo_key] = hits
-                if hits:
-                    bolo_hint_map[aid_local] = (hits, False)
+        # FAST PATH: only populate hints from the DISK CACHE (cheap dict
+        # lookup, zero regex work). The previous "compute hints from
+        # auction name + sample titles" branch was eagerly loading the
+        # BOLO matcher (1-2s) and running ~2M regex calls (~1s) on every
+        # page render — making the auction list appear ~2-3s late after
+        # cache rehydrate. The hint-badge sample-based path was also the
+        # least-reliable signal (8 sampled titles per auction); the user
+        # gets ground-truth match counts after clicking "🔍 Search for
+        # BOLOs" anyway. Cached full-scan counts (from prior scans) are
+        # still surfaced — those don't require the matcher.
+        for c in candidates:
+            aid_local = c['auction_id']
+            cached_count = bolo_cached_map.get(aid_local)
+            if cached_count is not None and int(cached_count) > 0:
+                bolo_hint_map[aid_local] = (int(cached_count), True)
 
         def _format_last_run(when):
             """Compact relative timestamp for the per-row label."""
@@ -2097,6 +2501,8 @@ def _render_sidebar_auction_list():
                 row['name'], row['items'], row['closes_dt'],
                 last_run_map.get(row['auction_id']),
                 sample_titles=row.get('sample_titles'),
+                state=row.get('state'),
+                city=row.get('city'),
             )
             row['signal_rank'] = rank
             row['signal_reason'] = reason
@@ -2125,14 +2531,6 @@ def _render_sidebar_auction_list():
                     and (r.get('source') or '').strip().lower() == 'local pickup'
                 )
             ]
-        # Filter to BOLO matches when the toggle is on. Keeps any auction
-        # with at least one cached match OR at least one sample-title
-        # match. Intentionally permissive on the hint side — sample
-        # titles are a small slice, so a missing match doesn't mean the
-        # auction has zero BOLO lots.
-        if sb_only_bolo and _BOLO_MATCHER.loaded:
-            rows = [r for r in rows if bolo_hint_map.get(r['auction_id'])]
-
         # Stash the BOLO match count on each row so the sort below
         # (and any future label decoration) can read it directly.
         # is_full = True means a cached full-scan count; False means
@@ -2155,7 +2553,12 @@ def _render_sidebar_auction_list():
         # search shrinks the scan to match. This was the #1 footgun of
         # the previous build: the button ignored filters and hammered
         # HiBid for auctions the user had explicitly hidden.
-        if _BOLO_MATCHER.loaded and len(rows) >= 2:
+        # NOTE: previously gated on `_BOLO_MATCHER.loaded` — that's now
+        # a non-build-triggering check that returns False until the
+        # matcher is first touched. The button itself doesn't need a
+        # loaded matcher to RENDER; the matcher builds when the button
+        # is clicked + the BOLO scan path enters its match phase.
+        if len(rows) >= 2:
             _filtered_lots = sum(int(r.get('items') or 0) for r in rows)
             _filtered_mega = sum(
                 1 for r in rows if int(r.get('items') or 0) > 1000
@@ -2181,16 +2584,17 @@ def _render_sidebar_auction_list():
             )
             with _bolo_scan_button_slot.container():
                 if st.button(
-                    f"🎯 Scan {_filtered_count} visible auctions "
+                    f"🔍 Search for BOLOs across {_filtered_count} auctions "
                     f"({_filtered_lots:,} lots, {_filtered_eta_str})",
                     key="bolo_scan_all_btn",
                     disabled=_scan_disabled,
-                    use_container_width=True,
+                    type="primary",
+                    width='stretch',
                     help=(
-                        f"Scans the {_filtered_count} auctions currently "
-                        f"visible in your sidebar — respects every filter "
-                        f"(search, hide local pickup, hide remote pickup, "
-                        f"only-BOLO, hide avoid).{_hidden_suffix}. "
+                        f"Searches the {_filtered_count} auctions currently "
+                        f"visible in your sidebar for BOLO matches — respects "
+                        f"every filter (search, hide local pickup, hide "
+                        f"remote pickup, hide avoid).{_hidden_suffix}. "
                         f"Estimated scope: {_filtered_lots:,} total lots, "
                         f"~{_filtered_batches} concurrent fetch batches, "
                         f"ETA {_filtered_eta_str}. Free (HiBid GraphQL — "
@@ -2200,6 +2604,11 @@ def _render_sidebar_auction_list():
                         f"ScrapingBee spend)."
                     ),
                 ):
+                    tlog("CLICK",
+                         f"🔍 Search for BOLOs clicked",
+                         f"· {len(rows)} auctions in scope",
+                         f"· {_filtered_lots:,} lots,",
+                         f"ETA {_filtered_eta_str}")
                     # Use the FILTERED list of auction IDs — not the raw
                     # `candidates` — so hidden auctions stay hidden.
                     st.session_state._selected_auction_ids = [
@@ -2305,20 +2714,26 @@ def _render_sidebar_auction_list():
                 f" · {int(round(row['pc_pct'] * 100))}% PC"
                 if row.get('pc_pct') and row['pc_pct'] > 0 else ""
             )
-            # 🕒 Last analyzed line + 🟢 green-hit rate (from when the
-            # cache was saved — uses the user's then-current ROI/STR
-            # targets). Only shown when we actually have a cache entry.
+            # 🕒 Last analyzed line + buy_grade summary (A and B counts
+            # among comp-able lots) from the cached payload. Only shown
+            # when we actually have a cache entry. Replaces the old
+            # green-% badge that used ROI/STR thresholds.
             footer = ""
             if last_run_str:
-                green_bits = ""
-                green_entry = green_map.get(aid)
-                if green_entry is not None:
-                    gp, gc, tc = green_entry
-                    if gp is not None and tc:
-                        green_bits = f" · 🟢 **{gp:g}%** ({gc}/{tc})"
-                    elif gp is not None:
-                        green_bits = f" · 🟢 **{gp:g}%**"
-                footer = f"\n\n🕒 _Last analyzed: {last_run_str}_{green_bits}"
+                grade_bits = ""
+                grade_entry = grade_map.get(aid)
+                if grade_entry is not None:
+                    ac, bc_grade, tc = grade_entry
+                    parts = []
+                    if ac:
+                        parts.append(f"🟢 **{ac}** A")
+                    if bc_grade:
+                        parts.append(f"🟡 **{bc_grade}** B")
+                    if parts:
+                        grade_bits = " · " + " · ".join(parts)
+                        if tc:
+                            grade_bits += f" / {tc} comped"
+                footer = f"\n\n🕒 _Last analyzed: {last_run_str}_{grade_bits}"
 
             # 🎯 BOLO badge — surfaces both confirmed (full-scan) and
             # heuristic (sample-title) matches. Different wording so
@@ -2333,6 +2748,32 @@ def _render_sidebar_auction_list():
                     bolo_badge = f" · 🎯 **{bcount} BOLO**"
                 else:
                     bolo_badge = f" · 🎯 ~{bcount} BOLO hint"
+            # Competitiveness badge — bids per lot from the last save.
+            # 🔥 hot (≥8 bids/lot, lots of competing buyers)
+            # 🟡 normal (3-8, average action)
+            # 🧊 cold (<3, light bidding — easier wins)
+            # Only renders for auctions we've previously analyzed (the
+            # cached payload is what carries `bids_per_lot`); fresh
+            # uncached auctions show no badge.
+            comp_badge = ""
+            bpl = bids_per_lot_map.get(aid)
+            if bpl is not None:
+                if bpl >= 8:
+                    comp_badge = f" · 🔥 {bpl:.1f} bids/lot"
+                elif bpl >= 3:
+                    comp_badge = f" · 🟡 {bpl:.1f} bids/lot"
+                else:
+                    comp_badge = f" · 🧊 {bpl:.1f} bids/lot"
+            # Drop-ship channel badge — fires when >20% of analyzed lots
+            # match SEO-spam title patterns (DOTEFFIL silver-plated,
+            # eye masks, hot-compress towels, etc.). Threshold tuned
+            # against Mystery Mega 5/9 (25.6% → flagged) vs typical
+            # estate auctions (single-digit % → clean). Real estate
+            # auctions almost never hit 1 in 5 dropship-keyword titles.
+            dropship_badge = ""
+            dpc = dropship_pct_map.get(aid)
+            if dpc is not None and dpc >= 20:
+                dropship_badge = f" · 🚨 dropship channel ({dpc:.0f}%)"
             # Shipping-source badge: distinguishes nearby pickup
             # (within sourcing radius) from remote pickup (re-classified
             # from a nationwide-search 'Ship' result via pickup-only
@@ -2352,7 +2793,8 @@ def _render_sidebar_auction_list():
             label = (
                 f"{icon}**{row['name']}**\n\n"
                 f"{row['items']:,} lots · {row['closes_fmt']}{source_badge}\n\n"
-                f"💸 {credits_label}{pc_label}{bolo_badge}"
+                f"💸 {credits_label}{pc_label}{bolo_badge}{comp_badge}"
+                f"{dropship_badge}"
                 f"{footer}"
             )
             # Tooltip combines the auction summary with the triage
@@ -2370,7 +2812,7 @@ def _render_sidebar_auction_list():
             if st.button(
                 label,
                 key=f"sidebar_pick_{aid}",
-                use_container_width=True,
+                width='stretch',
                 disabled=sb_fetch_lots_running,
                 type="primary" if is_active else "secondary",
                 help=tooltip,
@@ -2463,7 +2905,7 @@ if st.session_state.get('discover_running'):
     _keep_screen_awake()
     discover_error = None
     discover_result_msg = None
-    with st.status("🔍 Phase 1 of 5: Discovering open auctions…", expanded=True) as status_box:
+    with st.status("🔍 Discovering open auctions…", expanded=True) as status_box:
         try:
             cfg = st.session_state.get('_sourcing_cfg', {})
             scraper = Phase1Scraper(config_path="config.json")
@@ -2472,6 +2914,14 @@ if st.session_state.get('discover_running'):
             scraper.include_nationwide = cfg.get("include_nationwide", True)
             scraper.closing_within_days = cfg.get("closing_days", 1)
             scraper.category_filter = cfg.get("category_filter", [])
+
+            tlog("DISCOVER",
+                 f"Phase 1a starting · zip={scraper.zip_code}",
+                 f"radius={scraper.radius}mi",
+                 f"closing<={scraper.closing_within_days}d",
+                 f"nationwide={scraper.include_nationwide}",
+                 f"category_filter={scraper.category_filter or 'none'}")
+            _phase1a_t0 = _time.time()
 
             st.write(
                 f"Querying HiBid near **{scraper.zip_code}** within "
@@ -2495,6 +2945,12 @@ if st.session_state.get('discover_running'):
                 scraper.fetch_auction_candidates(progress_callback=discover_prog)
             )
             scan_progress.empty()
+            _phase1a_elapsed = _time.time() - _phase1a_t0
+            _total_lots = sum(int(c.get('lot_count') or 0) for c in candidates)
+            tlog("DISCOVER",
+                 f"Phase 1a done in {_phase1a_elapsed:.1f}s",
+                 f"· got {len(candidates)} auctions",
+                 f"({_total_lots:,} total lots)")
 
             # Reset downstream state: a new candidate list invalidates prior picks + lots
             st.session_state.auction_candidates = candidates
@@ -2532,10 +2988,14 @@ if st.session_state.get('discover_running'):
                     {},  # samples filled in by Phase 1b
                 )
                 st.session_state.pop('_discovery_restored_from', None)
-                # Flag the next render to continue with sample
-                # batching. The auction list renders immediately
-                # because discover_running is about to flip False.
-                st.session_state._sampling_pending = True
+                # NOTE: Phase 1b background sampling NO LONGER auto-fires.
+                # The user explicitly asked for the auction list to render
+                # immediately without further work blocking the main panel.
+                # Sampling now runs only when the user clicks "🎯 Scan
+                # visible auctions" (which triggers the full BOLO scan)
+                # or clicks an individual auction row to drill in. Setting
+                # to False so any prior pending flag is cleared.
+                st.session_state._sampling_pending = False
             else:
                 discover_result_msg = "⚠️ No auctions matched your filters."
                 status_box.update(
@@ -2583,7 +3043,7 @@ if st.session_state.get('_sampling_pending'):
         scraper.include_nationwide = cfg.get("include_nationwide", True)
 
         with st.status(
-            f"🔍 Phase 1b: Loading content previews for "
+            f"🔍 Loading content previews for "
             f"{len(candidates)} auctions in the background…",
             expanded=True,
         ) as sample_status_box:
@@ -2591,7 +3051,7 @@ if st.session_state.get('_sampling_pending'):
                 "The auction list above is already usable — this step "
                 "fills in the **'What's in this auction'** preview "
                 "column + BOLO hints. Click an auction or run "
-                "**🎯 Scan all** anytime; you don't have to wait."
+                "**🔍 Search for BOLOs** anytime; you don't have to wait."
             )
             sample_progress = st.progress(
                 0, text=f"Sampling 0/{len(candidates)}…"
@@ -2639,7 +3099,7 @@ if st.session_state.get('_sampling_pending'):
             sampled = len(cat_samples_map)
             sample_status_box.update(
                 label=(
-                    f"✅ Phase 1b: Loaded previews for "
+                    f"✅ Loaded previews for "
                     f"{sampled} of {len(candidates)} auctions"
                 ),
                 state="complete", expanded=False,
@@ -2657,9 +3117,9 @@ if st.session_state.get('fetch_lots_running'):
     fetch_error = None
     fetch_result_msg = None
     _scan_all_label = (
-        "📥 Phase 2 of 5: Fetching every lot for BOLO scan…"
+        "📥 Fetching every lot for BOLO scan…"
         if st.session_state.get('_bolo_scan_all_pending')
-        else "📥 Phase 2 of 5: Fetching lots for selected auctions…"
+        else "📥 Fetching lots for selected auctions…"
     )
     with st.status(_scan_all_label, expanded=True) as status_box:
         try:
@@ -2729,8 +3189,11 @@ if st.session_state.get('fetch_lots_running'):
                     pct, text = 0.0, (label or "Done")
                 else:
                     pct = current / total if total > 0 else 0
-                    text = (f"{label} — {current}/{total} auctions"
-                            if label else f"{current}/{total}")
+                    text = (
+                        f"{label} · {current}/{total} auctions fetched"
+                        if label
+                        else f"{current}/{total} auctions fetched"
+                    )
                 fetch_progress.progress(min(pct, 1.0), text=text)
                 # Live detail line: running lot count + names of the
                 # auctions just completed this batch + any errors so far
@@ -2753,6 +3216,14 @@ if st.session_state.get('fetch_lots_running'):
                         f"just finished: {name_preview}{err_bit}"
                     )
 
+            _is_bolo_scan_all = bool(st.session_state.get('_bolo_scan_all_pending'))
+            _expected_lots = sum(int(c.get('lot_count') or 0) for c in selected_candidates)
+            tlog("FETCH",
+                 f"Phase 1 starting · {len(selected_candidates)} auctions",
+                 f"· ~{_expected_lots:,} expected lots",
+                 f"· mode={'BOLO scan all' if _is_bolo_scan_all else 'single drill'}")
+            _fetch_t0 = _time.time()
+
             df = run_async(
                 scraper.fetch_lots_for_selected(
                     selected_candidates, progress_callback=fetch_prog
@@ -2760,6 +3231,32 @@ if st.session_state.get('fetch_lots_running'):
             )
             fetch_progress.empty()
             fetch_live_detail.empty()
+            _fetch_elapsed = _time.time() - _fetch_t0
+            tlog("FETCH",
+                 f"Phase 1 done in {_fetch_elapsed:.1f}s",
+                 f"· kept {len(df):,} lots",
+                 f"(raw {df.attrs.get('raw_count', 0):,} ·",
+                 f"dropped status {df.attrs.get('filtered_by_status', 0)} ·",
+                 f"dropped category {df.attrs.get('filtered_by_category', 0)})")
+
+            # ---- Multi-auction cache merge ----
+            # Overlay cached analysis (verdict, est_resale, comp data)
+            # onto fresh Phase 1 lots from auctions we've already
+            # analyzed within the TTL window. Saves the audit + comp
+            # spend on auctions that haven't changed. The audit
+            # fast-path naturally skips lots with verdicts; the comp
+            # pipeline naturally skips lots with non-NaN est_resale.
+            if st.session_state.get('_bolo_scan_all_pending') and not df.empty:
+                df, _cache_stats = _merge_cached_analysis_multi(df)
+                if _cache_stats and _cache_stats.get('cached_auctions', 0) > 0:
+                    st.write(
+                        f"💾 Reused cached analysis for "
+                        f"**{_cache_stats['cached_auctions']}** of "
+                        f"**{_cache_stats['total_auctions']}** auctions "
+                        f"(**{_cache_stats['cached_lots']:,}** lots already "
+                        f"analyzed) · running fresh on "
+                        f"**{_cache_stats['new_auctions']}** new auction(s)."
+                    )
 
             st.session_state.phase1_leads = df
 
@@ -2899,29 +3396,19 @@ DISCOVERY_COL_ORDER = ["title", "current_bid", "est_cost", "bid_count",
 # definition sites were here.
 
 
-def _compute_green_stats(ar: pd.DataFrame):
-    """Compute (green_pct, green_count, total_count) from an analyzed df.
+def _compute_grade_stats(ar: pd.DataFrame):
+    """Compute (a_count, b_count, total) from an analyzed df.
 
-    Mirrors the meets_both logic in _render_results_table: a row is green
-    when est_roi ≥ (target_roi-1)*100 AND ebay_str ≥ target_str. When STR
-    data is missing for the entire auction, falls back to ROI-only.
-
-    Uses the user's current target settings from session_state (or the
-    widget defaults of 3.0× ROI / 70% STR) so the sidebar count matches
-    what they'd see on opening the analysis.
-
-    Total = comp-able lots only (not red-flagged, not HARD logistics, has
-    est_resale). That's the universe the green % is meaningful against —
-    rows we can't comp shouldn't deflate the percentage.
+    Replaces the old _compute_green_stats that used ROI/STR thresholds.
+    Now driven by the buy_grade column — counts A and B grades among
+    comp-able lots (shippable + not red-flagged + has est_resale).
+    The sidebar shows these counts to help the user compare auctions
+    at a glance ("12 A · 30 B" vs "0 A · 2 B").
     """
     if ar is None or not isinstance(ar, pd.DataFrame) or ar.empty:
         return None, None, None
-    if 'est_roi' not in ar.columns:
+    if 'buy_grade' not in ar.columns:
         return None, None, None
-
-    target_roi = float(st.session_state.get('target_roi_live', 3.0) or 3.0)
-    target_str = float(st.session_state.get('target_str_live', 70.0) or 70.0)
-    roi_threshold = (target_roi - 1) * 100
 
     # Comp-able universe: shippable, not red-flagged, has a price.
     eligible = (
@@ -2931,22 +3418,12 @@ def _compute_green_stats(ar: pd.DataFrame):
     )
     total = int(eligible.sum())
     if total == 0:
-        return 0.0, 0, 0
+        return 0, 0, 0
 
-    roi_num = pd.to_numeric(ar['est_roi'], errors='coerce')
-    meets_roi = roi_num.notna() & (roi_num >= roi_threshold)
-
-    if 'ebay_str' in ar.columns and ar['ebay_str'].notna().any():
-        str_num = pd.to_numeric(ar['ebay_str'], errors='coerce')
-        meets_str = str_num.notna() & (str_num >= target_str)
-        meets_both = meets_roi & meets_str
-    else:
-        # No STR data anywhere → ROI-only, matching the live-table fallback
-        meets_both = meets_roi
-
-    green = int((meets_both & eligible).sum())
-    pct = round((green / total) * 100, 1) if total else 0.0
-    return pct, green, total
+    grades = ar['buy_grade'].fillna('').astype(str)
+    a_mask = grades.str.startswith('🟢') & eligible
+    b_mask = grades.str.startswith('🟡') & eligible
+    return int(a_mask.sum()), int(b_mask.sum()), total
 
 
 def _save_current_auction_to_cache():
@@ -2955,11 +3432,13 @@ def _save_current_auction_to_cache():
     if not isinstance(ar, pd.DataFrame) or ar.empty:
         return
     auction_name = st.session_state.get('current_auction') or ""
-    # Skip cache writes for synthetic multi-auction views (BOLO scan
-    # across all auctions). The lots come from many different auction
-    # IDs, so a single cache key isn't meaningful — and re-loading
-    # would need to be triggered by the scan button, not by clicking
-    # a cached entry.
+    # Skip per-auction cache writes for synthetic multi-auction views
+    # (BOLO scan across all auctions). The lots come from many
+    # different auction IDs, so a single cache key isn't meaningful —
+    # and re-loading would need to be triggered by the scan button,
+    # not by clicking a cached entry. The COMPED-LOTS REGISTRY still
+    # gets written below regardless, so future scans can reuse this
+    # comp data.
     if auction_name.startswith("🎯 BOLO scan"):
         return
     auction_id = _extract_auction_id(ar)
@@ -2968,7 +3447,7 @@ def _save_current_auction_to_cache():
     closing_date = ""
     if 'closing_date' in ar.columns and not ar.empty:
         closing_date = str(ar['closing_date'].iloc[0])
-    green_pct, green_count, total_count = _compute_green_stats(ar)
+    a_count, b_count, total_count = _compute_grade_stats(ar)
     # Compute BOLO match count using the current brand list. Cheap
     # regex pass over titles + descriptions; result persists in the
     # cache payload so the sidebar can show "🎯 N BOLO" badges
@@ -2981,77 +3460,50 @@ def _save_current_auction_to_cache():
                 bolo_count = int(bolo_df['bolo_brand'].notna().sum())
     except Exception:
         bolo_count = 0
+
+    # Competitiveness signal — average bids per lot. Persists alongside
+    # the green % so the sidebar can show 🔥/🟡/🧊 markers without
+    # rehydrating the whole auction on each render. Read by the
+    # auction-list renderer in `_render_sidebar_auction_list`.
+    bids_per_lot = None
+    try:
+        if 'bid_count' in ar.columns and len(ar) > 0:
+            bc = pd.to_numeric(ar['bid_count'], errors='coerce').fillna(0)
+            bids_per_lot = float(bc.mean())
+    except Exception:
+        bids_per_lot = None
+
+    # Drop-ship-channel signature — % of lots whose titles match
+    # known SEO-spam patterns (DOTEFFIL silver-plated, eye-mask, etc.).
+    # Persists for sidebar display so the user can spot pure-dropship
+    # auctions like Mystery Mega before clicking in. Threshold for the
+    # 🚨 badge applied at render time, so we only need the raw %.
+    dropship_pct = None
+    try:
+        if 'title' in ar.columns and len(ar) > 0:
+            n_dropship = sum(
+                1 for t in ar['title'].fillna('').astype(str)
+                if _is_dropship_lot(t)
+            )
+            dropship_pct = round(100.0 * n_dropship / len(ar), 1)
+    except Exception:
+        dropship_pct = None
+
     try:
         _AUCTION_CACHE.save(
             auction_id, auction_name, ar, closing_date,
-            green_pct=green_pct,
-            green_count=green_count,
+            a_count=a_count,
+            b_count=b_count,
             total_count=total_count,
             bolo_count=bolo_count,
+            bids_per_lot=bids_per_lot,
+            dropship_pct=dropship_pct,
         )
     except Exception as e:
         # Don't crash the app over a cache write failure
         st.warning(f"Could not save analysis to cache: {e}")
 
 
-def _render_auction_card(auction_name, auction_df):
-    """Render one auction's expander with a single 'Analyze' button.
-
-    Button click triggers a full app rerun so the analysis view renders in
-    the main content area (not inside this expander).
-    """
-    closing = auction_df['closing_date'].iloc[0] if 'closing_date' in auction_df.columns else ""
-    source = auction_df['source'].iloc[0] if 'source' in auction_df.columns else ""
-    item_count = len(auction_df)
-    avg_bid = auction_df['current_bid'].mean() if 'current_bid' in auction_df.columns else 0
-    easy_count = (auction_df['logistics_ease'] == "EASY").sum() if 'logistics_ease' in auction_df.columns else 0
-
-    # Cache hit indicator
-    auction_id = _extract_auction_id(auction_df)
-    cache_prefix = ""
-    if auction_id is not None:
-        payload = _AUCTION_CACHE.load(auction_id)
-        if payload and _AUCTION_CACHE.is_fresh(payload, ttl_days=st.session_state.cache_ttl_days):
-            cache_prefix = "💾 "
-
-    # Easy-ship count goes FIRST in the label and is bolded so it's the
-    # easiest thing to scan when picking which auction to dive into.
-    if easy_count:
-        easy_badge = f"📦 **{easy_count} easy-ship**"
-    else:
-        easy_badge = "📦 0 easy-ship"
-
-    subtitle_parts = [f"{item_count} items"]
-    if closing:
-        subtitle_parts.append(f"closes {closing}")
-    if source:
-        subtitle_parts.append(source)
-    subtitle_parts.append(f"avg bid ${avg_bid:.2f}")
-
-    label = (
-        f"{cache_prefix}{easy_badge}  ·  🏷️ {auction_name}  —  "
-        + "  ·  ".join(subtitle_parts)
-    )
-    with st.expander(label, expanded=False):
-        if cache_prefix:
-            st.caption("💾 Previously analyzed — cached audit + price comps will load instantly on Analyze.")
-        if st.button(
-            f"🎯 Analyze This Auction ({item_count} items)",
-            key=f"load_{auction_name}",
-            type="primary",
-            use_container_width=True,
-        ):
-            _load_auction_for_analysis(auction_name, auction_df)
-            st.rerun()
-
-        st.dataframe(
-            auction_df,
-            use_container_width=True,
-            key=f"table_{auction_name}",
-            column_config=DISCOVERY_COL_CONFIG,
-            column_order=DISCOVERY_COL_ORDER,
-            hide_index=True,
-        )
 
 
 @st.cache_resource(show_spinner=False)
@@ -3153,7 +3605,25 @@ def _run_ai_audit(leads_df, on_progress=None):
     total = len(leads_df)
     workers = int(st.session_state.get('audit_workers', 8))
 
-    with st.status("🧠 Phase 4 of 5: AI Condition Audit (Claude)…", expanded=True) as status:
+    with st.status("🧠 AI Condition Audit (Claude)…", expanded=True) as status:
+        # ---- Pre-pass: skip lots that already have a verdict ----
+        # When the multi-auction cache merge runs, lots from previously
+        # analyzed auctions land here with `verdict` already populated
+        # from cache. Those don't need to hit Claude again — the
+        # verdict is stable for the life of the auction.
+        cached_verdict_mask = pd.Series(False, index=leads_df.index)
+        if 'verdict' in leads_df.columns:
+            cached_verdict_mask = leads_df['verdict'].notna() & (
+                leads_df['verdict'].astype(str).str.strip() != ''
+            )
+        n_cached_audit = int(cached_verdict_mask.sum())
+        if n_cached_audit > 0:
+            st.write(
+                f"💾 **Cache hit:** {n_cached_audit} of {total} lots "
+                f"already have a verdict from a prior run — skipping "
+                f"the audit pass for those."
+            )
+
         # ---- Pre-pass: tier-1 BOLO clean-title fast path ----
         # Identify rows that qualify for an audit-skip — tier-1 BOLO
         # matches with specific titles + no red-flag phrases. These
@@ -3164,8 +3634,11 @@ def _run_ai_audit(leads_df, on_progress=None):
             skip_mask = leads_df.apply(
                 _qualifies_for_audit_skip, axis=1
             ).fillna(False).astype(bool)
+        # Don't count lots already covered by cache — they're handled
+        # via a separate concat below.
+        skip_mask = skip_mask & ~cached_verdict_mask
         n_skip = int(skip_mask.sum())
-        n_audit = total - n_skip
+        n_audit = total - n_skip - n_cached_audit
 
         if n_skip > 0:
             st.write(
@@ -3192,21 +3665,38 @@ def _run_ai_audit(leads_df, on_progress=None):
         else:
             skipped_df = None
 
+        # Cache-hit rows already carry verdict/red_flag from the prior
+        # auction analysis. Stamp `audit_source` so the results-view
+        # status panel can credit them to "cache" instead of fresh API.
+        if n_cached_audit > 0:
+            cached_audit_df = leads_df[cached_verdict_mask].copy()
+            if 'audit_source' not in cached_audit_df.columns:
+                cached_audit_df['audit_source'] = 'cache'
+            else:
+                cached_audit_df.loc[
+                    cached_audit_df['audit_source'].isna(), 'audit_source'
+                ] = 'cache'
+        else:
+            cached_audit_df = None
+
         # If everything qualified, no need to run the auditor at all.
         if n_audit == 0:
             status.update(
                 label=(
-                    f"⚡ Audit fast-skipped: all {n_skip} lots are clean "
-                    f"tier-1 BOLO matches"
+                    f"⚡ Audit fast-skipped: {n_skip} BOLO clean + "
+                    f"{n_cached_audit} cached"
                 ),
                 state="complete", expanded=False,
             )
-            return skipped_df.reset_index(drop=True)
+            parts = [d for d in (cached_audit_df, skipped_df) if d is not None]
+            if not parts:  # Defensive — leads_df was empty
+                return leads_df.copy()
+            return pd.concat(parts, ignore_index=False).sort_index()
 
-        # Otherwise narrow leads_df to just the rows that need real audit.
-        audit_target_df = (
-            leads_df[~skip_mask].copy() if n_skip > 0 else leads_df
-        )
+        # Otherwise narrow leads_df to just the rows that need real audit
+        # (NOT in the BOLO-clean fast path AND NOT already cached).
+        audit_target_mask = ~(skip_mask | cached_verdict_mask)
+        audit_target_df = leads_df[audit_target_mask].copy()
 
         # Phase 1: pre-flight
         auditor = _get_auditor(Phase2Scraper.DEFAULT_MODEL)
@@ -3307,24 +3797,33 @@ def _run_ai_audit(leads_df, on_progress=None):
             live_callback=_audit_live_cb,
         )
 
-        # Merge skipped-clean rows back so downstream code sees one
-        # coherent results df. Preserve original row order via
+        # Merge skipped-clean + cached rows back so downstream code sees
+        # one coherent results df. Preserve original row order via
         # sorted-index concat.
-        if skipped_df is not None:
+        extra_parts = [d for d in (cached_audit_df, skipped_df) if d is not None]
+        if extra_parts:
             audit_attrs = dict(results_df.attrs or {})
             results_df = pd.concat(
-                [skipped_df, results_df], ignore_index=False
+                extra_parts + [results_df], ignore_index=False
             ).sort_index()
             results_df.attrs.update(audit_attrs)
             results_df.attrs['audit_skipped_bolo_clean'] = n_skip
+            results_df.attrs['audit_skipped_cached'] = n_cached_audit
 
         # Phase 2: summarize (counts + per-tier breakdown)
-        good = int((~results_df['red_flag']).sum()) if 'red_flag' in results_df.columns else 0
-        flagged = int(results_df['red_flag'].sum()) if 'red_flag' in results_df.columns else 0
+        # red_flag may round-trip as int via cache — coerce to bool first.
+        if 'red_flag' in results_df.columns:
+            _rf_sum = results_df['red_flag'].fillna(False).astype(bool)
+            good = int((~_rf_sum).sum())
+            flagged = int(_rf_sum.sum())
+        else:
+            good = 0
+            flagged = 0
         skipped_hard = int(results_df.attrs.get('audit_skipped_hard', 0) or 0)
         skipped_collectible = int(results_df.attrs.get('audit_skipped_collectible', 0) or 0)
         skipped_empty = int(results_df.attrs.get('audit_skipped_empty', 0) or 0)
         skipped_bolo_clean = int(results_df.attrs.get('audit_skipped_bolo_clean', 0) or 0)
+        fashion_jewelry = int(results_df.attrs.get('audit_fashion_jewelry', 0) or 0)
         keyword_hits = int(results_df.attrs.get('audit_keyword_hits', 0) or 0)
         text_api_calls = int(results_df.attrs.get('audit_text_api_calls', 0) or 0)
         image_api_calls = int(results_df.attrs.get('audit_image_api_calls', 0) or 0)
@@ -3342,6 +3841,11 @@ def _run_ai_audit(leads_df, on_progress=None):
             summary_parts.append(f"🚚 {skipped_hard} HARD-logistics (pre-filtered)")
         if skipped_collectible > 0:
             summary_parts.append(f"🎴 {skipped_collectible} collectibles (pass-through)")
+        if fashion_jewelry > 0:
+            summary_parts.append(
+                f"💍 {fashion_jewelry} fashion jewelry (silver-plated, "
+                "lab-stone — auto red-flagged)"
+            )
         if skipped_empty > 0:
             summary_parts.append(f"❓ {skipped_empty} empty rows")
         st.write(f"**📊 Step 2/2 — Summary:** " + " · ".join(summary_parts))
@@ -3421,174 +3925,212 @@ def _is_generic_title(title: str) -> bool:
     return True
 
 
-def _run_image_enrichment(audit_df, min_bid: float = 5.0):
-    """Run image-based title enrichment on lots with too-generic titles.
 
-    Gated to skip:
-      - red-flagged lots (condition audit says broken/untested)
-      - HARD logistics (we're not buying furniture to ship)
-      - lots below min_bid (junk filter — don't burn API calls on $1 items)
-      - lots with no thumbnail_url
-      - **lots with already-specific titles** (year, card #, brand, 3+
-        informative words). Image search frequently produces wrong
-        matches on already-identifiable products (Topps/OPC mix-ups,
-        grade swaps on slabbed cards), so we restrict it to lots where
-        the title alone can't drive a comp search.
+# Generic tokens stripped from `_title_fingerprint`. Words that are
+# common across many lots provide no discriminative power for the
+# fingerprint dedup — keeping them would make unrelated lots collide
+# (e.g. "vintage gold ring" and "vintage gold necklace" wouldn't dedup
+# against their direct duplicates if "vintage" / "gold" dominated).
+_FINGERPRINT_GENERIC_TOKENS = frozenset({
+    # Generic descriptors
+    'lot', 'lots', 'set', 'sets', 'pair', 'pairs', 'bundle', 'bundles',
+    'box', 'boxes', 'bag', 'bags', 'piece', 'pieces', 'pcs', 'pc',
+    'item', 'items', 'group', 'groups', 'collection', 'collections',
+    'assortment', 'assorted', 'mixed', 'misc', 'miscellaneous',
+    'various', 'sundry', 'estate', 'auction',
+    # Condition / quality words
+    'new', 'used', 'old', 'mint', 'good', 'great', 'excellent',
+    'nice', 'fine', 'beautiful', 'rare', 'unique', 'antique',
+    'vintage', 'modern', 'authentic', 'original', 'genuine',
+    'pre-owned', 'preowned', 'sealed', 'open', 'opened', 'unopened',
+    'nib', 'nwt', 'mip', 'mib', 'nos',
+    # Size / generic adjectives
+    'small', 'medium', 'large', 'huge', 'mini', 'big', 'little',
+    'tiny', 'jumbo', 'oversized',
+    # Color words (rarely discriminate the model itself)
+    'red', 'blue', 'green', 'yellow', 'black', 'white', 'gray',
+    'grey', 'brown', 'pink', 'purple', 'orange', 'silver', 'gold',
+    'multicolor', 'multicolored', 'colorful',
+    # Articles / fillers
+    'and', 'the', 'with', 'for', 'from', 'that', 'this', 'these',
+    'those', 'has', 'have', 'plus', 'including', 'includes', 'incl',
+    # Common HiBid / auction phrasing
+    'see', 'photos', 'photo', 'pic', 'pics', 'picture', 'pictures',
+    'description', 'shown', 'shows', 'as-is', 'asis',
+    'ship', 'ships', 'shipping', 'shippable',
+})
 
-    Returns the DataFrame with six new img_* columns plus (where confidence
-    is high enough) a promoted `enriched_title` that now carries brand +
-    model + year pulled straight from matching eBay listings.
+
+def _title_fingerprint(title: str) -> str:
+    """Normalize a title to a comparable fingerprint string.
+
+    Drops numbers, punctuation, generic tokens, and short words; sorts
+    the remaining tokens so word order doesn't matter. Two lots with
+    the same fingerprint will receive the same eBay comp lookup.
     """
-    from scraper.vision_enrich import EbayImageEnricher, promote_image_titles
-    from scraper.config_loader import load_config
+    if not title:
+        return ''
+    s = title.lower()
+    # Remove anything that's not a letter, space, or hyphen
+    s = re.sub(r'[^a-z\s\-]', ' ', s)
+    # Collapse runs of whitespace
+    s = re.sub(r'\s+', ' ', s).strip()
+    # Tokenize, drop generic + short
+    tokens = [
+        t for t in s.split()
+        if t not in _FINGERPRINT_GENERIC_TOKENS and len(t) >= 3
+    ]
+    if not tokens:
+        return ''
+    # Sort so word order doesn't matter
+    return ' '.join(sorted(set(tokens)))
 
-    cfg = load_config()
-    anth_cfg = cfg.get("anthropic") or {}
-    enricher = EbayImageEnricher(
-        cfg["ebay"]["app_id"], cfg["ebay"]["cert_id"],
-        hibid_user_agent=cfg.get("api", {}).get(
-            "user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"),
-        anthropic_api_key=anth_cfg.get("api_key"),
-        anthropic_model=anth_cfg.get("model", "claude-haiku-4-5"),
-    )
-    has_claude_fallback = bool(anth_cfg.get("api_key"))
 
-    total = len(audit_df)
+# Precious-metals spot prices for melt-value computation. Refreshed
+# manually (USD per gram, typical 2026 levels). The melt-value floor
+# is conservative — actual eBay clearing prices are usually 30-50%
+# above melt for jewelry, but melt is a no-credit proxy that lets us
+# skip the eBay comp lookup entirely on weight-stamped precious-metal
+# lots. Update these values periodically as spot moves.
+_SPOT_PRICES_USD_PER_GRAM = {
+    # 10K = 41.7% gold, 14K = 58.3%, 18K = 75%, 22K = 91.7%, 24K = 99.9%
+    '10k': 16.5,
+    '14k': 23.0,
+    '18k': 30.0,
+    '22k': 36.5,
+    '24k': 39.5,
+    'sterling': 0.95,    # 92.5% silver
+    '925': 0.95,
+    'platinum': 32.0,
+    'gold-filled-1-20': 1.5,  # 1/20 12K GF roughly 1.5/gram
+}
 
-    def gate(row):
-        if row.get('red_flag'):
-            return False
-        if row.get('logistics_ease') == 'HARD':
-            return False
-        if not (row.get('thumbnail_url') or ''):
-            return False
+# Regex to extract karat + weight from a title.
+# Matches "14K 5.2g", "10kt 3 grams", "18K 7.5gm", ".925 12g", etc.
+_KARAT_RE = re.compile(
+    r'\b(10|14|18|22|24)[ ]*[kK][tT]?\b', re.IGNORECASE,
+)
+_WEIGHT_RE = re.compile(
+    r'(\d+(?:\.\d+)?)\s*(?:g|gm|gms?|grams?)\b', re.IGNORECASE,
+)
+_STERLING_RE = re.compile(
+    r'(?:\.925|s925|925\s*sterling|sterling\s*silver|\bsterling\b)',
+    re.IGNORECASE,
+)
+_PLATINUM_RE = re.compile(
+    r'\b(?:pt950|pt900|950\s*platinum|platinum)\b', re.IGNORECASE,
+)
+
+
+def _estimate_melt_value(title: str):
+    """Try to extract karat + weight from a title and return USD melt
+    value, or None if extraction fails.
+
+    Used by the comp pipeline as a no-credit fast-path for precious-
+    metal lots. Returns a conservative floor; actual eBay clearing is
+    typically 30-100% above melt for jewelry pieces.
+    """
+    if not title:
+        return None
+    # Try gold karat detection first
+    karat_m = _KARAT_RE.search(title)
+    weight_m = _WEIGHT_RE.search(title)
+    if karat_m and weight_m:
         try:
-            if float(row.get('current_bid') or 0) < min_bid:
-                return False
-        except (ValueError, TypeError):
-            return False
-        # Only run image matching when the title is too generic to
-        # comp on text alone. Specific titles (year + brand + card # /
-        # model number / 3+ informative words) have been a reliable
-        # source of wrong image matches — Topps/OPC mix-ups on cards,
-        # grade swaps on slabbed product, etc.
-        title = str(
-            row.get('enriched_title') or row.get('title') or ''
-        )
-        if not _is_generic_title(title):
-            return False
-        return True
+            karat = f"{karat_m.group(1)}k"
+            grams = float(weight_m.group(1))
+            ppg = _SPOT_PRICES_USD_PER_GRAM.get(karat.lower())
+            if ppg and grams > 0:
+                return round(ppg * grams, 2)
+        except (ValueError, KeyError):
+            pass
+    # Sterling silver
+    if _STERLING_RE.search(title) and weight_m:
+        try:
+            grams = float(weight_m.group(1))
+            return round(_SPOT_PRICES_USD_PER_GRAM['925'] * grams, 2)
+        except (ValueError, KeyError):
+            pass
+    # Platinum
+    if _PLATINUM_RE.search(title) and weight_m:
+        try:
+            grams = float(weight_m.group(1))
+            return round(_SPOT_PRICES_USD_PER_GRAM['platinum'] * grams, 2)
+        except (ValueError, KeyError):
+            pass
+    return None
 
-    # Pre-count how many lots will actually be analyzed vs skipped, so the
-    # progress bar can reflect real work (not padded by skipped rows).
-    eligible_ids = {
-        row.get('lot_id')
-        for _, row in audit_df.iterrows() if gate(row)
-    }
-    eligible_count = len(eligible_ids)
 
-    status_label = (
-        f"🖼️ Phase 3 of 5: Image enrichment — {eligible_count} titles via Claude vision…"
-        if has_claude_fallback
-        else f"🖼️ Phase 3 of 5: Image enrichment — {eligible_count} titles via eBay image_search…"
+def _dedup_identical_text_rows(df):
+    """Pre-comp dedup of rows with byte-identical (title, description).
+
+    Two lots in the same fetch with identical text MUST get the same
+    comp result. Without this, separate eBay scrapes for the same query
+    can return wildly different comp sets — one pulls outlier listings,
+    the other pulls clean comparables — leading to identical pink
+    moissanite rings being green-flagged at $1,022 resale and commodity-
+    flagged at $111 in the same scan.
+
+    Strategy: group rows by case-insensitive, whitespace-normalized
+    (title, description). For each group of N>1, the first row is
+    canonical; siblings are dropped from the eligible frame AND a
+    clone map (sibling_lot_id -> canonical_lot_id) is stashed in
+    `_comps_byte_dedup_map` for the post-comp clone step
+    (``_apply_dedup_clones``) to consume.
+
+    The byte-identical map is kept SEPARATE from the fingerprint+brand
+    dedup map so the two passes don't clobber each other.
+
+    Returns (df_with_siblings_dropped, n_siblings_deferred).
+    """
+    if 'lot_id' not in df.columns or 'title' not in df.columns:
+        st.session_state._comps_byte_dedup_map = {}
+        return df, 0
+
+    def _norm(s):
+        return ' '.join(str(s or '').lower().split())
+
+    title_col = (
+        'enriched_title' if 'enriched_title' in df.columns else 'title'
     )
-    with st.status(status_label, expanded=True) as status:
-        st.write(
-            f"**Gated to {eligible_count} of {total} items** — skipping "
-            "red-flagged, HARD-logistics, missing-image, sub-${:.2f}, "
-            "and any lot whose title is already specific enough to comp "
-            "on text alone (year, card #, brand, 3+ informative words)."
-            .format(min_bid)
-        )
-        if has_claude_fallback:
-            st.caption(
-                "Image enrichment now only fires on **generic-titled lots** "
-                "(*'Box of misc items'*, *'Lot 47'*, *'Mystery box'* — where "
-                "the photo is the only way to identify the product). Two-tier "
-                "flow when it does run: **eBay image_search first** (free, "
-                "fast), then **Claude vision as a fallback**. Specific titles "
-                "skip both tiers because eBay's image search frequently "
-                "produces wrong matches on already-identifiable products "
-                "(Topps↔OPC mix-ups on cards, grade swaps on slabs)."
-            )
-        else:
-            st.caption(
-                "For each eligible item: download the HiBid thumbnail, POST it "
-                "to eBay's Browse `search_by_image` endpoint, and if the top "
-                "hits agree on a product, rewrite the title to match what eBay "
-                "actually sells it as. Add an `anthropic.api_key` to "
-                "`config.json` to enable the Claude vision fallback for items "
-                "eBay can't identify."
-            )
+    has_desc = 'description' in df.columns
 
-        progress_bar = st.progress(0, text=f"Starting — 0/{eligible_count}")
-        current_item_placeholder = st.empty()
-        progress_state = {"done": 0, "hits": 0}
+    df = df.copy()
+    # Compute normalized identity key per row. Tuples can't be passed
+    # cleanly through groupby in some pandas versions, so we join with
+    # a sentinel separator that never appears in cleaned text.
+    sep = '\x1f'
+    df['_idtext_key'] = df.apply(
+        lambda r: _norm(r.get(title_col)) + sep + (
+            _norm(r.get('description')) if has_desc else ''
+        ),
+        axis=1,
+    )
 
-        def img_progress(current, tot_with_skips, label):
-            # `current` counts every row including gated skips. We only
-            # want to advance the bar on rows we actually analyzed — so
-            # we track that ourselves and derive progress from it.
-            lot_row = audit_df.iloc[current - 1] if current - 1 < len(audit_df) else None
-            if lot_row is None:
-                return
-            if gate(lot_row):
-                progress_state["done"] += 1
-                pct = (progress_state["done"] / eligible_count
-                       if eligible_count else 1.0)
-                progress_bar.progress(
-                    min(pct, 1.0),
-                    text=f"Identifying {progress_state['done']}/{eligible_count}…",
-                )
-                if label and label != "gated":
-                    current_item_placeholder.caption(f"🔎 Matched: *{label[:70]}*")
+    clones_map: dict = {}
+    drop_indices: set = set()
+    for key, grp in df.groupby('_idtext_key', sort=False):
+        # Skip empty-title groups (key starts with sep when title blank).
+        if not key or key.startswith(sep):
+            continue
+        if len(grp) < 2:
+            continue
+        canonical_idx = grp.index[0]
+        canonical_lot_id = str(grp.loc[canonical_idx, 'lot_id'])
+        for sibling_idx in grp.index[1:]:
+            sibling_lot_id = str(grp.loc[sibling_idx, 'lot_id'])
+            if sibling_lot_id == canonical_lot_id:
+                continue
+            clones_map[sibling_lot_id] = canonical_lot_id
+            drop_indices.add(sibling_idx)
 
-        result_df = enricher.batch_enrich(
-            audit_df, gate_fn=gate, progress_callback=img_progress,
-        )
+    if drop_indices:
+        df = df[~df.index.isin(drop_indices)]
+    df = df.drop(columns=['_idtext_key'], errors='ignore')
 
-        # Promote high-confidence matches to `enriched_title`
-        promoted_df = promote_image_titles(
-            result_df, min_confidence=0.5, min_hits=3,
-        )
-        promoted_mask = (
-            promoted_df['enriched_title']
-            != promoted_df.get('enriched_title_pre_image',
-                               promoted_df['enriched_title'])
-        )
-        promoted = int(promoted_mask.sum())
-
-        # Per-tier breakdown so the user can see how often each tier saved
-        # the day. img_source is set per row by enrich_one.
-        ebay_promoted = 0
-        claude_promoted = 0
-        if 'img_source' in promoted_df.columns:
-            sources = promoted_df.loc[promoted_mask, 'img_source'].fillna('')
-            ebay_promoted = int((sources == 'ebay').sum())
-            claude_promoted = int((sources == 'claude').sum())
-
-        skipped_gate = int(
-            (promoted_df['img_error'] == 'skipped_gate').sum()
-        ) if 'img_error' in promoted_df.columns else 0
-        errored = int(
-            promoted_df['img_error'].notna().sum()
-            - (promoted_df['img_error'] == 'skipped_gate').sum()
-        ) if 'img_error' in promoted_df.columns else 0
-
-        summary_bits = [f"✅ {promoted} titles upgraded"]
-        if has_claude_fallback and (ebay_promoted or claude_promoted):
-            summary_bits.append(
-                f"(🛒 {ebay_promoted} via eBay · 🤖 {claude_promoted} via Claude)"
-            )
-        summary_bits.append(f"⏭️ {skipped_gate} gated-out")
-        summary_bits.append(f"⚠️ {errored} couldn't identify")
-        st.write("**📊 Summary:** " + " · ".join(summary_bits))
-        status.update(
-            label=f"✅ Image enrichment — {promoted} titles upgraded",
-            state="complete", expanded=False,
-        )
-
-    return promoted_df
+    # Always overwrite — each _apply_comps_filters call gets a fresh map.
+    st.session_state._comps_byte_dedup_map = clones_map
+    return df, len(clones_map)
 
 
 def _apply_comps_filters(good_df):
@@ -3600,6 +4142,29 @@ def _apply_comps_filters(good_df):
     """
     df = good_df.copy()
     reasons = []
+
+    # ---- Identical-text dedup (RUNS FIRST, before any cache merge) ----
+    # Two lots in the same fetch with byte-identical (title, description)
+    # MUST get the same comp result. Without this, separate eBay scrapes
+    # for the same query can return wildly different comp sets (one pulls
+    # outlier listings, the other pulls clean comparables) — leading to
+    # one pink moissanite ring being green-flagged at $1,022 resale and
+    # an identical sibling being flagged commodity at $111. Real bug
+    # observed in 7 of 113 lots in a recent jewelry-heavy scan.
+    #
+    # This dedup is STRICTER than the fingerprint+brand dedup downstream:
+    # it requires byte-identity, not just fingerprint match, AND it
+    # works regardless of whether bolo_brand is set. When found, the
+    # row with the MOST comp data (priority: most ebay_comps, then has
+    # est_resale) becomes the canonical row; siblings clone its comp
+    # data and get marked `price_source='clone:<rep_id>'`.
+    if 'lot_id' in df.columns and 'title' in df.columns:
+        df, n_id_dedup = _dedup_identical_text_rows(df)
+        if n_id_dedup > 0:
+            reasons.append(
+                f"{n_id_dedup} byte-identical-title duplicates "
+                f"normalized to canonical row (0 credits)"
+            )
 
     # Free-only mode: route every NON-BOLO row through the PC-only
     # path (eBay/Mercari skipped, zero credits). BOLO matches DO get
@@ -3690,54 +4255,20 @@ def _apply_comps_filters(good_df):
                     "(comps_pc_check_stylized off)"
                 )
 
-    # Exclude HARD logistics
-    if st.session_state.get('comps_exclude_hard', True) and 'logistics_ease' in df.columns:
-        before = len(df)
-        df = df[df['logistics_ease'] != 'HARD']
-        dropped = before - len(df)
-        if dropped:
-            reasons.append(f"{dropped} HARD-logistics")
+    # Apply HARD-logistics + easy-ship-only filters via the shared helper.
+    # NOTE: The BOLO-scan stage now applies the same filter upstream,
+    # so this pass typically catches the small remainder of lots that
+    # didn't go through that path (single-auction analyses).
+    df, _ship_reasons = _apply_easy_ship_filter(df)
+    reasons.extend(_ship_reasons)
 
-    # Only image-promoted titles
-    if st.session_state.get('comps_only_img_promoted', False):
-        if 'img_enriched_title' in df.columns and 'enriched_title_pre_image' in df.columns:
-            before = len(df)
-            promoted = (
-                df['img_enriched_title'].notna()
-                & (df['enriched_title'].fillna('') != df['enriched_title_pre_image'].fillna(''))
-            )
-            df = df[promoted]
-            dropped = before - len(df)
-            if dropped:
-                reasons.append(f"{dropped} not image-promoted")
 
     # Skip comps when next-bid floor exceeds the user's threshold.
-    # Lots already bid above $100 (default) have squeezed margins —
-    # the comp spend rarely pays back. Per-user-tunable cap. We
-    # check `next_bid` first (the actual price-floor to bid on the
-    # lot), fall back to `current_bid` if next_bid isn't populated.
-    skip_above = float(
-        st.session_state.get('comps_skip_above_bid', 100.0) or 0
-    )
-    if skip_above > 0:
-        before = len(df)
-        if 'next_bid' in df.columns:
-            bid_col = pd.to_numeric(df['next_bid'], errors='coerce')
-        elif 'current_bid' in df.columns:
-            bid_col = pd.to_numeric(df['current_bid'], errors='coerce')
-        else:
-            bid_col = None
-        if bid_col is not None:
-            # Keep rows where bid floor is at-or-below the cap, OR
-            # the bid is missing entirely (don't filter blindly on
-            # NaN — those rows haven't been priced yet).
-            keep_mask = bid_col.fillna(0) <= skip_above
-            df = df[keep_mask]
-            dropped = before - len(df)
-            if dropped:
-                reasons.append(
-                    f"{dropped} skipped — next-bid > ${skip_above:.0f}"
-                )
+    # Same helper used upstream by the BOLO scan; this pass catches
+    # any rows that didn't go through that path (single-auction view).
+    df, _bid_reason = _apply_bid_cap_filter(df)
+    if _bid_reason:
+        reasons.append(_bid_reason)
 
     # Top-N by bid
     max_lots = int(st.session_state.get('comps_max_lots', 0) or 0)
@@ -3746,10 +4277,563 @@ def _apply_comps_filters(good_df):
         df = df.sort_values('current_bid', ascending=False).head(max_lots)
         reasons.append(f"trimmed to top {max_lots} by bid ({dropped} cut)")
 
+    # ---- Melt-value floor for precious metals ----
+    # When enabled, lots whose title contains both a karat + weight
+    # (e.g. "14K 5.2g pendant") get est_resale computed from melt
+    # value × jewelry-premium-factor instead of running an eBay comp.
+    # Skips ScrapingBee credits entirely on these — fast and free.
+    # Default OFF because eBay comps are still more accurate for
+    # signed maker jewelry (Cartier 14k vs generic 14k); use this
+    # for liquidation / volume-melt plays.
+    melt_enabled = bool(
+        st.session_state.get('comps_use_melt_floor', False)
+    )
+    melt_premium = float(
+        st.session_state.get('comps_melt_premium_factor', 1.4) or 1.4
+    )
+    melt_priced_indices = []
+    if melt_enabled and 'title' in df.columns:
+        df = df.copy()
+        # Make sure the destination columns exist before we set values
+        for col in ('est_resale', 'price_low', 'price_high',
+                    'comp_count', 'price_source'):
+            if col not in df.columns:
+                df[col] = None
+        for idx in df.index:
+            title = str(df.at[idx, 'title'] or '')
+            melt = _estimate_melt_value(title)
+            if melt is None or melt <= 0:
+                continue
+            est = round(melt * melt_premium, 2)
+            df.at[idx, 'est_resale'] = est
+            df.at[idx, 'price_low'] = round(melt, 2)  # melt floor
+            df.at[idx, 'price_high'] = round(melt * 2.0, 2)  # ceiling
+            df.at[idx, 'comp_count'] = 1  # synthetic
+            df.at[idx, 'price_source'] = 'melt'
+            melt_priced_indices.append(idx)
+        if melt_priced_indices:
+            reasons.append(
+                f"{len(melt_priced_indices)} precious-metal lots priced "
+                f"from melt-value floor × {melt_premium} (0 credits)"
+            )
+
+    # ---- Title-fingerprint dedup ----
+    # Group rows by (title_fingerprint, bolo_brand). For each group
+    # with N>1, keep the highest-current-bid lot as the representative
+    # (most likely to actually clear and become the comp anchor) and
+    # mark the others as siblings. Siblings store a pointer to their
+    # representative's lot_id; the post-comp step in `_run_ebay_comps`
+    # clones the comp data from rep → siblings without paying
+    # ScrapingBee for the duplicates. Requires title + bolo_brand
+    # to be present; pure-title dedup risks cross-brand cross-pricing
+    # (e.g. "vintage chair" matching across totally different brands).
+    dedup_enabled = bool(
+        st.session_state.get('comps_dedup_titles', True)
+    )
+    title_col_for_fp = 'enriched_title' if 'enriched_title' in df.columns else 'title'
+    if (
+        dedup_enabled
+        and title_col_for_fp in df.columns
+        and 'bolo_brand' in df.columns
+        and 'lot_id' in df.columns
+        and 'current_bid' in df.columns
+    ):
+        # Build fingerprint per row
+        df = df.copy()
+        df['_fp'] = df[title_col_for_fp].fillna('').astype(str).map(
+            _title_fingerprint
+        )
+        # Only dedupe rows with non-empty fingerprint AND a brand
+        # (so we know the comp would route the same way)
+        eligible_for_dedup = df[
+            (df['_fp'] != '') & df['bolo_brand'].notna()
+        ]
+        # Group by fp+brand
+        clones_map: dict = {}  # sibling_lot_id -> representative_lot_id
+        rep_indices = set()
+        for (_fp, _brand), grp in eligible_for_dedup.groupby(
+            ['_fp', 'bolo_brand'], sort=False,
+        ):
+            if len(grp) < 2:
+                continue
+            # Sort by current_bid desc; keep first as rep
+            sorted_grp = grp.sort_values('current_bid', ascending=False)
+            rep_idx = sorted_grp.index[0]
+            rep_lot_id = str(sorted_grp.loc[rep_idx, 'lot_id'])
+            rep_indices.add(rep_idx)
+            for sibling_idx in sorted_grp.index[1:]:
+                sibling_lot_id = str(sorted_grp.loc[sibling_idx, 'lot_id'])
+                clones_map[sibling_lot_id] = rep_lot_id
+        # Stash the clone-map in session state for the post-comp step
+        st.session_state._comps_dedup_clone_map = clones_map
+        if clones_map:
+            # Drop siblings from eligible df
+            sibling_indices = set()
+            for sibling_lot_id in clones_map.keys():
+                # Find sibling row indices in df by lot_id
+                matches = df[df['lot_id'].astype(str) == sibling_lot_id].index
+                sibling_indices.update(matches.tolist())
+            df = df[~df.index.isin(sibling_indices)]
+            reasons.append(
+                f"{len(clones_map)} duplicate-title siblings "
+                f"deferred (clone from rep after comp)"
+            )
+        # Drop the temporary _fp column before returning
+        df = df.drop(columns=['_fp'], errors='ignore')
+    else:
+        st.session_state._comps_dedup_clone_map = {}
+
+    # Pull melt-priced rows out of eligible — they already have a
+    # synthetic price; the comp pipeline would overwrite that. Move
+    # them to skipped (with their pre-filled est_resale intact) so
+    # they appear in the final results without paying credits.
+    melt_rows = pd.DataFrame()
+    if melt_priced_indices:
+        melt_rows = df.loc[melt_priced_indices].copy()
+        df = df.drop(index=melt_priced_indices)
+
     eligible_ids = set(df.index)
     skipped = good_df[~good_df.index.isin(eligible_ids)].copy()
+    # Merge melt-priced rows into skipped (with their pre-filled comp
+    # data preserved). Use combine_first so the melt values take
+    # precedence over the empty cells in skipped.
+    if not melt_rows.empty:
+        # Drop the same indices from skipped first to avoid duplicates
+        skipped = skipped[~skipped.index.isin(melt_rows.index)]
+        skipped = pd.concat([skipped, melt_rows], ignore_index=False)
     summary = " · ".join(reasons) if reasons else "all good+ items included"
     return df, skipped, summary
+
+
+def _apply_dedup_clones(results_df):
+    """After comps run, clone comp data from each representative lot
+    to its dedup siblings. Reads the clone-map stashed in session
+    state by `_apply_comps_filters`.
+
+    Modifies `results_df` in place AND returns it for chaining.
+    """
+    # Two pre-comp passes can populate clone maps:
+    #   1. byte-identical (title, description) dedup — ``_comps_byte_dedup_map``
+    #   2. fingerprint+brand dedup           — ``_comps_dedup_clone_map``
+    # Merge them; the fingerprint map wins on conflicts (it's the more
+    # recent pass and its rep-pick logic is bid-aware).
+    clone_map = dict(st.session_state.get('_comps_byte_dedup_map') or {})
+    clone_map.update(st.session_state.get('_comps_dedup_clone_map') or {})
+    if not clone_map or 'lot_id' not in results_df.columns:
+        return results_df, 0
+    # Build lookup: lot_id -> dict of comp columns
+    comp_cols = (
+        'est_resale', 'price_low', 'price_high', 'comp_count',
+        'ebay_comps', 'mercari_comps', 'pricecharting_comps',
+        'gocollect_comps', 'price_source', 'ebay_str', 'str_source',
+    )
+    available_cols = [c for c in comp_cols if c in results_df.columns]
+    if not available_cols:
+        return results_df, 0
+    by_lot = {
+        str(r.get('lot_id')): r
+        for _, r in results_df.iterrows()
+        if r.get('lot_id') is not None
+    }
+    cloned = 0
+    for sibling_id, rep_id in clone_map.items():
+        rep = by_lot.get(rep_id)
+        if rep is None:
+            continue
+        # Only clone if rep actually has comp data
+        if rep.get('est_resale') in (None, '') or (
+            isinstance(rep.get('est_resale'), float)
+            and rep['est_resale'] != rep['est_resale']
+        ):
+            continue
+        # Find sibling rows in results_df by lot_id
+        sibling_mask = results_df['lot_id'].astype(str) == sibling_id
+        if not sibling_mask.any():
+            continue
+        for col in available_cols:
+            results_df.loc[sibling_mask, col] = rep[col]
+        # Mark the source so the user knows it was cloned
+        if 'price_source' in results_df.columns:
+            results_df.loc[sibling_mask, 'price_source'] = (
+                f"clone:{rep_id}"
+            )
+        cloned += 1
+    return results_df, cloned
+
+
+# Title-specificity markers — when present, single-comp catalog matches
+# (PriceCharting / GoCollect) are usually trustworthy because the title
+# carries enough info to disambiguate. When absent, single-comp matches
+# can drift catastrophically (see Pokemon dropship audit 5/3 — 5 lots
+# matched the 1999 Base Set Booster Box catalog at $10,736 each).
+_TITLE_SPECIFICITY_MARKERS = (
+    re.compile(r"#\d+", re.IGNORECASE),                   # issue number
+    re.compile(r"\b(?:CGC|PSA|BGS|SGC|CBCS|ANACS)\b", re.IGNORECASE),  # graders
+    re.compile(r"\b1st\s+edition\b", re.IGNORECASE),
+    re.compile(r"\b(?:base|jungle|fossil|gym|neo|EX|XY|"
+               r"sun\s+&\s+moon|sword\s+&\s+shield|"
+               r"scarlet\s+&\s+violet)\s+set\b", re.IGNORECASE),
+    re.compile(r"\b(?:19|20)\d{2}\b"),                    # 4-digit year
+    re.compile(r"\b(?:autograph(?:ed)?|signed|auto)\b", re.IGNORECASE),
+    re.compile(r"\bsealed\b", re.IGNORECASE),
+)
+
+
+def _has_title_specificity(title: str) -> bool:
+    """True when the title contains an identifier that disambiguates a
+    single-comp catalog match (issue number, grading code, set name,
+    year, autograph/sealed callout)."""
+    if not title:
+        return False
+    return any(p.search(title) for p in _TITLE_SPECIFICITY_MARKERS)
+
+
+def _parse_time_left_hours(s):
+    """Convert HiBid `time_left` strings ('22h 16m', '1d 4h', 'Webcast')
+    to total hours until close. Returns None when unparseable so the
+    caller can treat it as "far from close" instead of triggering false
+    market-signal-mismatch warnings."""
+    if not s or not isinstance(s, str):
+        return None
+    sl = s.lower().strip()
+    if not sl or 'closed' in sl or 'webcast' in sl:
+        return None
+    total = 0.0
+    days = re.search(r'(\d+)\s*d', sl)
+    hours = re.search(r'(\d+)\s*h', sl)
+    minutes = re.search(r'(\d+)\s*m', sl)
+    if days:
+        total += int(days.group(1)) * 24
+    if hours:
+        total += int(hours.group(1))
+    if minutes:
+        total += int(minutes.group(1)) / 60.0
+    return total if total > 0 else None
+
+
+def _compute_manual_check_flags(df):
+    """Tag every priced lot with reasons it might need a manual sanity-
+    check.
+
+    Returns the dataframe with two new columns:
+      ``manual_check``         — bool, True if at least one flag fired
+      ``manual_check_reasons`` — semicolon-joined string of human-readable
+                                 reasons (so the user can see WHY it was
+                                 flagged at a glance)
+
+    Triggered by signals where the comp pipeline has structural
+    uncertainty rather than a hard wrong answer:
+      • Wide-spread comps (already marked in price_source) → variance
+        threshold caught it; a human eye on the actual lot is the only
+        way to know if the median lies high or is correct
+      • Single-comp catalog match on a generic title → the lot's title
+        wasn't specific enough to anchor the catalog match (see Pokemon
+        dropship case)
+      • High est_resale with no auctioneer estimate to cross-check
+      • Bid-trap potential — someone's already bid on a lot we couldn't
+        comp (they may know something we don't, OR may be wrong)
+      • BOLO hit but no comp returned — manual eBay check warranted
+      • Auctioneer uncertainty marker (`?` in title)
+      • System estimate >3× the auctioneer's high estimate — we may be
+        seeing variant contamination they're not
+
+    Defensive on missing columns so it works on legacy cached frames.
+    """
+    if df is None or len(df) == 0:
+        return df
+
+    n = len(df)
+    flags = [False] * n
+    reasons = [[] for _ in range(n)]
+
+    title = df['title'].fillna('').astype(str) if 'title' in df.columns else pd.Series([''] * n)
+    est_resale = pd.to_numeric(df['est_resale'], errors='coerce') if 'est_resale' in df.columns else pd.Series([float('nan')] * n)
+    comp_count = pd.to_numeric(df['comp_count'], errors='coerce') if 'comp_count' in df.columns else pd.Series([float('nan')] * n)
+    price_source = df['price_source'].fillna('').astype(str) if 'price_source' in df.columns else pd.Series([''] * n)
+    auctioneer_high = pd.to_numeric(df['auctioneer_est_high'], errors='coerce') if 'auctioneer_est_high' in df.columns else pd.Series([float('nan')] * n)
+    current_bid = pd.to_numeric(df['current_bid'], errors='coerce') if 'current_bid' in df.columns else pd.Series([0] * n)
+    bid_count = pd.to_numeric(df['bid_count'], errors='coerce') if 'bid_count' in df.columns else pd.Series([float('nan')] * n)
+    time_left_str = df['time_left'].fillna('').astype(str) if 'time_left' in df.columns else pd.Series([''] * n)
+    bolo_brand = df['bolo_brand'] if 'bolo_brand' in df.columns else pd.Series([None] * n)
+    red_flag = df['red_flag'].fillna(False).astype(bool) if 'red_flag' in df.columns else pd.Series([False] * n)
+
+    for i in range(n):
+        # Skip red-flagged rows — they're already handled, no need to
+        # double-flag for review.
+        if red_flag.iloc[i]:
+            continue
+
+        ps = price_source.iloc[i]
+        er = est_resale.iloc[i]
+        cc = comp_count.iloc[i]
+        cb = current_bid.iloc[i] if not pd.isna(current_bid.iloc[i]) else 0
+        ah = auctioneer_high.iloc[i]
+        t = title.iloc[i]
+        is_clone = isinstance(ps, str) and ps.startswith("clone:")
+
+        # 1. Wide-spread comp (already flagged by variance check)
+        if 'wide-spread' in ps:
+            if '(capped)' in ps:
+                reasons[i].append("median capped from wide-spread comps")
+            else:
+                reasons[i].append("wide-spread comps (Q3/Q1 > 3×)")
+
+        # 2. Single-comp catalog match with generic title — the
+        # Pokemon-dropship failure mode. Specificity gate prevents
+        # false positives on legitimately-titled comics.
+        if (not is_clone and not pd.isna(cc) and cc == 1
+                and not pd.isna(er) and er > 100
+                and not _has_title_specificity(t)):
+            reasons[i].append(
+                f"single catalog comp ${er:.0f}+ on generic title"
+            )
+
+        # 3. High system estimate, no auctioneer cross-check
+        if (not pd.isna(er) and er > 200 and pd.isna(ah)):
+            reasons[i].append(
+                f"${er:.0f} resale w/ no auctioneer estimate to anchor"
+            )
+
+        # 4. System estimate WAY above auctioneer estimate — we may be
+        # seeing variant contamination they're not.
+        if (not pd.isna(er) and not pd.isna(ah)
+                and ah > 0 and er > 3.0 * ah):
+            reasons[i].append(
+                f"system ${er:.0f} >3× auctioneer's ${ah:.0f} estimate"
+            )
+
+        # 5. Bid trap — active bidding on uncomped lot
+        if pd.isna(er) and cb >= 20 and not isinstance(bolo_brand.iloc[i], str):
+            reasons[i].append(
+                f"already ${cb:.0f} bid with no comp data"
+            )
+
+        # 6. BOLO match but no comp
+        if (isinstance(bolo_brand.iloc[i], str)
+                and bolo_brand.iloc[i].strip()
+                and pd.isna(er)):
+            reasons[i].append(
+                f"BOLO ({bolo_brand.iloc[i][:30]}) but no comp returned"
+            )
+
+        # 7. Auctioneer uncertain — '?' in title is their tell
+        if '?' in t:
+            reasons[i].append("auctioneer uncertain ('?' in title)")
+
+        # 8. Market-signal mismatch — high system resale + closing soon
+        # + no bidders. The market is the ultimate signal: when a $200+
+        # resale lot has near-zero bid 24h before close, smart money is
+        # rejecting our estimate. Caught the 3.7Ct CZ "marquise diamond"
+        # ring at $0 bid / $1,100 system estimate / 22h to close.
+        bc = bid_count.iloc[i]
+        tlh = _parse_time_left_hours(time_left_str.iloc[i])
+        if (not pd.isna(er) and er > 200
+                and cb < 5
+                and (pd.isna(bc) or bc <= 1)
+                and tlh is not None and tlh < 48):
+            reasons[i].append(
+                f"market-signal mismatch — ${er:.0f} resale, "
+                f"${cb:.0f} bid, ~{tlh:.0f}h to close"
+            )
+
+        flags[i] = bool(reasons[i])
+
+    df = df.copy()
+    df['manual_check'] = flags
+    df['manual_check_reasons'] = ['; '.join(r) for r in reasons]
+    return df
+
+
+def _compute_buy_score(df):
+    """Compute a single 0-100 'Should I buy it?' score per lot.
+
+    Combines all the per-lot signals into one number so the user can
+    sort and filter on a single column instead of squinting at a
+    dozen. Tunable weights at the top of the function — the four
+    components must sum to 100 (max).
+
+    Score components (when all signals are favorable):
+      • margin       (0-45) — how much profit at max bid, after fees
+      • bid_headroom (0-20) — room left to bid before someone else
+                              pushes past max
+      • str          (0-15) — sell-through rate (how fast it'll sell)
+      • confidence   (0-20) — comp-quality penalties (wide spread,
+                              generic-title single-comp, no auctioneer
+                              anchor, etc.) deducted from a 20-point
+                              starting allotment
+
+    Hard zeros: red-flagged, no resale, max_bid <= 0, profit-at-max <= 0.
+
+    Returns the dataframe with two columns added:
+      buy_score (int 0-100) and buy_grade (string like "🟢 A").
+    """
+    if df is None or len(df) == 0:
+        return df
+
+    n = len(df)
+    scores = [0] * n
+    grades = [""] * n
+
+    # Pull columns once — defensive on missing columns so legacy frames work
+    er_arr = pd.to_numeric(df.get('est_resale', pd.Series([float('nan')] * n)), errors='coerce')
+    mb_arr = pd.to_numeric(df.get('max_bid', pd.Series([float('nan')] * n)), errors='coerce')
+    cb_arr = pd.to_numeric(df.get('current_bid', pd.Series([0] * n)), errors='coerce').fillna(0)
+    str_arr = pd.to_numeric(df.get('ebay_str', pd.Series([float('nan')] * n)), errors='coerce')
+    ps_arr = df.get('price_source', pd.Series([''] * n)).fillna('').astype(str)
+    ah_arr = pd.to_numeric(df.get('auctioneer_est_high', pd.Series([float('nan')] * n)), errors='coerce')
+    rf_arr = df.get('red_flag', pd.Series([False] * n)).fillna(False).astype(bool)
+    bolo_arr = df.get('bolo_brand', pd.Series([None] * n))
+    # Bid_count is the strongest market-validation signal we have on
+    # uncomped lots — the antique-auction audit (5/9/26 Coin & Adv)
+    # showed bidders pricing real value into lots the comp pipeline
+    # couldn't touch.
+    bid_count_arr = pd.to_numeric(df.get('bid_count', pd.Series([0] * n)), errors='coerce').fillna(0)
+
+    # Approximate fee structure for margin calculation. Same constants
+    # as `_compute_max_bid` so the score and the max-bid number are
+    # consistent.
+    EBAY_FEE_PCT = 0.1325
+    EBAY_FEE_FLAT = 0.30
+    BP_DEFAULT = 1.15
+    SHIP_DEFAULT = 25.0
+
+    for i in range(n):
+        if rf_arr.iloc[i]:
+            scores[i] = 0
+            grades[i] = "⚫ F"
+            continue
+
+        er = er_arr.iloc[i]
+        mb = mb_arr.iloc[i]
+        cb = float(cb_arr.iloc[i] or 0)
+        st_pct = str_arr.iloc[i]
+        ps = ps_arr.iloc[i]
+        ah = ah_arr.iloc[i]
+        bolo = bolo_arr.iloc[i] if i < len(bolo_arr) else None
+
+        # ---- Uncomped lot — distinguish "no info" from "market signals
+        # present." F is reserved for *comped and confirmed bad*; lots
+        # we can't price get their own bucket so the user knows the
+        # difference between "skip this" and "I can't tell — eyeball it."
+        # Triggered by either of:
+        #   - no est_resale (eBay comp didn't return enough data)
+        #   - no max_bid > 0 (ship + premium eat the margin at target ROI)
+        if pd.isna(er) or er <= 0 or pd.isna(mb) or mb <= 0:
+            bc = float(bid_count_arr.iloc[i] or 0)
+            has_bolo = isinstance(bolo, str) and bolo.strip() != ''
+            has_auctioneer = (not pd.isna(ah)) and ah > 0
+            signal_score = 0
+            if has_bolo:
+                signal_score += 15
+            if has_auctioneer:
+                signal_score += 10
+            if bc >= 10:
+                signal_score += 15
+            elif bc >= 3:
+                signal_score += 8
+            elif bc >= 1:
+                signal_score += 3
+            if signal_score >= 10:
+                # At least one strong signal OR a couple of weak ones —
+                # tell the user "manual research candidate" instead of
+                # lumping it with confirmed-bad F lots.
+                scores[i] = min(40, signal_score)
+                grades[i] = "🔍 ?"
+            else:
+                # No signals at all — pure unknown, sorts to the bottom.
+                scores[i] = signal_score
+                grades[i] = "❓ -"
+            continue
+
+        # ---- 1. Margin score (0-45) ----
+        # Profit at the max bid, after eBay fees + shipping + premium.
+        # 0% margin → 0 pts; 100% margin (2× cost) → 30 pts;
+        # 200%+ margin (3× cost) → 45 pts.
+        cost_at_max = mb * BP_DEFAULT + SHIP_DEFAULT
+        net_resale = er * (1 - EBAY_FEE_PCT) - EBAY_FEE_FLAT
+        if cost_at_max <= 0 or net_resale <= 0:
+            scores[i] = 0
+            grades[i] = "⚫ F"
+            continue
+        margin_pct = (net_resale - cost_at_max) / cost_at_max
+        if margin_pct <= 0:
+            scores[i] = 0
+            grades[i] = "⚫ F"
+            continue
+        margin_score = min(45.0, margin_pct * 22.5)
+        # Discount the margin score when the comp itself is suspect.
+        # Without this, a uncapped wide-spread comp with $1000 resale
+        # would still produce 100% margin and dominate the score even
+        # though the resale is potentially 5-10× inflated. Pink
+        # Moissanite Ring case from May 5 jewelry-auction audit:
+        # comp range $60-2000 with median $1023 — 87/A score without
+        # the discount, ~60/C with it.
+        if 'generic-title single-comp' in ps:
+            # Already capped to low; don't double-discount.
+            pass
+        elif 'wide-spread (capped)' in ps:
+            margin_score *= 0.75
+        elif 'wide-spread' in ps:
+            margin_score *= 0.5
+
+        # ---- 2. Bid headroom (0-20) ----
+        # Fresh auctions ($0 bid) → full points; bid at max → 0 points;
+        # halfway → 10 points. Linear in current_bid / max_bid.
+        if cb >= mb:
+            bid_score = 0.0
+        elif mb > 0:
+            ratio = cb / mb
+            bid_score = max(0.0, 20.0 * (1.0 - ratio))
+        else:
+            bid_score = 0.0
+
+        # ---- 3. STR score (0-15) ----
+        # 60% sell-through (typical-strong) → 15 points; linear below.
+        if pd.isna(st_pct) or st_pct < 0:
+            str_score = 7.5  # neutral default when STR data missing
+        else:
+            str_score = min(15.0, st_pct * 0.25)
+
+        # ---- 4. Confidence (0-20, starts at 20, subtract penalties) ----
+        confidence = 20.0
+        if 'wide-spread (capped)' in ps:
+            confidence -= 5
+        elif 'wide-spread' in ps:
+            confidence -= 10
+        if 'generic-title single-comp' in ps:
+            confidence -= 12
+        if 'short query' in ps:
+            confidence -= 3
+        if pd.isna(ah):
+            confidence -= 3
+        elif ah > 0 and er > 3.0 * ah:
+            confidence -= 5
+        # Modest BOLO bonus when a brand match was found — gives a small
+        # nudge for items that hit the watch list (better-targeted
+        # comps tend to be cleaner).
+        if isinstance(bolo, str) and bolo.strip():
+            confidence += 3
+        confidence = max(0.0, min(20.0, confidence))
+
+        total = margin_score + bid_score + str_score + confidence
+        score = int(round(min(100.0, max(0.0, total))))
+        scores[i] = score
+
+        if score >= 80:
+            grades[i] = "🟢 A"
+        elif score >= 65:
+            grades[i] = "🟡 B"
+        elif score >= 50:
+            grades[i] = "🟠 C"
+        elif score >= 35:
+            grades[i] = "🔴 D"
+        else:
+            grades[i] = "⚫ F"
+
+    df = df.copy()
+    df['buy_score'] = scores
+    df['buy_grade'] = grades
+    return df
 
 
 def _run_ebay_comps(results_df):
@@ -3771,8 +4855,13 @@ def _run_ebay_comps(results_df):
         if col in results_df.columns:
             results_df = results_df.drop(columns=[col])
 
-    good_df = results_df[~results_df['red_flag']].copy()
-    flagged_df = results_df[results_df['red_flag']].copy()
+    # Coerce red_flag to bool — cache round-trips can land it as int.
+    # ~int gives bitwise inverse (-1, -2) which pandas treats as
+    # label-based selection and crashes. Same fix applied at the
+    # comps-tab pre-filter (line ~9689).
+    _rf = results_df['red_flag'].fillna(False).astype(bool)
+    good_df = results_df[~_rf].copy()
+    flagged_df = results_df[_rf].copy()
 
     # Apply pre-comps filters — skipped rows come back with no resale data
     eligible_df, skipped_df, filter_summary = _apply_comps_filters(good_df)
@@ -3799,7 +4888,7 @@ def _run_ebay_comps(results_df):
 
     total = len(eligible_df)
 
-    with st.status("💰 Phase 5 of 5: Price Comps & Sell-Through Rate…", expanded=True) as status:
+    with st.status("💰 Price Comps & Sell-Through Rate…", expanded=True) as status:
         if total == 0:
             st.warning(
                 "No items matched the pre-comps filters. Loosen the filters above and try again."
@@ -3904,6 +4993,34 @@ def _run_ebay_comps(results_df):
     # so the results table still shows every lot, just with NaN resale for
     # skipped ones.
     combined = pd.concat([comps_df, skipped_df, flagged_df], ignore_index=True)
+
+    # Post-comp dedup-clone step: copy comp data from representative
+    # lots to their duplicate-title siblings (which were skipped from
+    # the comp run to save credits).
+    combined, n_cloned = _apply_dedup_clones(combined)
+    if n_cloned > 0:
+        st.toast(
+            f"💎 Cloned comp data to {n_cloned} duplicate-title sibling(s) "
+            f"— saved ~{n_cloned * _CREDITS_PER_NON_PC_LOT} credits",
+            icon="💎",
+        )
+
+    # Tag low-confidence rows for manual review. Free pass — purely
+    # computed from columns we already have.
+    combined = _compute_manual_check_flags(combined)
+    n_manual = int(combined.get('manual_check', pd.Series(False)).sum())
+    if n_manual > 0:
+        tlog("COMPS", f"flagged {n_manual} lots for manual review")
+
+    # Compute the single "Should I buy it?" composite score.
+    combined = _compute_buy_score(combined)
+    if 'buy_score' in combined.columns:
+        n_a = int((combined['buy_grade'] == '🟢 A').sum())
+        n_b = int((combined['buy_grade'] == '🟡 B').sum())
+        if n_a + n_b > 0:
+            tlog("COMPS",
+                 f"buy-score grading: {n_a} A · {n_b} B")
+
     return combined, found, total
 
 
@@ -4120,6 +5237,20 @@ def _run_ebay_comps_chunk(audit_df, chunk_size: int = 200, on_lot_priced=None):
 
         found = int(chunk_with_comps['est_resale'].notna().sum())
         has_more = total_pending > len(chunk)
+
+        # On the FINAL chunk, recompute manual-check flags across the
+        # whole frame (not just the chunk) so the user sees a complete
+        # review list once comps are done. Skipping per-chunk to keep
+        # the flagging consistent — we only know the final state of
+        # cloned siblings + dedup after all chunks merge.
+        if not has_more:
+            df = _compute_manual_check_flags(df)
+            n_manual = int(df.get('manual_check', pd.Series(False)).sum())
+            if n_manual > 0:
+                tlog("COMPS",
+                     f"flagged {n_manual} lots for manual review")
+            df = _compute_buy_score(df)
+
         status.update(
             label=f"✅ Batch complete — {found}/{len(chunk)} priced "
                   f"({total_pending - len(chunk)} still pending)" if has_more
@@ -4128,6 +5259,484 @@ def _run_ebay_comps_chunk(audit_df, chunk_size: int = 200, on_lot_priced=None):
         )
 
     return df, found, len(chunk), has_more
+
+
+# Expanded easy-ship keyword pattern. Pass1's classify_logistics() only
+# flags HARD (oversized) and EASY (coin/jewelry/watch/card mailbox tier);
+# everything else is NEUTRAL. When the user opts into "Easy-ship only"
+# mode, we promote NEUTRAL → EASY for any lot whose title hits this
+# expanded shippable-goods pattern (toys, books, clothing, electronics,
+# bags, etc.). Anything that doesn't match — and isn't already EASY —
+# gets dropped from the comp queue.
+_EASY_SHIP_TITLE_RE = re.compile(
+    # Mailbox tier (already EASY) — repeated here so the combined
+    # regex covers both buckets in one pass.
+    r"\b(?:jewelry|watch|camera|card|cards|game|games|gold|silver|"
+    r"nintendo|apple|ink|pen|coin|coins|currency|stamp|numismatic|"
+    # Bags / accessories
+    r"backpack|purse|handbag|wallet|crossbody|tote|clutch|fanny\s*pack|"
+    r"loungefly|sling\s*bag|messenger\s*bag|"
+    # Toys / collectibles small
+    r"figure|figures|figurine|funko|pop\s*vinyl|plush|plushie|stuffed|"
+    r"doll|barbie|hot\s*wheels|matchbox|lego|legos|playset|action\s*figure|"
+    r"webkinz|tamagotchi|furby|pokemon|yu-?gi-?oh|booster|tcg|"
+    # Media
+    r"book|books|comic|comics|graphic\s*novel|manga|"
+    r"\bdvd\b|blu-?ray|\bcd\b|\bcds\b|vinyl|record|cassette|"
+    r"poster|print|magazine|"
+    # Clothing / footwear / accessories
+    r"shirt|t-?shirt|tee|hoodie|sweater|jacket|coat|jersey|"
+    r"hat|cap|beanie|scarf|gloves|belt|tie|"
+    r"shoe|shoes|sneaker|sneakers|boot|boots|heels|"
+    r"dress|skirt|jeans|pants|shorts|leggings|"
+    r"sunglasses|glasses|eyeglasses|"
+    # Electronics small
+    r"phone|iphone|ipad|airpods|earbuds|earphones|headphone|headphones|"
+    r"speaker|charger|cable|adapter|mouse|keyboard|kindle|tablet|"
+    r"console|controller|cartridge|gameboy|switch|playstation|xbox|"
+    r"router|drone|gopro|"
+    # Beauty / health
+    r"perfume|cologne|fragrance|makeup|cosmetic|cosmetics|lipstick|"
+    r"skincare|"
+    # Crafts / small office
+    r"yarn|fabric|notebook|journal|stationery|sticker|stickers|"
+    # Tools small
+    r"knife|knives|pocketknife|multitool|flashlight|"
+    # Generic small-lot signals
+    r"box\s*of|set\s*of\s*(?:\d+|small)|sealed|new\s*in\s*box|nib\b|"
+    r"vintage|antique"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+# --- CPU lot form-factor classification ----------------------------
+# A lot titled "Intel i5-8500 CPU Processor SR3XE" comps very
+# differently than "HP ProDesk 600 G4 DM w/ Intel Core i5-8500T 8GB
+# RAM" — one is a $40 chip, the other is a $70-150 system. We tag
+# every CPU-category BOLO match with `cpu_form_factor` so the user
+# can see at a glance whether a lot is bare silicon or a complete
+# system, and the comp pipeline can route the comp query accordingly.
+#
+# Classification is conservative: when both bare-CPU and system signals
+# fire (e.g., "Lot of CPUs and a desktop"), we return 'unclear'.
+
+# Strong system signals — branded device names, or storage-spec
+# language that bare CPUs never have. Listed in priority order.
+_SYSTEM_SIGNAL_RE = re.compile(
+    r'\b(?:'
+    # Branded systems. "desktop" excludes "Desktop CPU/Processor/chip"
+    # — Intel uses that as a tier descriptor on bare-chip listings
+    # ("6-Core Desktop CPU Processor SR3XE") and we don't want to
+    # mis-classify those as systems.
+    r'laptop|notebook|desktop(?!\s+(?:cpu|processor|chip|class))|'
+    r'workstation|tower|server\s+chassis|'
+    r'all-?in-?one|\baio\b|mini\s*pc|micro\s*pc|sff\b|tiny\s+desktop|'
+    # Branded model lines
+    r'thinkpad|latitude|inspiron|elitebook|probook|macbook|imac|'
+    r'precision|optiplex|prodesk|elitedesk|thinkcentre|'
+    r'ideapad|legion|envy|pavilion|spectre|surface(?:\s+pro|\s+laptop)?|'
+    r'chromebook|ultrabook|netbook|gaming\s+laptop|business\s+laptop|'
+    # System-only specs (bare CPUs never have these)
+    r'\d+\s*gb\s+(?:ram|memory|ddr)|'
+    r'\d+\s*(?:gb|tb)\s+(?:ssd|hdd|nvme|m\.?2)|'
+    r'\bno\s+(?:os|hdd|ssd)\b|\bw/?\s*os\b|\bwith\s+os\b|'
+    r'windows\s+(?:10|11|7|xp|server)|'
+    # Power / boot states only relevant to systems
+    r'(?:powers?|boots?)\s+(?:on|up)|posts?\s+to\s+bios|'
+    r'\bdoes\s+not\s+(?:power|boot|post)|'
+    # Network / display ports indicate a chassis
+    r'\bvga\b|\bhdmi\b|\bdisplayport\b|\bdvi\b|\bethernet\b|'
+    # Server-rack form
+    r'\d+\s*u\s+rack|rackmount|blade\s+server|tower\s+server'
+    r')\b',
+    re.IGNORECASE,
+)
+
+# Strong bare-CPU signals — language and SKU patterns only present
+# when listing the chip alone.
+_BARE_CPU_SIGNAL_RE = re.compile(
+    r'(?:'
+    # "CPU Processor" / "Processor CPU" combos are a bare-chip giveaway
+    r'\bcpu\s+processor\b|\bprocessor\s+cpu\b|\bcpu\s+only\b|'
+    # S-Spec / Q-Spec is etched on the heat spreader, listed in bare-CPU titles
+    r'\bsr[a-z0-9]{3,5}\b|\bs-?spec\s*:?\s*[a-z0-9]+\b|'
+    # Engineering / qualification samples
+    r'\b(?:es|qs)\s+sample\b|engineering\s+sample|qualification\s+sample|'
+    # Tray / OEM packaging
+    r'\boem\s+tray\b|\btray\s+pack\b|\bbulk\s+tray\b|'
+    # Socket-only mention without chassis context
+    r'\b(?:fclga|lga)(?:1150|1151|1155|1156|1200|1700|2011|2066|3647|4189)\b'
+    r')',
+    re.IGNORECASE,
+)
+
+
+def _classify_cpu_form_factor(title: str, description: str = '') -> str:
+    """Return 'bare_cpu', 'system', or 'unclear' for a CPU-category lot.
+
+    Strategy:
+    - Strong system signal → 'system' (wins ties because system-spec
+      language is more specific than bare-CPU language)
+    - Bare-CPU signal AND no system signal → 'bare_cpu'
+    - Otherwise → 'unclear' (caller treats as bare-CPU comp by default
+      but flags lower confidence)
+    """
+    haystack = f"{title or ''} {description or ''}"
+    has_system = bool(_SYSTEM_SIGNAL_RE.search(haystack))
+    has_bare = bool(_BARE_CPU_SIGNAL_RE.search(haystack))
+    if has_system:
+        # Even when bare-CPU language is present too, the system spec
+        # dominates — "HP ProDesk w/ Intel i5-8500T CPU" is a system.
+        return 'system'
+    if has_bare:
+        return 'bare_cpu'
+    return 'unclear'
+
+
+def _compute_cpu_form_factor_columns(df):
+    """Add `cpu_form_factor` column for CPU-category BOLO matches.
+
+    Only runs on rows with bolo_category == 'cpu' or
+    bolo_category == 'mini_pc' (where the embedded-CPU value still
+    matters as a floor). Other rows get NaN.
+
+    Idempotent — can be called multiple times safely.
+    """
+    if df is None or df.empty or 'bolo_category' not in df.columns:
+        return df
+    out = df.copy()
+    cpu_mask = out['bolo_category'].isin(['cpu', 'mini_pc'])
+    if not cpu_mask.any():
+        out['cpu_form_factor'] = pd.NA
+        return out
+    titles = out['title'].fillna('').astype(str) if 'title' in out.columns else pd.Series([''] * len(out), index=out.index)
+    descs = (
+        out['description'].fillna('').astype(str)
+        if 'description' in out.columns
+        else pd.Series([''] * len(out), index=out.index)
+    )
+    # Per-call cache keyed on (title, desc) — same dedup pattern as
+    # _compute_bolo_columns. Estate-sale CPU lots have lots of repeats.
+    _cache: dict = {}
+    forms = pd.Series(pd.NA, index=out.index, dtype='object')
+    for idx in out.index[cpu_mask]:
+        key = (titles.loc[idx], descs.loc[idx])
+        cached = _cache.get(key, _SENTINEL)
+        if cached is _SENTINEL:
+            cached = _classify_cpu_form_factor(*key)
+            _cache[key] = cached
+        forms.loc[idx] = cached
+    out['cpu_form_factor'] = forms
+    return out
+
+
+def _apply_bid_cap_filter(df):
+    """Drop lots whose next_bid (or current_bid) is above the user's cap.
+
+    Reads ``comps_skip_above_bid`` from session state (default $100).
+    Lots already bid above the cap have squeezed margins — not worth
+    burning BOLO scan / audit / comp time on. Lots with no bid data
+    yet (NaN) are KEPT — those haven't been priced and shouldn't get
+    filtered blindly on missing data.
+
+    Returns ``(filtered_df, reason_str_or_None)``. The reason string
+    is non-None when at least one lot was dropped, e.g.
+    ``"3,212 skipped — next-bid > $100"``.
+    """
+    if df is None or df.empty:
+        return df, None
+    skip_above = float(
+        st.session_state.get('comps_skip_above_bid', 100.0) or 0
+    )
+    if skip_above <= 0:
+        return df, None
+    if 'next_bid' in df.columns:
+        bid_col = pd.to_numeric(df['next_bid'], errors='coerce')
+    elif 'current_bid' in df.columns:
+        bid_col = pd.to_numeric(df['current_bid'], errors='coerce')
+    else:
+        return df, None
+    before = len(df)
+    keep_mask = bid_col.fillna(0) <= skip_above
+    df = df[keep_mask]
+    dropped = before - len(df)
+    if dropped:
+        return df, f"{dropped:,} bid > ${skip_above:.0f}"
+    return df, None
+
+
+def _apply_easy_ship_filter(df, *, drop_hard: bool = True):
+    """Return ``(filtered_df, reasons)`` after applying the easy-ship filter.
+
+    Combines the HARD-logistics drop and the easy-ship-only NEUTRAL
+    drop into one helper so it can be reused at multiple pipeline
+    stages (BOLO match, audit, comps). Both behaviors are gated by
+    the matching `comps_*` session-state toggles.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Lot rows. Expected columns: ``logistics_ease``, ``title`` /
+        ``enriched_title``. Missing columns are tolerated — the
+        filter degrades gracefully (skips that pass).
+    drop_hard : bool
+        If ``True`` (default), apply the HARD-logistics drop.
+        Caller can disable when the upstream pipeline already
+        cut HARD lots and only the easy-ship pass is wanted.
+
+    Returns
+    -------
+    (filtered_df, reasons) : tuple
+        Filtered rows + a list of human-readable reason strings
+        like ``"3,212 HARD-logistics"`` for the calling status panel.
+    """
+    reasons: list = []
+    if df is None or df.empty:
+        return df, reasons
+
+    if (
+        drop_hard
+        and st.session_state.get('comps_exclude_hard', True)
+        and 'logistics_ease' in df.columns
+    ):
+        before = len(df)
+        df = df[df['logistics_ease'] != 'HARD']
+        dropped = before - len(df)
+        if dropped:
+            reasons.append(f"{dropped:,} HARD-logistics")
+
+    if st.session_state.get('comps_easy_ship_only', True):
+        before = len(df)
+        title_col = 'enriched_title' if 'enriched_title' in df.columns else 'title'
+        if title_col in df.columns:
+            titles = df[title_col].fillna('').astype(str)
+            easy_re_match = titles.str.contains(
+                _EASY_SHIP_TITLE_RE, regex=True, na=False,
+            )
+            if 'logistics_ease' in df.columns:
+                already_easy = df['logistics_ease'] == 'EASY'
+                keep_mask = already_easy | easy_re_match
+            else:
+                keep_mask = easy_re_match
+            df = df[keep_mask]
+            dropped = before - len(df)
+            if dropped:
+                reasons.append(f"{dropped:,} not-easy-ship")
+    return df, reasons
+
+
+# Set of BOLO brand names that signal "luxury watch / high-end jewelry"
+# where a $5 next_bid is a starter-bid placeholder, not a real entry
+# point. Used by `_compute_realistic_cost_columns` to flag rows whose
+# displayed ROI is misleading until bidding opens.
+_LUXURY_STARTER_BID_BRANDS = frozenset({
+    'Rolex accessories',
+    'Omega accessories',
+    'Patek Philippe accessories',
+    'Audemars Piguet accessories',
+    'Cartier accessories',
+    'Other Swiss luxury accessories',
+})
+
+
+def _compute_realistic_cost_columns(df):
+    """Add `realistic_cost`, `realistic_roi`, and `bid_trap_warn` columns.
+
+    Background: when an auction lot has a low starter `next_bid` ($5)
+    but a high `auctioneer_est_low` ($16,000), the displayed est_roi
+    is wildly inflated — once bidding opens, the lot clears closer
+    to the auctioneer's estimate.
+
+    realistic_cost = MAX(est_cost, auctioneer_est_low × 0.5)
+        — half of the auctioneer's low estimate is a reasonable
+        proxy for "what this lot will actually clear at."
+
+    realistic_roi = (est_resale - realistic_cost) / realistic_cost × 100
+
+    bid_trap_warn = True when:
+        - bolo_brand ∈ luxury-watch set, AND
+        - auctioneer_est_low > $1000, AND
+        - current_bid < auctioneer_est_low × 0.1
+    """
+    out = df.copy()
+    out['realistic_cost'] = pd.NA
+    out['realistic_roi'] = pd.NA
+    out['bid_trap_warn'] = False
+    if 'est_cost' not in out.columns:
+        return out
+    est_cost = pd.to_numeric(out['est_cost'], errors='coerce')
+    est_low = (
+        pd.to_numeric(out['auctioneer_est_low'], errors='coerce')
+        if 'auctioneer_est_low' in out.columns
+        else pd.Series(pd.NA, index=out.index, dtype='float64')
+    )
+    est_resale = (
+        pd.to_numeric(out['est_resale'], errors='coerce')
+        if 'est_resale' in out.columns
+        else pd.Series(pd.NA, index=out.index, dtype='float64')
+    )
+    current_bid = (
+        pd.to_numeric(out['current_bid'], errors='coerce')
+        if 'current_bid' in out.columns
+        else pd.Series(0, index=out.index, dtype='float64')
+    )
+
+    floor_from_estimate = est_low.fillna(0) * 0.5
+    realistic = pd.concat(
+        [est_cost.fillna(0), floor_from_estimate], axis=1
+    ).max(axis=1)
+    # Mask out rows where neither cost nor auctioneer estimate was
+    # available — those have no basis for a "realistic cost" floor.
+    # Use NaN (not pd.NA) so downstream arithmetic works element-wise
+    # without hitting `float(pd.NA)` errors.
+    has_basis = est_cost.notna() | est_low.notna()
+    realistic = realistic.where(has_basis, np.nan)
+    # Force float dtype so subsequent comparisons + arithmetic don't
+    # trip on object-dtype mixed pd.NA values.
+    realistic_f = pd.to_numeric(realistic, errors='coerce')
+    out['realistic_cost'] = realistic_f
+
+    has_resale = est_resale.notna() & realistic_f.notna() & (realistic_f > 0)
+    if has_resale.any():
+        roi = (est_resale - realistic_f) / realistic_f * 100
+        out.loc[has_resale, 'realistic_roi'] = np.round(roi[has_resale], 0)
+
+    if 'bolo_brand' in out.columns:
+        is_luxury = out['bolo_brand'].isin(_LUXURY_STARTER_BID_BRANDS)
+        est_low_high = est_low.fillna(0) > 1000
+        bid_low = current_bid.fillna(0) < (est_low.fillna(0) * 0.1)
+        out['bid_trap_warn'] = (is_luxury & est_low_high & bid_low).fillna(False)
+
+    return out
+
+
+# --- Shipping-cost extraction ----------------------------------------
+# HiBid auctions advertise their shipping policy in the auction name
+# and/or in a boilerplate paragraph that gets copied onto every lot's
+# description. Common patterns:
+#   "MAY 6TH WEDNESDAY HUMP DAY AUCTION FREE SHIPPING"     → $0
+#   "Shipping: $15 flat rate"                              → $15
+#   "Flat rate shipping is $12 per item"                   → $12
+#   "Shipping starts at $8"                                → $8
+#   "$15 shipping"                                         → $15
+# The configured `bundled_ship_cost` ($25) is just a fallback when no
+# pattern matches. Without per-auction extraction, every lot in a
+# free-shipping auction gets falsely penalized $25 → Target Buy is
+# under-stated (sometimes to $0 / NaN).
+
+_SHIP_COST_PATTERNS = (
+    # Free shipping is the most important signal — match before $-patterns
+    re.compile(r'\bfree\s+ship(?:ping)?\b', re.IGNORECASE),
+)
+
+# Numeric extractors. Return the captured float when matched.
+_SHIP_COST_PRICE_PATTERNS = (
+    re.compile(
+        r'(?:flat[\s-]*rate\s+)?ship(?:ping)?'
+        r'(?:\s+(?:is|starts?\s+at|cost|costs?|fee|fees|per\s+item|per\s+lot))?'
+        r'\s*[:\-]?\s*\$\s*(\d+(?:\.\d{1,2})?)',
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r'\$\s*(\d+(?:\.\d{1,2})?)\s*(?:flat[\s-]*rate\s+)?ship(?:ping)?',
+        re.IGNORECASE,
+    ),
+)
+
+
+def _extract_shipping_cost(text):
+    """Parse a shipping-cost dollar amount from auction-name / description text.
+
+    Returns ``0.0`` for free-shipping language, a positive float when a
+    dollar amount is found near a "ship/shipping" keyword, or ``None``
+    when nothing matches (caller falls back to the configured default).
+    """
+    if not text:
+        return None
+    s = str(text)
+    for p in _SHIP_COST_PATTERNS:
+        if p.search(s):
+            return 0.0
+    for p in _SHIP_COST_PRICE_PATTERNS:
+        m = p.search(s)
+        if m:
+            try:
+                v = float(m.group(1))
+                # Sanity bound — keep results in the $1-$200 range.
+                # Outside that we're probably matching a price quote
+                # ("$3,250 retail") rather than a shipping fee.
+                if 0.5 <= v <= 200:
+                    return v
+            except (ValueError, IndexError):
+                pass
+    return None
+
+
+def _build_auction_ship_map(df, default_cost: float):
+    """Return ``{auction_id: ship_cost_float}`` for every auction in df.
+
+    Strategy per auction:
+      1. Check the auction NAME first — "FREE SHIPPING" / "$15 SHIP"
+         language there is the most authoritative signal.
+      2. If the name is silent, scan up to 25 lot descriptions in
+         that auction. The shipping boilerplate, when present, is
+         usually copied verbatim onto every lot. Take the most
+         common non-None match across the sample.
+      3. Fall back to ``default_cost`` when no signal anywhere.
+
+    The map is built once per render and used to vectorize Target Buy.
+    """
+    out: dict = {}
+    if df is None or df.empty:
+        return out
+    if 'auction_link' not in df.columns:
+        return out
+    aid_series = df['auction_link'].apply(_aid_from_link)
+    name_col = df['auction'] if 'auction' in df.columns else None
+    desc_col = df['description'] if 'description' in df.columns else None
+
+    # Pre-group lot descriptions per auction once
+    desc_by_aid: dict = {}
+    if desc_col is not None:
+        for aid, group_idx in df.groupby(aid_series).groups.items():
+            if aid is None:
+                continue
+            samples = desc_col.loc[group_idx].dropna().astype(str).head(25).tolist()
+            desc_by_aid[aid] = samples
+
+    seen_aids: set = set()
+    for aid in aid_series.tolist():
+        if aid is None or aid in seen_aids:
+            continue
+        seen_aids.add(aid)
+
+        # 1. Auction name signal (cheapest + most authoritative)
+        name_text = ''
+        if name_col is not None:
+            mask = aid_series == aid
+            if mask.any():
+                first = name_col[mask].dropna().head(1).tolist()
+                name_text = first[0] if first else ''
+        signal = _extract_shipping_cost(name_text)
+
+        # 2. Scan lot descriptions for boilerplate
+        if signal is None:
+            samples = desc_by_aid.get(aid, [])
+            hits: list = []
+            for s in samples:
+                v = _extract_shipping_cost(s)
+                if v is not None:
+                    hits.append(v)
+            if hits:
+                # Mode (most common) — defends against an outlier
+                # description that slipped a non-shipping dollar amount
+                # past our sanity bounds.
+                from collections import Counter
+                signal = Counter(hits).most_common(1)[0][0]
+
+        out[aid] = signal if signal is not None else default_cost
+    return out
 
 
 def _compute_max_bid(df, target_roi_val):
@@ -4147,6 +5756,20 @@ def _compute_max_bid(df, target_roi_val):
     out['max_bid'] = None
     if 'est_resale' not in out.columns:
         return out
+
+    # Build a per-auction shipping-cost map so "FREE SHIPPING" auctions
+    # don't get the flat $25 default and auctions with an explicit
+    # "$15 shipping" line use that. Without this, Target Buy was
+    # systematically under-stated for free-shipping auctions and
+    # over- or under-stated when the actual fee differs from $25.
+    ship_map = _build_auction_ship_map(out, ship_cost)
+    if 'auction_link' in out.columns:
+        per_lot_ship = out['auction_link'].apply(_aid_from_link).map(
+            ship_map
+        ).fillna(ship_cost).astype(float).to_numpy()
+    else:
+        per_lot_ship = np.full(len(out), ship_cost, dtype='float64')
+
     # Cached est_resale can land as `object` dtype with internals
     # (Decimal, nullable extension dtype) that survive `pd.to_numeric`
     # but break Series.round. Coerce element-wise to a plain float64
@@ -4156,15 +5779,25 @@ def _compute_max_bid(df, target_roi_val):
     if resale_mask.any():
         net_resale = resale[resale_mask] * (1 - ebay_fee_pct) - ebay_fee_flat
         if 'source' in out.columns:
+            # Pickup-only ("Pickup") = no shipping cost; everything
+            # shippable uses the per-auction value (which is 0 for
+            # free-shipping auctions).
+            sources = out.loc[resale_mask, 'source'].tolist()
+            ships_for_lot = per_lot_ship[resale_mask.nonzero()[0]]
             item_ship = np.array([
-                ship_cost if s == "Ship" else 0
-                for s in out.loc[resale_mask, 'source'].tolist()
+                ships_for_lot[i] if s == "Ship" else 0.0
+                for i, s in enumerate(sources)
             ], dtype='float64')
         else:
-            item_ship = 0.0
+            item_ship = per_lot_ship[resale_mask.nonzero()[0]]
         max_bid = (net_resale / target_roi_val - item_ship) / (1 + buyer_premium_pct)
-        max_bid = np.round(np.clip(max_bid, 0, None), 2)
-        out.loc[resale_mask, 'max_bid'] = max_bid
+        # Negative max_bid means shipping + premium eats the entire
+        # resale margin at target ROI — there's no positive bid that
+        # hits the target. Show as NaN so the column renders blank
+        # ("don't bid"), not "$0.00" (which reads as broken).
+        max_bid_arr = np.round(max_bid, 2)
+        max_bid_arr = np.where(max_bid_arr > 0, max_bid_arr, np.nan)
+        out.loc[resale_mask, 'max_bid'] = max_bid_arr
     return out
 
 
@@ -4245,7 +5878,7 @@ def _render_red_flag_editor(ar_full):
 
         edited_review = st.data_editor(
             review_df,
-            use_container_width=True,
+            width='stretch',
             hide_index=True,
             column_order=review_cols,
             disabled=[c for c in review_cols if c != 'red_flag'],
@@ -4428,112 +6061,165 @@ def _compute_resale_confidence(row):
 def _render_results_table(results_df):
     """Render the results table with live ROI/STR threshold highlighting.
 
-    Rather than hiding items below threshold, rows are color-coded:
-      - green = meets BOTH target ROI and target STR
-      - yellow = meets ONE of them
-      - no tint = below both thresholds (or missing data)
-
-    Sorted by est_roi descending by default.
+    Rows are color-coded by `buy_grade` (the composite "Should I buy?"
+    score that already factors in margin, headroom, STR, and comp
+    confidence). The old ROI / STR threshold sliders + green/yellow
+    tier system were removed — they fragmented signal across two
+    sliders that the user had to interpret separately, and produced
+    misleading "all green" calls on contaminated comps. The buy_score
+    consolidates everything into one number with one color scale.
     """
-    # --- Compact filter bar: ROI + STR inputs side-by-side. The 6-cell
-    #     metric grid that used to live here is replaced with a one-line
-    #     status caption below, after the masks are computed.
-    tc1, tc2 = st.columns(2)
-    with tc1:
-        target_roi_val = st.number_input(
-            "🎯 Target ROI ×",
-            value=3.0, step=0.5, format="%.1f",
-            min_value=1.0,
-            help="Sell for Nx total cost (3x = sell for 3× what you paid). "
-                 "Drives the green/yellow row tint and the Max Bid column. "
-                 "Green rows meet both ROI + STR targets, yellow meet one.",
-            key="target_roi_live",
-        )
-    with tc2:
-        target_str_val = st.number_input(
-            "🎯 Target eBay STR %",
-            value=70.0, step=5.0, format="%.0f",
-            min_value=0.0, max_value=100.0,
-            help="Minimum eBay sell-through %. Higher = faster-selling items.",
-            key="target_str_live",
-        )
+    # Target ROI is still needed internally to compute max_bid (the
+    # "what's the highest bid that hits 3× cost" column). Kept as a
+    # session_state default so power users could override via session
+    # state, but no widget surfaces it — 3× is the right default for
+    # most resale categories and the buy_score absorbs threshold-tuning
+    # into its margin component.
+    target_roi_val = float(
+        st.session_state.get("target_roi_live", 3.0) or 3.0
+    )
 
     # --- Recompute max_bid with current target (dynamic) ---
     working = _compute_max_bid(results_df, target_roi_val)
 
     # --- Tag every row with brand-BOLO matches.  Free regex pass so
     #     it's safe to rerun on every render — picks up changes to
-    #     the underlying clothing_brand_bolo.json file mid-session. ---
+    #     the underlying clothing_brand_bolo.json file mid-session.
+    #     The matcher is vectorized + has an internal per-call (title,
+    #     description) cache, so a fresh call on ~2000 lots is ~100ms.
+    #     We used to wrap this in a session-state cache keyed on a
+    #     2000-element tuple of lot_ids, but hashing/comparing that
+    #     tuple cost more than the work we were trying to skip. ---
     working = _compute_bolo_columns(working)
     bolo_total = int(working['bolo_brand'].notna().sum()) if 'bolo_brand' in working.columns else 0
 
-    # --- Sort by ROI descending ---
+    # --- CAP `bolo_target_buy_high` BY `max_bid` ---
+    # The BOLO file's target_buy_usd.high is a category-level
+    # guideline; it doesn't know the comp-derived resale of THIS
+    # specific lot. Take the MIN(static, max_bid) so the displayed
+    # Target Buy never exceeds the resell-ROI ceiling. Also: when
+    # the cap drops to 0 (shipping eats the margin), set NaN so
+    # the column renders blank ("don't bid") instead of "$0".
+    if (
+        'bolo_target_buy_high' in working.columns
+        and 'max_bid' in working.columns
+    ):
+        _static = pd.to_numeric(working['bolo_target_buy_high'], errors='coerce')
+        _math = pd.to_numeric(working['max_bid'], errors='coerce')
+        _capped = _static.where(_math.isna() | (_static <= _math), _math)
+        # Use NaN (not pd.NA) so downstream consumers calling `float()`
+        # on the column don't blow up — float(NaN) is a real float,
+        # float(pd.NA) raises TypeError.
+        _capped = _capped.where(_capped > 0, np.nan)
+        working['bolo_target_buy_high'] = _capped
+
+    # --- Realistic cost / ROI / bid-trap-warn columns ---
+    # When a luxury-watch lot has $5 next-bid but $16K auctioneer
+    # estimate, est_roi is wildly inflated — once bidding opens the
+    # lot clears closer to the auctioneer estimate. Compute a second
+    # cost basis from MAX(est_cost, auctioneer_est_low × 0.5) and
+    # flag obvious starter-bid traps.
+    working = _compute_realistic_cost_columns(working)
+
+    # --- Sort: actionable-first ordering ---
+    # Was: est_roi % desc alone, which put luxury-watch starter-bid
+    # traps (Cartier $5→$3K = 50000% ROI) at the top of the table.
+    # Now: traps last, then ROI tier (≥200% high-prio first),
+    # then absolute resale within tier (so $1K tennis bracelet
+    # floats above $200 small pendant), then realistic_roi tiebreak.
     if 'est_roi' in working.columns:
-        working['_roi_sort'] = pd.to_numeric(working['est_roi'], errors='coerce')
+        _trap = working.get(
+            'bid_trap_warn', pd.Series(False, index=working.index)
+        ).fillna(False).astype(bool)
+        _real_roi = pd.to_numeric(
+            working.get('realistic_roi', pd.Series(np.nan, index=working.index)),
+            errors='coerce',
+        )
+        _est_roi = pd.to_numeric(working['est_roi'], errors='coerce')
+        _effective_roi = _real_roi.fillna(_est_roi)
+        _resale = pd.to_numeric(
+            working.get('est_resale', pd.Series(np.nan, index=working.index)),
+            errors='coerce',
+        ).fillna(0)
+        working['_trap_key'] = _trap.astype(int)
+        working['_roi_tier'] = (_effective_roi.fillna(-1) >= 200).astype(int) * -1
+        working['_resale_sort'] = _resale
+        working['_roi_sort'] = _effective_roi.fillna(-9999)
         working = working.sort_values(
-            '_roi_sort', ascending=False, na_position='last'
-        ).drop(columns=['_roi_sort']).reset_index(drop=True)
+            ['_trap_key', '_roi_tier', '_resale_sort', '_roi_sort'],
+            ascending=[True, True, False, False],
+            na_position='last',
+        ).drop(
+            columns=['_trap_key', '_roi_tier', '_resale_sort', '_roi_sort']
+        ).reset_index(drop=True)
 
-    # --- "🎯 BOLO matches only" filter. Toggle hides every row whose
-    #     title/description didn't hit the brand list. Disabled when
-    #     there are no matches at all so the user can see why. ---
-    bolo_only = False
-    if _BOLO_MATCHER.loaded and bolo_total > 0:
-        bolo_only = st.checkbox(
-            f"🎯 Show only BOLO matches ({bolo_total} of {len(working)})",
-            key="results_bolo_only",
-            help="Filter the table to lots whose title/description "
-                 "matched a brand on data/clothing_brand_bolo.json. "
-                 "Useful for quickly triaging clothing-heavy auctions.",
-        )
-    elif _BOLO_MATCHER.loaded:
-        st.caption(
-            f"🎯 BOLO: 0 matches in this auction "
-            f"({_BOLO_MATCHER.brand_count} brands loaded across "
-            "clothing + household-parts watch lists)."
-        )
-    if bolo_only:
-        working = working[working['bolo_brand'].notna()].reset_index(drop=True)
-
-    # --- Threshold masks (for highlight + status counts) ---
-    # When STR data is unavailable for the entire auction (e.g. coin
-    # auctions where STR scraping doesn't reliably resolve), don't
-    # require STR for the green highlight. Fall back to ROI-only so
-    # rows still flag profitable. We detect "no STR data available"
-    # by checking if any row has a non-null STR value.
-    roi_threshold = (target_roi_val - 1) * 100
-    meets_roi = (
-        working['est_roi'].notna() & (pd.to_numeric(working['est_roi'], errors='coerce') >= roi_threshold)
-        if 'est_roi' in working.columns
-        else pd.Series(False, index=working.index)
-    )
-    str_known_anywhere = (
-        'ebay_str' in working.columns
-        and working['ebay_str'].notna().any()
-    )
-    meets_str_mask = (
-        working['ebay_str'].notna() & (pd.to_numeric(working['ebay_str'], errors='coerce') >= target_str_val)
-        if 'ebay_str' in working.columns
-        else pd.Series(False, index=working.index)
-    )
-    if str_known_anywhere:
-        meets_both = meets_roi & meets_str_mask
-        meets_either = (meets_roi | meets_str_mask) & ~meets_both
+    # --- Estimated profit per lot (after eBay fees) ---
+    # Formula matches the gross-of-fees ROI used everywhere else but
+    # nets the eBay take rate so the "profit" number is what would
+    # actually hit the bank account, not the headline revenue. Same
+    # 13.25% + $0.30 fee structure used by _compute_max_bid().
+    # Lots without est_resale or est_cost get NaN → excluded from sums.
+    if 'est_resale' in working.columns and 'est_cost' in working.columns:
+        _resale = pd.to_numeric(working['est_resale'], errors='coerce')
+        _cost = pd.to_numeric(working['est_cost'], errors='coerce')
+        _net_resale = _resale * (1 - 0.1325) - 0.30
+        working['est_profit'] = (_net_resale - _cost).round(2)
     else:
-        # No STR data at all — promote ROI-only to "meets both" so the
-        # green highlight still works on auctions where STR can't be
-        # scraped (coins, bullion, niche collectibles).
-        meets_both = meets_roi
-        meets_either = pd.Series(False, index=working.index)
+        working['est_profit'] = pd.Series(pd.NA, index=working.index, dtype="Float64")
 
-    # --- One-line status row (replaces the old 6-cell stMetric grid) ---
+    # --- Buy-grade aggregate counts for the status line ---
+    # buy_grade is the composite "Should I buy?" letter (🟢 A, 🟡 B,
+    # 🟠 C, 🔴 D, ⚫ F). Replaces the old meets_roi / meets_str /
+    # meets_both / meets_either masks — that system fragmented signal
+    # across two sliders and produced misleading "all green" calls
+    # on contaminated comps. The buy_grade absorbs threshold tuning
+    # into the score.
+    grade_col = working.get('buy_grade')
+    n_a = n_b = n_c = n_d = n_q = 0
+    if grade_col is not None:
+        gc = grade_col.fillna('').astype(str)
+        # Use the emoji prefix to identify each grade unambiguously
+        # (substring matches like "A" used to false-match "🔍 ?" via
+        # the question mark — emojis ensure clean buckets).
+        n_a = int(gc.str.startswith('🟢').sum())
+        n_b = int(gc.str.startswith('🟡').sum())
+        n_c = int(gc.str.startswith('🟠').sum())
+        n_d = int(gc.str.startswith('🔴').sum())
+        n_q = int(gc.str.startswith('🔍').sum())
+
+    # Profit aggregate for the A+B (likely-buy) tier — gives the user
+    # a "what's at stake if I bid all the green / yellow lots?" number.
+    _profit_num = pd.to_numeric(
+        working.get('est_profit', pd.Series(dtype=float)),
+        errors='coerce',
+    )
+    _ab_profit = 0.0
+    if grade_col is not None:
+        ab_mask = grade_col.fillna('').astype(str).str.startswith(
+            ('🟢', '🟡')
+        )
+        _ab_profit = float(_profit_num[ab_mask].sum() or 0.0)
+
+    # --- One-line status row ---
     status_bits = [f"**{len(working)}** leads"]
     if 'est_resale' in working.columns:
         status_bits.append(f"**{int(working['est_resale'].notna().sum())}** comped")
-    status_bits.append(f"✅ **{int(meets_both.sum())}** meet both")
-    status_bits.append(f"🟡 **{int(meets_either.sum())}** meet one")
+    grade_chip = []
+    if n_a: grade_chip.append(f"🟢 **{n_a}** A")
+    if n_b: grade_chip.append(f"🟡 **{n_b}** B")
+    if n_c: grade_chip.append(f"🟠 **{n_c}** C")
+    if n_d: grade_chip.append(f"🔴 **{n_d}** D")
+    if n_q: grade_chip.append(f"🔍 **{n_q}** uncomped w/ signals")
+    if grade_chip:
+        status_bits.append(" · ".join(grade_chip))
+    if (n_a + n_b) > 0:
+        status_bits.append(f"💰 **${_ab_profit:,.0f}** est. profit (A+B)")
     if 'red_flag' in working.columns:
         status_bits.append(f"🚩 **{int(working['red_flag'].sum())}** red-flagged")
+    if 'manual_check' in working.columns:
+        n_manual = int(working['manual_check'].fillna(False).astype(bool).sum())
+        if n_manual > 0:
+            status_bits.append(f"🔍 **{n_manual}** need manual review")
     if 'ebay_str' in working.columns:
         has_str = int(working['ebay_str'].notna().sum())
         if has_str:
@@ -4701,7 +6387,7 @@ def _render_results_table(results_df):
                         "🔍 Verify with Claude vision",
                         key=f"auth_verify_btn_{lot_id}",
                         type="primary",
-                        use_container_width=True,
+                        width='stretch',
                         help="Spends one Claude API call. Result is cached "
                              "per-lot for the rest of the session.",
                     ):
@@ -4753,7 +6439,7 @@ def _render_results_table(results_df):
                     if st.button(
                         "🗑️ Clear result",
                         key=f"auth_clear_btn_{lot_id}",
-                        use_container_width=True,
+                        width='stretch',
                         disabled=cache_key not in st.session_state,
                     ):
                         st.session_state.pop(cache_key, None)
@@ -4815,6 +6501,11 @@ def _render_results_table(results_df):
     # reachable without scrolling — that's the most-clicked control.
     if 'lot_link' in filtered_df.columns:
         display_cols.append('lot_link')
+    # Buy score sits right after the link — single-column "should I bid?"
+    # answer, sortable to surface the best lots without scanning all
+    # the underlying metrics.
+    if 'buy_grade' in filtered_df.columns:
+        display_cols.append('buy_grade')
     if 'thumbnail_url' in filtered_df.columns:
         display_cols.append('thumbnail_url')
     display_cols.append(title_col)
@@ -4838,6 +6529,21 @@ def _render_results_table(results_df):
     # current_bid so the comparison is one glance.
     if bolo_total > 0 and 'bolo_brand' in filtered_df.columns:
         display_cols.append('bolo_brand')
+    # CPU Form column — only show when there's at least one CPU /
+    # mini_pc category match in the table. Distinguishes bare chips
+    # from systems-with-CPU at a glance (very different comp tiers).
+    has_cpu_match = (
+        'cpu_form_factor' in filtered_df.columns
+        and filtered_df['cpu_form_factor'].notna().any()
+    )
+    if has_cpu_match:
+        display_cols.append('cpu_form_factor')
+        # bolo_model surfaces the specific chip identifier (e.g.
+        # "i5-8500T", "Xeon Gold 6138"). For 'system' rows it tells
+        # the user which CPU is inside the laptop/desktop — useful for
+        # judging whether the chip itself has resale value as a floor.
+        if 'bolo_model' in filtered_df.columns:
+            display_cols.append('bolo_model')
     # 🛡️ Auth Score column — only when the auction has at least one
     # auth-required (tier-3 luxury / Polo subline) BOLO match. Below
     # 30 is "do not bid without authentication"; surfaces the same
@@ -4893,6 +6599,28 @@ def _render_results_table(results_df):
             pinned=True,  # always visible during horizontal scroll
             help="Open this lot on HiBid in a new tab.",
         ),
+        "buy_grade": st.column_config.TextColumn(
+            "Buy?",
+            width="small",
+            help="Composite 'Should I buy it?' grade:\n\n"
+                 "🟢 A (80+) — strong buy, clean comp & margin\n"
+                 "🟡 B (65-79) — solid\n"
+                 "🟠 C (50-64) — borderline\n"
+                 "🔴 D (35-49) — risky\n"
+                 "🔍 ? — uncomped but market signals present "
+                 "(BOLO match, active bidding, auctioneer estimate) "
+                 "— manual research candidate\n"
+                 "⚫ F — comped & confirmed bad (margin negative, "
+                 "past max bid, red-flagged)\n"
+                 "❓ - — uncomped with no market signal — can't tell",
+        ),
+        "buy_score": st.column_config.ProgressColumn(
+            "Score", min_value=0, max_value=100, format="%d",
+            help="0-100 composite score: margin (≤45) + bid "
+                 "headroom (≤20) + STR (≤15) + comp confidence "
+                 "(≤20). 80+ = A, 65+ = B, 50+ = C, 35+ = D, "
+                 "below = F.",
+        ),
         "auction_link": st.column_config.LinkColumn("Auction", display_text="Open"),
         "current_bid": st.column_config.NumberColumn("Current Bid", format="$%.2f"),
         "next_bid": st.column_config.NumberColumn(
@@ -4915,9 +6643,11 @@ def _render_results_table(results_df):
         ),
         "bolo_target_buy_high": st.column_config.NumberColumn(
             "Target Buy ≤", format="$%.0f",
-            help="Highest price you should pay for this lot to maintain "
-                 "the target ROI. Pulled from target_buy_usd.high in "
-                 "the BOLO file.",
+            help="Highest price you should pay. Computed as MIN(BOLO "
+                 "category guideline, comp-derived max_bid for THIS "
+                 "lot at target ROI). BLANK = don't bid — shipping + "
+                 "premium eat the resale margin at target ROI. Common "
+                 "on low-resale lots from remote-ship auctions.",
         ),
         "bolo_tier": st.column_config.NumberColumn(
             "Tier", format="%d",
@@ -4925,6 +6655,25 @@ def _render_results_table(results_df):
                  "(reliable sell-through). 2 = vintage denim / heritage. "
                  "3 = luxury / sneakers / high-volume mid-luxury "
                  "(highest ceiling, lowest STR).",
+        ),
+        "cpu_form_factor": st.column_config.TextColumn(
+            "CPU Form",
+            help="For CPU-category lots: 'bare_cpu' = chip alone "
+                 "(comps to bare-CPU sold-listings, ~$15-150 typical). "
+                 "'system' = laptop/desktop/server containing the CPU "
+                 "(comps to system sold-listings, ~$70-300 typical — "
+                 "but the bare-CPU value floor is still useful intel "
+                 "if you can harvest the chip). 'unclear' = ambiguous "
+                 "title; treat as bare-CPU but inspect manually.",
+        ),
+        "bolo_model": st.column_config.TextColumn(
+            "Model",
+            help="Specific BOLO model identifier matched in the title "
+                 "(e.g. 'i5-8500T', 'Xeon Gold 6138', 'Raspberry Pi 4 "
+                 "Model B'). For 'system' form-factor rows, this is "
+                 "the CPU inside the laptop/desktop — handy for "
+                 "judging whether the chip alone has resale value "
+                 "even if the system itself isn't a primary target.",
         ),
         "bolo_auth_score": st.column_config.ProgressColumn(
             "🛡️ Auth",
@@ -4943,6 +6692,18 @@ def _render_results_table(results_df):
     if 'est_resale' in filtered_df.columns:
         display_cols += ['est_resale']
         col_config["est_resale"] = st.column_config.NumberColumn("Est. Resale (median)", format="$%.2f")
+
+        # Net-of-eBay-fees profit per row, computed earlier in
+        # _render_results_table. Inserted right after est_resale so
+        # the user reads "Est. Resale → Est. Profit" left-to-right.
+        if 'est_profit' in filtered_df.columns:
+            display_cols += ['est_profit']
+            col_config["est_profit"] = st.column_config.NumberColumn(
+                "Est. Profit (net)",
+                format="$%.2f",
+                help="est_resale × (1 - 13.25% eBay fees) - $0.30 - est_cost. "
+                     "What would actually hit your bank after eBay's take.",
+            )
 
         if 'price_low' in filtered_df.columns:
             display_cols += ['price_low', 'price_high']
@@ -5064,7 +6825,34 @@ def _render_results_table(results_df):
             st.caption(f"_(comp-vs-estimate fact-check skipped: {_est_err})_")
 
         display_cols += ['est_roi']
-        col_config["est_roi"] = st.column_config.NumberColumn("ROI %", format="%.0f%%")
+        col_config["est_roi"] = st.column_config.NumberColumn(
+            "ROI %", format="%.0f%%",
+            help="ROI based on CURRENT bid + cost. Misleading on luxury "
+                 "lots where bidding hasn't opened (see Realistic ROI %).",
+        )
+
+    # Realistic ROI based on max(est_cost, auctioneer_est_low × 0.5).
+    # Fairer for luxury-watch lots starting at $5 with $16K estimates.
+    if 'realistic_roi' in filtered_df.columns:
+        display_cols.append('realistic_roi')
+        col_config["realistic_roi"] = st.column_config.NumberColumn(
+            "Realistic ROI %", format="%.0f%%",
+            help="ROI computed against MAX(est_cost, auctioneer_est_low × 0.5). "
+                 "On lots already bid up to estimate range, this matches ROI %; "
+                 "on luxury starter-bid lots it gives a much more honest picture.",
+        )
+
+    # Bid-trap warning marker
+    if 'bid_trap_warn' in filtered_df.columns:
+        display_cols.append('bid_trap_warn')
+        col_config["bid_trap_warn"] = st.column_config.CheckboxColumn(
+            "⚠️",
+            help="Starter-bid trap: luxury-watch / high-end jewelry lot "
+                 "with current bid < 10% of auctioneer estimate AND "
+                 "estimate > $1000. Displayed ROI is inflated; the lot "
+                 "will clear closer to the auctioneer's estimate. "
+                 "Sort puts these BELOW real opportunities.",
+        )
 
     if 'max_bid' in filtered_df.columns:
         display_cols.append('max_bid')
@@ -5207,25 +6995,36 @@ def _render_results_table(results_df):
 
     display_df = filtered_df[final_cols].copy()
 
-    # Row-level highlighting based on the threshold masks computed above.
-    # Re-index the masks to match display_df (preserve filter_df's row order).
-    local_meets_both = meets_both.reindex(filtered_df.index).fillna(False).reset_index(drop=True)
-    local_meets_either = meets_either.reindex(filtered_df.index).fillna(False).reset_index(drop=True)
     display_df = display_df.reset_index(drop=True)
 
+    # Row coloring is now driven by `buy_grade` (composite score). The
+    # old ROI/STR-threshold green/yellow tier system was removed — it
+    # fragmented signal across two sliders and produced misleading
+    # "all green" calls on contaminated comps. Buy_grade absorbs all
+    # the threshold tuning into one number with a familiar A-F scale.
+    _GRADE_BG = {
+        '🟢 A': 'background-color: rgba(46, 204, 113, 0.28)',   # green
+        '🟡 B': 'background-color: rgba(241, 196, 15, 0.22)',   # yellow
+        '🟠 C': 'background-color: rgba(230, 126, 34, 0.18)',   # orange
+        '🔴 D': 'background-color: rgba(231, 76, 60, 0.18)',    # red
+        '🔍 ?': 'background-color: rgba(52, 152, 219, 0.18)',   # blue — manual research
+        '⚫ F': '',                                                # no tint
+        '❓ -': 'color: rgba(127, 140, 141, 0.7)',                # grey-out
+    }
+
     def _row_style(row):
-        i = row.name
-        if local_meets_both.iloc[i]:
-            return ['background-color: rgba(46, 204, 113, 0.28)'] * len(row)
-        if local_meets_either.iloc[i]:
-            return ['background-color: rgba(241, 196, 15, 0.22)'] * len(row)
-        return [''] * len(row)
+        # buy_grade column may be missing on legacy frames or when
+        # the comp pipeline hasn't run yet — default to no styling.
+        if 'buy_grade' not in display_df.columns:
+            return [''] * len(row)
+        grade = display_df.at[row.name, 'buy_grade']
+        css = _GRADE_BG.get(grade, '')
+        return [css] * len(row)
 
     styled = display_df.style.apply(_row_style, axis=1)
-
     st.dataframe(
         styled,
-        use_container_width=True,
+        width='stretch',
         column_config=col_config,
     )
 
@@ -5243,31 +7042,30 @@ def _render_results_table(results_df):
         timestamp = datetime.now().strftime('%Y%m%d-%H%M')
         csv_name = f"htown-results-{auction_slug}-{timestamp}.csv"
 
-        ec1, ec2 = st.columns([1, 1])
-        with ec1:
-            # Full audit_results — every column. Use the styled-table's
-            # working df so est_roi / max_bid reflect current target_roi.
-            st.download_button(
-                label="📥 Download full CSV",
-                data=working.to_csv(index=False).encode('utf-8'),
-                file_name=csv_name,
-                mime="text/csv",
-                key="export_results_csv",
-                help="All columns (verdict, comps, ROI, max_bid, links, image-enrichment fields). "
-                     "Attach this in chat to share the full results.",
-                use_container_width=True,
-            )
-        with ec2:
-            # Snippet pre-trimmed to the columns most useful for triage —
-            # paste straight into chat without attaching a file.
-            snippet_n = st.number_input(
-                "Snippet rows", min_value=5, max_value=100, step=5,
-                value=20, key="export_snippet_n",
-                help="How many rows to include in the markdown snippet below.",
-            )
+        # Single Full CSV download — all rows + all columns. Use the
+        # styled-table's working df so est_roi / max_bid reflect the
+        # current target_roi setting.
+        st.download_button(
+            label=f"📥 Full CSV ({len(working)})",
+            data=working.to_csv(index=False).encode('utf-8'),
+            file_name=csv_name,
+            mime="text/csv",
+            key="export_results_csv",
+            help="All rows + all columns (verdict, comps, ROI, max_bid, "
+                 "links, image-enrichment fields).",
+            width='stretch',
+        )
+
+        # Markdown-snippet row config (was row 2 before the green/yellow
+        # buttons came out — kept the same widget below).
+        snippet_n = st.number_input(
+            "Markdown snippet rows", min_value=5, max_value=100, step=5,
+            value=20, key="export_snippet_n",
+            help="How many rows to include in the markdown snippet below.",
+        )
         st.caption(
             "💡 If specific lots look wrong, share the Markdown snippet. "
-            "If you want me to look at the whole auction, attach the CSV."
+            "If you want me to look at the whole auction, attach a CSV."
         )
 
         snippet_cols = [
@@ -5315,15 +7113,49 @@ if (
     # synthetic "🎯 BOLO scan" auction. The standard analysis
     # pipeline (audit → comps → results table) takes over from
     # there — same code path, just with a pre-filtered subset.
-    if st.session_state.get('_bolo_scan_all_pending') and _BOLO_MATCHER.loaded:
+    #
+    # IMPORTANT: do NOT gate this on `_BOLO_MATCHER.loaded`. After the
+    # lazy-loading change, `.loaded` returns False until the matcher
+    # is first accessed — and on the rerun after fetch completes, it
+    # hasn't been touched yet in this script run. Gating on it here
+    # caused the scan path to silently skip and fall through to the
+    # single-auction fallback below, narrowing a multi-auction scan
+    # down to just the first auction's lots. The matcher builds
+    # itself the moment `.brand_count` / `.match()` is called inside
+    # this block (and `_bolo_scan_all_pending` is the authoritative
+    # signal that we WANT to do BOLO matching).
+    if st.session_state.get('_bolo_scan_all_pending'):
         # Stage 2 of the multi-auction BOLO scan: regex-match every fetched
         # lot title/description against the loaded BOLO list. Cheap (regex
         # only), but we surface a visible status panel so the user knows
         # WHY the page seems to pause between fetch and audit.
         with st.status(
-            "🎯 Phase 3 of 5: Matching lots against BOLO list…",
+            "🎯 Matching lots against BOLO list…",
             expanded=True,
         ) as _bolo_match_status:
+            # Pre-filter BEFORE running the BOLO match. Three passes:
+            #   1. HARD-logistics drop
+            #   2. Easy-ship-only drop (NEUTRAL lots whose titles don't
+            #      hit the mailbox-shippable keyword set)
+            #   3. Bid-cap drop (next-bid > comps_skip_above_bid)
+            # The match is regex-only and not slow per-lot, but at 14K+
+            # fetched lots dropping unactionable rows up front cuts the
+            # scan time proportionally and skips spending audit + comp
+            # credits on lots we'd reject anyway. Keep the original
+            # count so the status panel can show the savings.
+            n_total_pre = len(_df)
+            _df, _ship_reasons = _apply_easy_ship_filter(_df)
+            _df, _bid_reason = _apply_bid_cap_filter(_df)
+            _all_reasons = list(_ship_reasons)
+            if _bid_reason:
+                _all_reasons.append(_bid_reason)
+            if _all_reasons:
+                _dropped_n = n_total_pre - len(_df)
+                st.write(
+                    f"📦 Pre-filtered to **{len(_df):,}** actionable lots "
+                    f"(dropped {_dropped_n:,}: "
+                    f"{', '.join(_all_reasons)})."
+                )
             n_total = len(_df)
             n_brands = _BOLO_MATCHER.brand_count
             st.write(
@@ -5337,12 +7169,6 @@ if (
             _bolo_progress = st.progress(0.0, text="Starting…")
             _bolo_eta_label = st.empty()
             _bolo_live_stats = st.empty()
-            # Pie chart placeholder. Lives above the brand-tally text
-            # so the user sees the visual update first. Empty when
-            # plotly isn't available — the markdown summary still
-            # renders below as the fallback.
-            _bolo_live_pie = st.empty() if _HAS_PLOTLY else None
-            _bolo_pie_throttle = {"last_n": 0}
             # ETA tracking: stamp the start time before the first chunk
             # callback fires. Each chunk reports elapsed seconds and a
             # linear projection of the remaining time. Linear projection
@@ -5393,32 +7219,6 @@ if (
                     _bolo_live_stats.markdown(
                         f"🔥 Top brands so far: {_summary}"
                     )
-                # Re-render the pie chart only when the brand counts
-                # have actually moved meaningfully. Streamlit's plotly
-                # render is the most expensive part of each chunk
-                # callback — throttle to every ~5% of progress OR when
-                # a new brand crosses 5+ hits.
-                if _bolo_live_pie is not None and top_brands:
-                    n_new = sum(top_brands.values())
-                    pct_jump = (
-                        (n_new - _bolo_pie_throttle["last_n"]) / max(1, n_new)
-                    )
-                    if pct_jump >= 0.05 or pct >= 0.99:
-                        _bolo_pie_throttle["last_n"] = n_new
-                        # Build over the full top_brands dict (already
-                        # capped at 8 by the chunk callback). Pass to
-                        # _build_brand_pie which adds 'Other' bucketing.
-                        fig = _build_brand_pie(
-                            dict(top_brands),
-                            title=f"🔥 BOLO matches by brand "
-                                  f"({hits:,} so far)",
-                        )
-                        if fig is not None:
-                            _bolo_live_pie.plotly_chart(
-                                fig,
-                                use_container_width=True,
-                                key=f"bolo_live_pie_{current}",
-                            )
 
             _scan_df = _compute_bolo_columns_chunked(
                 _df, chunk_size=2000, progress_callback=_bolo_chunk_cb,
@@ -5431,8 +7231,6 @@ if (
             _bolo_progress.empty()
             _bolo_eta_label.empty()
             _bolo_live_stats.empty()
-            if _bolo_live_pie is not None:
-                _bolo_live_pie.empty()
 
             if 'bolo_brand' in _scan_df.columns:
                 _bolo_subset = _scan_df[_scan_df['bolo_brand'].notna()].copy()
@@ -5449,6 +7247,10 @@ if (
                 else 0
             )
             _match_pct = (100 * n_matches / n_total) if n_total else 0.0
+            tlog("BOLO",
+                 f"matched {n_matches:,}/{n_total:,} lots ({_match_pct:.1f}%)",
+                 f"in {_bolo_total_secs:.1f}s",
+                 f"· {n_match_auctions}/{n_auctions} auctions hit")
             st.write(
                 f"✅ **{n_matches:,}** BOLO matches found "
                 f"({_match_pct:.1f}% hit rate) across "
@@ -5505,7 +7307,7 @@ if (
                 )
             _bolo_match_status.update(
                 label=(
-                    f"✅ Phase 3 of 5: {n_matches:,} BOLO matches "
+                    f"✅ {n_matches:,} BOLO matches "
                     f"across {n_match_auctions} auctions "
                     f"(completed in {_fmt_secs(_bolo_total_secs)})"
                 ),
@@ -5542,15 +7344,37 @@ if (
         st.session_state._comps_free_only_mode = False
         st.session_state.audit_running = False
         st.session_state.comps_running = False
-        st.session_state.img_enrich_running = False
         st.session_state.pop('_auto_pipeline_attempts', None)
         # Clear the flag — single-auction loads from here on don't
         # re-enter scan mode unless the button is clicked again.
         st.session_state._bolo_scan_all_pending = False
         st.rerun()
 
-    # Standard single-auction load (default behavior)
+    # Standard single-auction load (default behavior). Belt-and-
+    # suspenders guard: if the fetched frame contains lots from MORE
+    # THAN ONE auction (which means the user clicked "Search for
+    # BOLOs across N auctions"), we should NEVER silently load just
+    # the first auction. That's what caused the "scanned 1002, only
+    # 1 showed" bug — a missing guard let single-auction fallback
+    # narrow a multi-auction frame. If somehow we land here with
+    # multi-auction data and the BOLO scan path didn't catch it,
+    # surface a hard error rather than silently truncating.
     if 'auction' in _df.columns and len(_df):
+        _unique_auctions = _df['auction'].nunique()
+        if _unique_auctions > 1:
+            tlog("ERROR",
+                 f"Multi-auction frame ({_unique_auctions} auctions, "
+                 f"{len(_df)} lots) reached single-auction fallback.",
+                 "_bolo_scan_all_pending was probably False when it",
+                 "should have been True. Investigate the BOLO scan path.")
+            st.error(
+                f"⚠️ Internal routing bug: a multi-auction fetch "
+                f"({_unique_auctions} auctions, {len(_df):,} lots) reached "
+                f"the single-auction loader. Refusing to truncate to one "
+                f"auction. Click **🔍 Search for BOLOs** again to retry, "
+                f"or report this with your terminal output."
+            )
+            st.stop()
         _auction_name = _df['auction'].iloc[0]
         _auction_df = _df[_df['auction'] == _auction_name].reset_index(drop=True)
         _load_auction_for_analysis(_auction_name, _auction_df)
@@ -5558,9 +7382,215 @@ if (
 
 current_auction = st.session_state.get('current_auction')
 
+# ---- LIVE STATUS RIGHT PANEL ----
+# A fixed-position floating panel pinned to the right edge of the
+# viewport. Always visible while the analysis view is active so the
+# user can see live activity (current phase, lot counts, credit
+# budget, registry hits) without scrolling. Re-renders on every
+# Streamlit interaction.
+def _render_live_status_panel(leads_df=None):
+    """Render a fixed-position status panel on the right edge."""
+    # Aggregate live stats
+    n_lots = len(leads_df) if leads_df is not None else 0
+    n_comped = 0
+    n_a = n_b = 0
+    n_bolo = 0
+    n_tier1 = n_tier2 = n_tier3 = 0
+    if leads_df is not None and not leads_df.empty:
+        if 'est_resale' in leads_df.columns:
+            n_comped = int(leads_df['est_resale'].notna().sum())
+        # Buy-grade counts replace the old ROI/STR threshold-based
+        # green/yellow counts. The buy_grade column is populated by
+        # `_compute_buy_score` after comps run.
+        if 'buy_grade' in leads_df.columns:
+            grades = leads_df['buy_grade'].fillna('').astype(str)
+            n_a = int(grades.str.startswith('🟢').sum())
+            n_b = int(grades.str.startswith('🟡').sum())
+        if 'bolo_brand' in leads_df.columns:
+            n_bolo = int(leads_df['bolo_brand'].notna().sum())
+        if 'bolo_tier' in leads_df.columns:
+            tier = pd.to_numeric(leads_df['bolo_tier'], errors='coerce')
+            n_tier1 = int((tier == 1).sum())
+            n_tier2 = int((tier == 2).sum())
+            n_tier3 = int((tier == 3).sum())
+
+    # Active phase
+    if discover_running:
+        phase = "🔍 Discovering"
+        phase_color = "#3b82f6"
+    elif _sampling_pending:
+        phase = "🔍 Loading samples"
+        phase_color = "#3b82f6"
+    elif fetch_lots_running:
+        phase = "📥 Fetching lots"
+        phase_color = "#3b82f6"
+    elif _audit_running:
+        phase = "🧠 AI audit"
+        phase_color = "#a855f7"
+    elif _comps_running:
+        phase = "💰 Comps running"
+        phase_color = "#f59e0b"
+    elif _comps_running == False and n_comped > 0:
+        phase = "✅ Idle (comp'd)"
+        phase_color = "#22c55e"
+    else:
+        phase = "⚪ Idle"
+        phase_color = "#6b7280"
+
+    # Registry stats
+    # ScrapingBee budget remaining (from session-cached usage)
+    sb_used_pct = None
+    try:
+        from scraper.config_loader import load_config as _cfg
+        sb_cfg = _cfg().get('scrapingbee') or {}
+        if sb_cfg.get('api_key'):
+            usage = _fetch_scrapingbee_usage(sb_cfg.get('api_key'))
+            used = int(usage.get('used_api_credit') or 0)
+            cap = int(usage.get('max_api_credit') or 0)
+            if cap:
+                sb_used_pct = round(100 * used / cap, 0)
+    except Exception:
+        pass
+
+    bolo_bits = ""
+    if n_bolo > 0:
+        bolo_bits = (
+            f"<div class='lsp-row'>"
+            f"<span class='lsp-label'>BOLO hits</span>"
+            f"<span class='lsp-val'>{n_bolo}</span>"
+            f"</div>"
+        )
+        tier_parts = []
+        if n_tier1: tier_parts.append(f"T1:{n_tier1}")
+        if n_tier2: tier_parts.append(f"T2:{n_tier2}")
+        if n_tier3: tier_parts.append(f"T3:{n_tier3}")
+        if tier_parts:
+            bolo_bits += (
+                f"<div class='lsp-row'>"
+                f"<span class='lsp-label'>by tier</span>"
+                f"<span class='lsp-val' style='font-size:10px;'>"
+                f"{' · '.join(tier_parts)}</span>"
+                f"</div>"
+            )
+
+    sb_bit = ""
+    if sb_used_pct is not None:
+        bar_color = (
+            '#22c55e' if sb_used_pct < 50 else
+            '#f59e0b' if sb_used_pct < 80 else
+            '#ef4444'
+        )
+        sb_bit = (
+            f"<div class='lsp-row'><span class='lsp-label'>"
+            f"SB credits used</span>"
+            f"<span class='lsp-val' style='color:{bar_color};'>"
+            f"{int(sb_used_pct)}%</span></div>"
+        )
+
+    html = f"""
+    <style>
+      .lsp-panel {{
+        position: fixed;
+        right: 8px;
+        top: 90px;
+        width: 220px;
+        z-index: 998;
+        background: rgba(15,23,42,0.94);
+        color: #e5e7eb;
+        border-left: 4px solid {phase_color};
+        border-radius: 6px;
+        padding: 10px 12px;
+        font-size: 12px;
+        box-shadow: -2px 2px 12px rgba(0,0,0,0.3);
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        max-height: calc(100vh - 110px);
+        overflow-y: auto;
+      }}
+      .lsp-title {{
+        font-weight: 700;
+        font-size: 13px;
+        color: {phase_color};
+        margin-bottom: 8px;
+        letter-spacing: 0.3px;
+      }}
+      .lsp-section {{
+        margin-bottom: 8px;
+        padding-bottom: 6px;
+        border-bottom: 1px solid rgba(255,255,255,0.08);
+      }}
+      .lsp-section:last-child {{ border-bottom: none; }}
+      .lsp-section-title {{
+        font-size: 9px;
+        text-transform: uppercase;
+        letter-spacing: 0.7px;
+        color: #9ca3af;
+        margin-bottom: 3px;
+      }}
+      .lsp-row {{
+        display: flex;
+        justify-content: space-between;
+        padding: 1px 0;
+      }}
+      .lsp-label {{
+        color: #9ca3af;
+        font-size: 11px;
+      }}
+      .lsp-val {{
+        color: #e5e7eb;
+        font-weight: 600;
+        font-size: 12px;
+        font-variant-numeric: tabular-nums;
+      }}
+      .lsp-green {{ color: #22c55e; }}
+      .lsp-yellow {{ color: #f59e0b; }}
+
+      /* Hide on small screens — would overlap with content */
+      @media (max-width: 1280px) {{
+        .lsp-panel {{ display: none; }}
+      }}
+    </style>
+    <div class="lsp-panel">
+      <div class="lsp-title">{phase}</div>
+
+      <div class="lsp-section">
+        <div class="lsp-section-title">This view</div>
+        <div class="lsp-row"><span class="lsp-label">Lots loaded</span>
+          <span class="lsp-val">{n_lots}</span></div>
+        <div class="lsp-row"><span class="lsp-label">Comped</span>
+          <span class="lsp-val">{n_comped}</span></div>
+        <div class="lsp-row"><span class="lsp-label">🟢 A grade</span>
+          <span class="lsp-val lsp-green">{n_a}</span></div>
+        <div class="lsp-row"><span class="lsp-label">🟡 B grade</span>
+          <span class="lsp-val lsp-yellow">{n_b}</span></div>
+      </div>
+
+      {('<div class="lsp-section">'
+        '<div class="lsp-section-title">BOLO matches</div>'
+        + bolo_bits + '</div>') if n_bolo > 0 else ''}
+
+      {('<div class="lsp-section">'
+        '<div class="lsp-section-title">Budget</div>'
+        + sb_bit + '</div>') if sb_bit else ''}
+    </div>
+    """
+    st.markdown(html, unsafe_allow_html=True)
+
+
 # ---- ANALYSIS VIEW: one auction is loaded ----
 if current_auction and not st.session_state.selected_leads.empty:
     leads_df = st.session_state.selected_leads
+
+    # Live status panel pinned to the right edge of the viewport.
+    # Re-renders on every Streamlit interaction so counts update
+    # in real time as filters / target sliders / table sort change.
+    # CSS hides it on screens narrower than 1280px (would overlap
+    # with the main table).
+    _render_live_status_panel(
+        st.session_state.get('audit_results')
+        if isinstance(st.session_state.get('audit_results'), pd.DataFrame)
+        and not st.session_state.audit_results.empty
+        else leads_df
+    )
 
     # Back button + Refresh-bids button + header.
     # The Refresh-bids button re-runs Phase 1 for just this auction so the
@@ -5571,7 +7601,7 @@ if current_auction and not st.session_state.selected_leads.empty:
     # has_comps_data are still True after the merge.
     bc1, bc2, bc3 = st.columns([1, 1, 3])
     with bc1:
-        if st.button("← Back to auctions", use_container_width=True):
+        if st.button("← Back to auctions", width='stretch'):
             st.session_state.selected_leads = pd.DataFrame()
             st.session_state.current_auction = None
             st.session_state.audit_results = {}
@@ -5590,7 +7620,7 @@ if current_auction and not st.session_state.selected_leads.empty:
         )
         if st.button(
             _refresh_label,
-            use_container_width=True,
+            width='stretch',
             disabled=_refresh_bids_running,
             key="header_refresh_bids_btn",
             help=(
@@ -5669,19 +7699,17 @@ if current_auction and not st.session_state.selected_leads.empty:
                 f"{scan_summary['auctions']} auctions had matches)"
             )
 
-        # Persistent interactive brand pie chart. Renders for any view
-        # where the leads_df has BOLO brand data (single auction or
-        # multi-auction scan). Clicking a slice filters an inline lot
-        # preview below — doesn't touch the main results table, so it
-        # works without disrupting audit/comps state.
+        # Persistent BOLO brand chart + per-brand lot preview. Renders
+        # for any view where leads_df has BOLO brand data. The bar chart
+        # gives a quick visual of which brands are in the loaded set;
+        # the selectbox below it drives an inline lot preview without
+        # disrupting the main results table.
         if (
-            _HAS_PLOTLY
-            and 'bolo_brand' in leads_df.columns
+            'bolo_brand' in leads_df.columns
             and leads_df['bolo_brand'].notna().sum() >= 2
         ):
             with st.expander(
-                "🥧 BOLO brand pie chart "
-                "(click a slice to preview matching lots)",
+                "📊 BOLO brand breakdown (chart + per-brand preview)",
                 expanded=False,
             ):
                 _brand_counts_full = (
@@ -5690,97 +7718,60 @@ if current_auction and not st.session_state.selected_leads.empty:
                     .value_counts()
                     .to_dict()
                 )
-                _pie_fig = _build_brand_pie(
+                _render_brand_bar_chart(
                     _brand_counts_full,
                     title=(
                         f"BOLO matches by brand "
                         f"({sum(_brand_counts_full.values())} total)"
                     ),
                 )
-                if _pie_fig is not None:
-                    # `on_select="rerun"` makes the chart return the
-                    # user's current selection so we can react to slice
-                    # clicks. Plotly stores the clicked slice in
-                    # selection.points[0]['label'].
-                    _pie_event = st.plotly_chart(
-                        _pie_fig,
-                        use_container_width=True,
-                        key="bolo_persistent_pie",
-                        on_select="rerun",
-                        selection_mode="points",
+                # Brand selector for the lot preview. Sorted by count
+                # desc so the top-volume brand is the default. Empty
+                # placeholder is the no-selection state.
+                _brand_options = sorted(
+                    _brand_counts_full.keys(),
+                    key=lambda b: -_brand_counts_full[b],
+                )
+                _selected_brand = st.selectbox(
+                    "Preview lots for brand",
+                    options=[""] + _brand_options,
+                    format_func=(
+                        lambda b: f"{b} ({_brand_counts_full.get(b, 0)})"
+                        if b else "(pick a brand…)"
+                    ),
+                    key="bolo_brand_preview_picker",
+                    label_visibility="collapsed",
+                )
+                if _selected_brand:
+                    _slice_df = leads_df[
+                        leads_df['bolo_brand'] == _selected_brand
+                    ].copy()
+                    st.markdown(
+                        f"### 📌 {_selected_brand} ({len(_slice_df)} lots)"
                     )
-                    _selected_brand = None
-                    try:
-                        _sel_points = (
-                            _pie_event.selection.get('points')
-                            if _pie_event and hasattr(_pie_event, 'selection')
-                            else None
+                    _preview_cols = [
+                        c for c in (
+                            'auction', 'title', 'current_bid',
+                            'est_resale', 'est_roi', 'verdict',
+                            'bolo_tier', 'bolo_category', 'lot_link',
+                        ) if c in _slice_df.columns
+                    ]
+                    if _preview_cols:
+                        _preview_df = _slice_df[_preview_cols].head(50)
+                        st.dataframe(
+                            _preview_df, width='stretch', hide_index=True,
+                            column_config={
+                                "lot_link": st.column_config.LinkColumn(
+                                    "Link", display_text="open ↗",
+                                ) if 'lot_link' in _preview_df.columns
+                                else None,
+                            },
                         )
-                        if _sel_points:
-                            _selected_brand = _sel_points[0].get('label')
-                    except (AttributeError, KeyError, IndexError, TypeError):
-                        _selected_brand = None
-
-                    if _selected_brand:
-                        # The "Other (N brands)" slice aggregates the
-                        # tail; clicking it shows everything outside
-                        # the top 11.
-                        if _selected_brand.startswith("Other ("):
-                            _top_11 = sorted(
-                                _brand_counts_full.items(),
-                                key=lambda kv: kv[1], reverse=True,
-                            )[:11]
-                            _top_brands_set = {b for b, _ in _top_11}
-                            _slice_df = leads_df[
-                                leads_df['bolo_brand'].notna()
-                                & ~leads_df['bolo_brand'].isin(_top_brands_set)
-                            ].copy()
-                            _slice_label = (
-                                f"Other tail brands "
-                                f"({len(_slice_df)} lots)"
+                        if len(_slice_df) > 50:
+                            st.caption(
+                                f"Showing first 50 of {len(_slice_df)} "
+                                "matching lots."
                             )
-                        else:
-                            _slice_df = leads_df[
-                                leads_df['bolo_brand'] == _selected_brand
-                            ].copy()
-                            _slice_label = (
-                                f"{_selected_brand} ({len(_slice_df)} lots)"
-                            )
-                        st.markdown(f"### 📌 {_slice_label}")
-                        # Compact preview columns. Fall back gracefully
-                        # if the analysis hasn't run yet (no est_resale).
-                        _preview_cols = [
-                            c for c in (
-                                'auction', 'title', 'current_bid',
-                                'est_resale', 'est_roi', 'verdict',
-                                'bolo_tier', 'bolo_category',
-                                'lot_link',
-                            ) if c in _slice_df.columns
-                        ]
-                        if _preview_cols:
-                            _preview_df = _slice_df[_preview_cols].head(50)
-                            st.dataframe(
-                                _preview_df,
-                                use_container_width=True,
-                                hide_index=True,
-                                column_config={
-                                    "lot_link": st.column_config.LinkColumn(
-                                        "Link",
-                                        display_text="open ↗",
-                                    ) if 'lot_link' in _preview_df.columns
-                                    else None,
-                                },
-                            )
-                            if len(_slice_df) > 50:
-                                st.caption(
-                                    f"Showing first 50 of "
-                                    f"{len(_slice_df)} matching lots."
-                                )
-                        st.caption(
-                            "Click anywhere on the pie to change "
-                            "selection, or click the same slice again "
-                            "to deselect."
-                        )
 
         # If the current analysis came from cache, indicate that + when.
         auction_id = _extract_auction_id(leads_df)
@@ -5839,7 +7830,6 @@ if current_auction and not st.session_state.selected_leads.empty:
     # regardless of which tab the user has open.
     audit_running = st.session_state.get('audit_running', False)
     comps_running = st.session_state.get('comps_running', False)
-    img_enrich_running = st.session_state.get('img_enrich_running', False)
 
     # ================================================================
     # AUTO-PIPELINE TRIGGER (early-fire, no UI flicker)
@@ -5901,24 +7891,6 @@ if current_auction and not st.session_state.selected_leads.empty:
     # before comps run. We check the post-audit state so red-flagged and
     # HARD-logistics lots are already filtered out.
     needs_image_enrich = False
-    if has_audit and 'img_enrich' not in auto_attempts:
-        ar_check = st.session_state.audit_results
-        if isinstance(ar_check, pd.DataFrame) and 'thumbnail_url' in ar_check.columns:
-            mask_eligible = (
-                ~ar_check.get('red_flag', pd.Series(False, index=ar_check.index)).fillna(False).astype(bool)
-                & (ar_check.get('logistics_ease', pd.Series('', index=ar_check.index)) != 'HARD')
-                & ar_check['thumbnail_url'].fillna('').astype(bool)
-            )
-            # Skip lots that already have a Claude/eBay-promoted title
-            if 'img_enriched_title' in ar_check.columns:
-                mask_eligible &= ar_check['img_enriched_title'].isna()
-            generic_count = 0
-            for title in ar_check.loc[mask_eligible].apply(
-                lambda r: r.get('enriched_title') or r.get('title') or '', axis=1
-            ):
-                if _is_generic_title(str(title)):
-                    generic_count += 1
-            needs_image_enrich = generic_count >= 1
 
     # ================================================================
     # AUDIT-SCOPE CHOOSER (pre-audit gate for big auctions)
@@ -5997,7 +7969,7 @@ if current_auction and not st.session_state.selected_leads.empty:
             if st.button(
                 f"🎯 BOLO only — analyze {_bolo_match_count:,} matching lot(s)",
                 type="primary",
-                use_container_width=True,
+                width='stretch',
                 key="audit_scope_bolo",
                 help="Filter selected_leads down to BOLO-matched lots, "
                      "then run audit + comps only on those. Cheapest "
@@ -6017,7 +7989,7 @@ if current_auction and not st.session_state.selected_leads.empty:
         with sc2:
             if st.button(
                 f"🌐 Full auction — analyze all {len(leads_df):,} lots",
-                use_container_width=True,
+                width='stretch',
                 key="audit_scope_full",
                 help="Run audit + comps across every lot. Choose this "
                      "when the auction's mix is unknown or you want "
@@ -6030,7 +8002,7 @@ if current_auction and not st.session_state.selected_leads.empty:
         st.markdown("---")
         st.stop()
 
-    if not (audit_running or comps_running or img_enrich_running):
+    if not (audit_running or comps_running):
         # Stale-audit retry: if the cached audit columns are mostly
         # `no_api_key` and we now DO have a key, re-fire the audit so
         # genuinely-broken/untested items get red-flagged before they
@@ -6045,13 +8017,6 @@ if current_auction and not st.session_state.selected_leads.empty:
         elif not has_audit and 'audit' not in auto_attempts:
             auto_attempts.add('audit')
             st.session_state.audit_running = True
-            st.rerun()
-        elif has_audit and needs_image_enrich:
-            # Auto-fire image enrichment between audit and comps so lots
-            # with generic titles ("Box of misc", "Vintage vase") get a
-            # vision-based identification before we hit eBay/Mercari.
-            auto_attempts.add('img_enrich')
-            st.session_state.img_enrich_running = True
             st.rerun()
         elif has_audit and not has_comps_data and 'comps_first' not in auto_attempts:
             # Credit-spend confirmation gate. Don't auto-fire the
@@ -6088,7 +8053,6 @@ if current_auction and not st.session_state.selected_leads.empty:
         and not has_comps_data
         and not audit_running
         and not comps_running
-        and not img_enrich_running
         and not st.session_state.get('_comps_credit_confirmed', False)
     )
     if needs_credit_confirmation:
@@ -6127,11 +8091,83 @@ if current_auction and not st.session_state.selected_leads.empty:
             _bolo_saturation_pct = 0.0
         _is_bolo_saturated = _bolo_saturation_pct >= 0.98
 
-        # Draw the cap controls in an expander so users who want the
-        # default behavior aren't slowed down — but BOLO-saturated runs
-        # auto-expand it because we know the spend is potentially huge.
+        # ---- Preset picker ----
+        # Three presets cover ~90% of usage: Conservative (tight budget,
+        # high-quality only), Standard (balanced default), Aggressive
+        # (max coverage). Clicking a preset writes values into the
+        # underlying knob session-state keys; the Advanced expander
+        # below still exposes every individual knob for power users.
+        st.caption("**Pick a spend preset** _(or fine-tune in Advanced below)_")
+        pp_c1, pp_c2, pp_c3 = st.columns(3)
+        with pp_c1:
+            if st.button(
+                "⚡ Conservative",
+                width='stretch',
+                key="spend_preset_conservative",
+                help="Top 50 by bid · Tier-1 BOLO only · $20 floor · "
+                     "$50 next-bid cap · STR ≥ 50% · dedupe ON. "
+                     "Targets the highest-quality bargains; ~1k credits "
+                     "typical on a 2k-lot scan.",
+            ):
+                st.session_state['_gate_min_bid_filter'] = 20.0
+                st.session_state['comps_skip_above_bid'] = 50.0
+                st.session_state['_gate_top_n_filter'] = 50
+                st.session_state['_gate_tier1_only_filter'] = True
+                st.session_state['comps_skip_below_str'] = 50.0
+                st.session_state['comps_dedup_titles'] = True
+                st.session_state['comps_use_melt_floor'] = False
+                st.session_state.pop('_gate_category_filter', None)
+                st.toast("⚡ Conservative preset applied", icon="⚡")
+                st.rerun()
+        with pp_c2:
+            if st.button(
+                "💰 Standard",
+                width='stretch',
+                key="spend_preset_standard",
+                help="Top 200 by bid · all tiers · $5 floor · $100 "
+                     "next-bid cap · dedupe ON. Tighter than Aggressive "
+                     "(saves credits) but skips low-bid lots that often "
+                     "have the best margins.",
+            ):
+                st.session_state['_gate_min_bid_filter'] = 5.0
+                st.session_state['comps_skip_above_bid'] = 100.0
+                st.session_state['_gate_top_n_filter'] = 200
+                st.session_state['_gate_tier1_only_filter'] = False
+                st.session_state['comps_skip_below_str'] = 0.0
+                st.session_state['comps_dedup_titles'] = True
+                st.session_state['comps_use_melt_floor'] = False
+                st.session_state.pop('_gate_category_filter', None)
+                st.toast("💰 Standard preset applied", icon="💰")
+                st.rerun()
+        with pp_c3:
+            if st.button(
+                "🌐 Aggressive",
+                type="primary",
+                width='stretch',
+                key="spend_preset_aggressive",
+                help="No top-N cap · all tiers · $0 floor · no next-bid "
+                     "cap · all categories · dedupe ON. **Default** — "
+                     "maximum coverage. Expensive on BOLO-saturated "
+                     "scans; click Standard to clamp down.",
+            ):
+                st.session_state['_gate_min_bid_filter'] = 0.0
+                st.session_state['comps_skip_above_bid'] = 0.0
+                st.session_state['_gate_top_n_filter'] = 0
+                st.session_state['_gate_tier1_only_filter'] = False
+                st.session_state['comps_skip_below_str'] = 0.0
+                st.session_state['comps_dedup_titles'] = True
+                st.session_state['comps_use_melt_floor'] = False
+                st.session_state.pop('_gate_category_filter', None)
+                st.toast("🌐 Aggressive preset applied", icon="🌐")
+                st.rerun()
+
+        # Draw the per-knob spend caps in an expander. Auto-expanded
+        # for BOLO-saturated runs (where the user probably wants to
+        # see the cuts before confirming a big spend). Power users
+        # can override any individual knob; the preset picker just
+        # writes sensible starting values.
         with st.expander(
-            "🎚️ Spend caps — optional filters before confirming",
+            "🎚️ Advanced — fine-tune individual spend caps",
             expanded=_is_bolo_saturated,
         ):
             cap_c1, cap_c2 = st.columns(2)
@@ -6201,6 +8237,44 @@ if current_auction and not st.session_state.selected_leads.empty:
                          "for cheaper, higher-quality runs.",
                 )
 
+            # Title-fingerprint dedup checkbox. Big credit-saver in
+            # jewelry / commodity-glass scans with many near-identical
+            # lots. The post-comp clone step ensures siblings still
+            # show comp data in the results table — they just don't
+            # cost credits to compute.
+            cap_d1, cap_d2 = st.columns([1, 1])
+            with cap_d1:
+                _gate_dedup = st.checkbox(
+                    "Dedupe near-identical titles",
+                    value=bool(
+                        st.session_state.get('comps_dedup_titles', True)
+                    ),
+                    key="comps_dedup_titles",
+                    help="Group lots whose titles match a normalized "
+                         "fingerprint AND share a BOLO brand. Comp "
+                         "ONE per group, clone result to siblings. "
+                         "Saves ~30-70% credits on jewelry-saturated "
+                         "auctions. Default ON.",
+                )
+            with cap_d2:
+                _gate_melt = st.checkbox(
+                    "Melt-value floor for precious metals",
+                    value=bool(
+                        st.session_state.get('comps_use_melt_floor', False)
+                    ),
+                    key="comps_use_melt_floor",
+                    help="When a lot's title contains both karat "
+                         "(10K/14K/18K/22K/24K, sterling, platinum) "
+                         "AND weight (Xg), price est_resale = melt "
+                         "value × premium factor (default 1.4) "
+                         "instead of running an eBay comp. Skips "
+                         "ScrapingBee credits entirely on these lots. "
+                         "Best for liquidation / volume-melt plays. "
+                         "Conservative — signed maker jewelry "
+                         "(Cartier 14k) clears 30-100% above this "
+                         "estimate via eBay; uncheck for those.",
+                )
+
         # Build the post-cap dataframe used for cost estimates and for
         # the actual comp run. Cap state is stashed so the comps run
         # below knows to apply the same trim.
@@ -6256,6 +8330,13 @@ if current_auction and not st.session_state.selected_leads.empty:
                     _trim_reasons.append(
                         f"{_cut} non-tier-1 BOLO dropped"
                     )
+
+            # NOTE: The category-STR threshold filter that lived here
+            # was removed when the cross-session comped_lots registry
+            # was dropped. Without that registry there's no historical
+            # category-level STR data to threshold against. If you want
+            # category-aware filtering back, add a session-only STR
+            # tracker first.
 
             if (_gate_top_n > 0 and len(_capped) > _gate_top_n
                     and 'current_bid' in _capped.columns):
@@ -6461,7 +8542,7 @@ if current_auction and not st.session_state.selected_leads.empty:
                 if st.button(
                     f"🎯 BOLO ({bolo_subset_count} lots, "
                     f"~{bolo_subset_credits:,} cr)",
-                    type="primary", use_container_width=True,
+                    type="primary", width='stretch',
                     disabled=not affordable or bolo_subset_count == 0,
                     key="confirm_comp_credits_bolo",
                     help="Scope to BOLO-matched lots only. Cheapest "
@@ -6488,7 +8569,7 @@ if current_auction and not st.session_state.selected_leads.empty:
                 )
                 if st.button(
                     free_label,
-                    use_container_width=True,
+                    width='stretch',
                     disabled=eligible_count == 0,
                     key="confirm_comp_credits_free",
                     help=free_help,
@@ -6503,7 +8584,7 @@ if current_auction and not st.session_state.selected_leads.empty:
             with cb_full:
                 if st.button(
                     f"🌐 Full ({eligible_count} lots, ~{est_credits:,} cr)",
-                    use_container_width=True,
+                    width='stretch',
                     disabled=not affordable or eligible_count == 0,
                     key="confirm_comp_credits_full",
                 ):
@@ -6515,7 +8596,7 @@ if current_auction and not st.session_state.selected_leads.empty:
             with cb_skip:
                 if st.button(
                     "🚫 Skip",
-                    use_container_width=True,
+                    width='stretch',
                     key="skip_comp_credits",
                 ):
                     auto_attempts.add('comps_first')
@@ -6540,7 +8621,7 @@ if current_auction and not st.session_state.selected_leads.empty:
                     )
                 if st.button(
                     free_label,
-                    use_container_width=True,
+                    width='stretch',
                     disabled=eligible_count == 0,
                     key="confirm_comp_credits_free",
                     help=(
@@ -6572,7 +8653,7 @@ if current_auction and not st.session_state.selected_leads.empty:
             with cb_full:
                 if st.button(
                     f"✅ Confirm and run comps (~{est_credits:,} credits)",
-                    type="primary", use_container_width=True,
+                    type="primary", width='stretch',
                     disabled=not affordable or eligible_count == 0,
                     key="confirm_comp_credits",
                 ):
@@ -6586,7 +8667,7 @@ if current_auction and not st.session_state.selected_leads.empty:
             with cb_skip:
                 if st.button(
                     "🚫 Skip",
-                    use_container_width=True,
+                    width='stretch',
                     key="skip_comp_credits",
                     help="Bail on the comp run for this auction. The audit "
                          "results render below; you can still hit the "
@@ -6614,7 +8695,7 @@ if current_auction and not st.session_state.selected_leads.empty:
     # The execution block is hoisted below alongside audit/comps so the
     # cooking screen covers all three steps uniformly.
     pipeline_active = (
-        audit_running or comps_running or img_enrich_running or has_more_chunks
+        audit_running or comps_running or has_more_chunks
     )
 
     # No-op stubs for live-update hooks — used by the audit/comps
@@ -6661,7 +8742,6 @@ if current_auction and not st.session_state.selected_leads.empty:
             "display settings before kicking off long runs."
         )
         try:
-            import time as _time
             _audit_last = [0.0]
             def _on_audit_progress(processed, total_items):
                 now = _time.time()
@@ -6670,11 +8750,18 @@ if current_auction and not st.session_state.selected_leads.empty:
                 _audit_last[0] = now
                 _render_live_results()
 
+            tlog("AUDIT", f"starting · {len(leads_df):,} leads to audit")
+            _audit_t0 = _time.time()
             st.session_state.audit_results = _run_ai_audit(
                 leads_df, on_progress=_on_audit_progress,
             )
+            _audit_elapsed = _time.time() - _audit_t0
+            tlog("AUDIT",
+                 f"done in {_audit_elapsed:.1f}s",
+                 f"· {len(st.session_state.audit_results)} verdicts written")
             _save_current_auction_to_cache()
         except Exception as e:
+            tlog("AUDIT", f"FAILED: {type(e).__name__}: {e}")
             st.error(f"Audit failed: {e}")
         finally:
             st.session_state.audit_running = False
@@ -6684,25 +8771,6 @@ if current_auction and not st.session_state.selected_leads.empty:
     # IMAGE-ENRICHMENT execution block — hoisted out of tab_audit so the
     # auto-pipeline can run it between audit and comps for generic-titled
     # lots. The cooking screen covers it via pipeline_active.
-    # ================================================================
-    if img_enrich_running:
-        _keep_screen_awake()
-        try:
-            st.session_state.audit_results = _run_image_enrichment(
-                st.session_state.audit_results,
-                min_bid=float(
-                    st.session_state.get('img_enrich_min_bid', 0.0) or 0.0
-                ),
-            )
-            _save_current_auction_to_cache()
-        except Exception as e:
-            import traceback
-            st.error(f"Image enrichment failed: {e}")
-            with st.expander("Show traceback"):
-                st.code(traceback.format_exc(), language="python")
-        finally:
-            st.session_state.img_enrich_running = False
-        st.rerun()
 
     # ================================================================
     # COMPS-RUNNING execution block — same hoist as audit. Reads filter
@@ -6770,10 +8838,19 @@ if current_auction and not st.session_state.selected_leads.empty:
                 _last[0] = now
                 _render_live_results()
 
+            tlog("COMPS",
+                 f"chunk starting · chunk_size={chunk_size}",
+                 f"· {len(ar):,} audit rows in scope")
+            _comps_t0 = _time.time()
             updated, found, processed, has_more = _run_ebay_comps_chunk(
                 ar, chunk_size=chunk_size,
                 on_lot_priced=_on_lot_priced,
             )
+            _comps_elapsed = _time.time() - _comps_t0
+            tlog("COMPS",
+                 f"chunk done in {_comps_elapsed:.1f}s",
+                 f"· processed {processed} · priced {found}",
+                 f"· has_more={has_more}")
             st.session_state.audit_results = updated
             st.session_state._comps_has_more = has_more
             # Accumulate per-batch stats so the post-pipeline view can show
@@ -6965,7 +9042,7 @@ if current_auction and not st.session_state.selected_leads.empty:
             with st.expander("Show traceback"):
                 st.code(traceback.format_exc(), language="python")
             # Fall back to a plain table so the user can still see something
-            st.dataframe(ar, use_container_width=True)
+            st.dataframe(ar, width='stretch')
         if 'red_flag' in ar.columns and ar['red_flag'].fillna(False).any():
             try:
                 _render_red_flag_editor(ar)
@@ -6995,8 +9072,10 @@ if current_auction and not st.session_state.selected_leads.empty:
 
         if has_audit:
             ar = st.session_state.audit_results
-            good_count = (~ar['red_flag']).sum()
-            flagged_count = ar['red_flag'].sum()
+            # Bool-coerce — see comp-tab fix at line ~9689 for context.
+            _rf = ar['red_flag'].fillna(False).astype(bool)
+            good_count = int((~_rf).sum())
+            flagged_count = int(_rf.sum())
             st.success(f"Audit complete — **{good_count} good+** condition, {flagged_count} red-flagged")
 
         audit_btn_label = "⏳ Running audit…" if audit_running else "🔄 Re-run audit"
@@ -7016,7 +9095,7 @@ if current_auction and not st.session_state.selected_leads.empty:
         if st.button(
             audit_btn_label,
             type="secondary",
-            use_container_width=True,
+            width='stretch',
             disabled=audit_running or comps_running,
             key="run_audit_btn",
             help="Manual override — the audit normally auto-fires when you "
@@ -7033,69 +9112,7 @@ if current_auction and not st.session_state.selected_leads.empty:
         # is visible regardless of which tab the user is on). See the
         # auto-pipeline section above tabs.
 
-        # Step 1.5: Image-based title enrichment (optional; improves Step 2 quality)
-        st.markdown("---")
-        st.markdown("### Step 1.5: Upgrade Titles via eBay Image Match  ·  *optional*")
-
-        if not has_audit:
-            st.info(
-                "Run the AI audit first — image enrichment only runs on **good+** lots "
-                "that pass the condition filter."
-            )
-        else:
-            ar = st.session_state.audit_results
-            # Count what would actually be analyzed so the user knows the scope
-            if 'thumbnail_url' in ar.columns:
-                with_thumbs = int(ar['thumbnail_url'].fillna('').astype(bool).sum())
-            else:
-                with_thumbs = 0
-
-            img_upgraded = 0
-            if 'img_enriched_title' in ar.columns:
-                img_upgraded = int(ar['img_enriched_title'].notna().sum())
-
-            caption_bits = [f"🖼️ {with_thumbs} items have thumbnails"]
-            if img_upgraded:
-                caption_bits.append(f"✨ {img_upgraded} already upgraded")
-            st.caption(" · ".join(caption_bits))
-
-            st.caption(
-                "Downloads each lot's first thumbnail, runs it through eBay's "
-                "`search_by_image`, and rewrites the title with brand / model / "
-                "year pulled from matching listings. **Zero-cost** — reuses your "
-                "Browse API credentials. Skips red-flagged, HARD-to-ship, "
-                "and low-bid lots by default."
-            )
-
-            c1, c2 = st.columns([2, 1])
-            with c2:
-                min_bid = st.number_input(
-                    "Skip lots below bid $",
-                    min_value=0.0, max_value=500.0, step=1.0,
-                    value=float(st.session_state.img_enrich_min_bid),
-                    key="img_enrich_min_bid_input",
-                    help="Junk filter. Don't burn cycles identifying $1 lots.",
-                )
-                st.session_state.img_enrich_min_bid = float(min_bid)
-
-            img_btn_label = ("⏳ Identifying items…" if img_enrich_running
-                             else "🖼️ Upgrade Titles from Images")
-            if c1.button(
-                img_btn_label,
-                type="secondary",
-                use_container_width=True,
-                disabled=audit_running or comps_running or img_enrich_running,
-                key="run_img_enrich_btn",
-            ):
-                st.session_state.img_enrich_running = True
-                st.rerun()
-
-            # The image-enrichment execution block has been hoisted out of
-            # this tab to the top-level analysis view (so the live
-            # st.status panel is visible regardless of which tab the user
-            # is on). See the auto-pipeline section above tabs.
-
-        if has_audit and not (audit_running or img_enrich_running):
+        if has_audit and not (audit_running):
             st.caption("✅ Audit done — comps auto-fire next.")
 
     with tab_comps:
@@ -7109,8 +9126,14 @@ if current_auction and not st.session_state.selected_leads.empty:
             )
         else:
             ar = st.session_state.audit_results
-            good_df = ar[~ar['red_flag']]
-            flagged_df = ar[ar['red_flag']]
+            # Coerce red_flag to bool defensively — cache round-trips
+            # can land it as int 0/1 (pyarrow / CSV roundtrip) or
+            # numpy.int64. `~` on int gives bitwise inverse (-1, -2)
+            # which pandas then tries to interpret as column labels,
+            # crashing with KeyError("None of [Index([-1, -1, ...])]").
+            red_mask = ar['red_flag'].fillna(False).astype(bool)
+            good_df = ar[~red_mask]
+            flagged_df = ar[red_mask]
             st.caption(f"💰 {len(good_df)} good+ items eligible for lookup ({len(flagged_df)} red-flagged skipped)")
 
             # ---- Pre-comps filter panel ----
@@ -7133,11 +9156,15 @@ if current_auction and not st.session_state.selected_leads.empty:
                         help="Skip items flagged as hard to ship/pick up.",
                     )
                     st.checkbox(
-                        "Only image-promoted titles",
-                        key="comps_only_img_promoted",
-                        help="Only comp lots whose title was upgraded in Step 1.5 "
-                             "(highest-confidence product matches). Leave off unless "
-                             "you've already run image enrichment.",
+                        "Easy-ship only (mailbox-size items)",
+                        key="comps_easy_ship_only",
+                        help="Aggressive logistics filter: keep ONLY items "
+                             "that look mailbox-shippable — jewelry, watches, "
+                             "cards, coins, electronics, small toys, books, "
+                             "clothing, shoes, bags, etc. Drops anything "
+                             "ambiguous (NEUTRAL logistics). Big lot-count "
+                             "reduction; some legit small items may slip "
+                             "through if the title is vague.",
                     )
                     st.checkbox(
                         "Run PC on stylized/replica lots (free, no credits)",
@@ -7153,18 +9180,10 @@ if current_auction and not st.session_state.selected_leads.empty:
                              "still tries (and naturally returns nothing for "
                              "lots PC doesn't cover, like handbags/jewelry).",
                     )
-                    st.checkbox(
-                        "Try Mercari (currently broken — 0% hit rate)",
-                        key="comps_use_mercari",
-                        help="Mercari's scraper has returned ZERO comps across "
-                             "7,700+ lookups in production — likely a JSON-shape "
-                             "change on their end or a hard ScrapingBee block. "
-                             "Each Mercari call still costs ~25 ScrapingBee "
-                             "credits. Defaults OFF to save credits. Flip on "
-                             "if you want to retest periodically (their site "
-                             "changes might re-enable the scraper in a future "
-                             "patch).",
-                    )
+                    # Mercari toggle removed — scraper has 0% hit rate
+                    # across 7,700+ production lookups. Setting stays
+                    # in session state defaults (False) for forward-compat
+                    # with cached payloads.
                     st.checkbox(
                         "Fast STR (sample 3 lots per auction)",
                         key="comps_use_auction_str",
@@ -7211,47 +9230,53 @@ if current_auction and not st.session_state.selected_leads.empty:
                 'est_resale' in ar.columns
                 and ar['est_resale'].notna().any()
             )
-            if comps_running:
-                comps_btn_label = "⏳ Running price comps…"
-            else:
-                comps_btn_label = "🔄 Re-run comps from scratch"
-
+            hard_btn_label = (
+                "⏳ Running price comps…" if comps_running
+                else "💥 Hard refresh"
+            )
             if st.button(
-                comps_btn_label,
-                type="secondary",
-                use_container_width=True,
-                disabled=audit_running or comps_running or img_enrich_running,
-                key="run_comps_btn",
-                help="Wipe every existing comp value on this auction and "
-                     "re-comp from scratch with the current filters. Use "
-                     "after upgrading the classifier or fixing a bad rule "
-                     "— stale est_resale rows would otherwise be skipped "
-                     "by the 'pending lots' gate.",
+                hard_btn_label,
+                type="primary",
+                width='stretch',
+                disabled=audit_running or comps_running,
+                key="hard_refresh_comps_btn",
+                help="Wipe every existing comp value and clear the "
+                     "BOLO match cache, then re-run comps fresh. Use "
+                     "after pipeline changes (variance threshold, "
+                     "fashion-jewelry detector, etc.) so stale "
+                     "values don't bleed through.",
             ):
-                # Clear all comp data so the chunked runner sees every
-                # non-red-flagged row as 'pending' again. Without this
-                # the est_resale.isna() & ~red_flag gate inside
-                # _run_ebay_comps_chunk would skip every row that already
-                # has a stale value.
                 ar_current = st.session_state.audit_results
+                # Clear the BOLO match cache so pattern changes
+                # (moissanite, white sapphire, etc.) propagate through
+                # cached negatives.
+                try:
+                    _BOLO_MATCHER.clear_match_cache()
+                except Exception:
+                    pass
+                tlog("HARD-REFRESH", "cleared BOLO match cache")
+
                 if isinstance(ar_current, pd.DataFrame):
+                    # Clear all comp data so the chunked runner sees
+                    # every non-red-flagged row as 'pending' again.
                     for col in (*_COMP_COLUMNS, 'est_roi', 'max_bid'):
                         if col in ar_current.columns:
                             ar_current[col] = None
                     st.session_state.audit_results = ar_current
                     _save_current_auction_to_cache()
-                # Reset the chunk-pipeline tracker so the forced re-run
-                # isn't blocked by the 'already attempted' guard, and the
-                # cached STR map is dropped so we re-sample for the new
-                # comp pass.
+                # Reset chunk-pipeline tracker + sampled STR map so
+                # the forced re-run resamples freshly.
                 st.session_state.pop('_auto_pipeline_attempts', None)
                 st.session_state.pop('_comps_has_more', None)
                 st.session_state.pop('_comps_auction_str_map', None)
-                # Manual re-run = explicit confirmation. Set the credit
-                # gate's flag to True directly instead of forcing the
-                # user to confirm a second time.
+                # Manual re-run = explicit confirmation. Skip credit
+                # re-confirm.
                 st.session_state._comps_credit_confirmed = True
                 st.session_state.comps_running = True
+                st.toast(
+                    "💥 Hard refresh — BOLO cache cleared, comps re-running",
+                    icon="💥",
+                )
                 st.rerun()
 
             # The comps-running execution block has been hoisted out of

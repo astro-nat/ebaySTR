@@ -86,7 +86,19 @@
       "platform_secondary": "Chrono24",
       "comp_query_template": "rolex {item} vintage",
       "ship_class": "small_box",
-      "notes": "IMPORTANT: Rolex accessories alone trade for serious money — don't dismiss an empty Rolex box. Vintage 'coffin' boxes (1960s-70s wooden) are the apex at $400-2000. Modern green-leatherette boxes still pull $100-350 on their own. Bracelets with correct end-link references for the watch model are the highest-margin accessory ($300-1500). Auction listings frequently say 'Submariner box' / 'Daytona papers' WITHOUT 'Rolex' — Pass 2c in the matcher catches these. Counterfeit risk is HIGH on boxes specifically; verify kerning + leather grain + magnetic clasp pull against authenticated examples.",
+      "_disqualifiers": [
+        "tudor england", "tudor era", "tudor history",
+        "tudor monarch", "tudor rose", "tudor dynasty",
+        "tudor king", "tudor queen", "tudor reign",
+        "house of tudor", "the tudors series",
+        "marriage of tudor", "tudor period",
+        "tudor england book", "history of tudor",
+        "fantaslook", "2 piece sets", "piece sets for women",
+        "women casual", "phone case", "tudia case",
+        "tudia", "kobo case", "kindle case", "kobo hd",
+        "kindle hd", "ipad case tudor", "tablet case tudor"
+      ],
+      "notes": "IMPORTANT: Rolex accessories alone trade for serious money — don't dismiss an empty Rolex box. Vintage 'coffin' boxes (1960s-70s wooden) are the apex at $400-2000. Modern green-leatherette boxes still pull $100-350 on their own. Bracelets with correct end-link references for the watch model are the highest-margin accessory ($300-1500). Auction listings frequently say 'Submariner box' / 'Daytona papers' WITHOUT 'Rolex' — Pass 2c in the matcher catches these. Counterfeit risk is HIGH on boxes specifically; verify kerning + leather grain + magnetic clasp pull against authenticated examples. Disqualifiers reject 'Tudor England' history books and 'BB58' women's clothing SKUs — both share the 'tudor' alias coincidentally.",
       "condition_critical": true
     },
     {
@@ -133,7 +145,18 @@
       "platform_secondary": "Chrono24",
       "comp_query_template": "omega {item}",
       "ship_class": "small_box",
-      "notes": "Omega accessories second only to Rolex in collector demand. Speedmaster 'Moonwatch' bracelets (1450/1039 references) are the most-faked accessory in the watch world — verify rivet construction and end-link stamping. Vintage wood-grain Omega boxes (pre-1990) hold premium. Master Chronometer certificate card (post-2015 only) adds 10-15% to a sale.",
+      "_disqualifiers": [
+        "zebco omega",
+        "omega pro 3",
+        "omega pro 2",
+        "z03pro",
+        "z02pro",
+        "spincast reel",
+        "spinning reel",
+        "baitcast reel",
+        "fishing reel"
+      ],
+      "notes": "Omega accessories second only to Rolex in collector demand. Speedmaster 'Moonwatch' bracelets (1450/1039 references) are the most-faked accessory in the watch world — verify rivet construction and end-link stamping. Vintage wood-grain Omega boxes (pre-1990) hold premium. Master Chronometer certificate card (post-2015 only) adds 10-15% to a sale. Disqualifiers reject Zebco Omega Pro fishing reels (different domain — handled by fishing_reels_bolo.json).",
       "condition_critical": true
     },
     {
@@ -213,7 +236,13 @@
       "platform_secondary": "Chrono24",
       "comp_query_template": "audemars piguet {item}",
       "ship_class": "small_box",
-      "notes": "Royal Oak integrated bracelets command extreme premium because they're impossible to retrofit cleanly to anything but the matching reference. Counterfeit risk EXTREME — only buy with verified provenance.",
+      "_disqualifiers": [
+        "roland ap-7", "roland ap7", "jet phaser",
+        "guitar pedal", "guitar effect", "effect pedal",
+        "guitar effects", "phase shifter", "pitch shifter",
+        "fuzz pedal", "stompbox"
+      ],
+      "notes": "Royal Oak integrated bracelets command extreme premium because they're impossible to retrofit cleanly to anything but the matching reference. Counterfeit risk EXTREME — only buy with verified provenance. Disqualifiers reject Roland AP-7 Jet Phaser guitar pedals — same 'AP-7' code, completely different domain.",
       "condition_critical": true
     },
     {
