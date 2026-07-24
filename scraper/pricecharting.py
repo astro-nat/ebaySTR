@@ -135,6 +135,20 @@ _PC_ANTI_TRIGGERS = [
     "keychain", "lanyard", "enamel pin", "pin set",
     # Stationery
     "notebook", "journal", " sticker",
+    # Metal / foil NOVELTY cards — mass-produced "silver plated
+    # Shining Charizard" style replicas ($5-15) whose titles name
+    # real chase cards. PC matches the NAME to the real card's
+    # catalog entry (7/11: "Pokemon Rare Silver Shining Charizard
+    # 1st Ed" → $3,349 Neo Destiny match on a foil replica; photo
+    # showed a solid-metallic novelty card). Blocking PC here routes
+    # them to the eBay sold scrape, where "silver shining charizard"
+    # correctly comps against other novelty solds. NOTE: "silver
+    # tempest" / "gold star" are REAL set names — the patterns below
+    # stay specific to the metal-card phrasings.
+    "silver plated card", "gold plated card", "metal card",
+    "silver card ", "gold card ", "silver shining", "gold shining",
+    "silver charizard", "gold charizard", "silver pikachu",
+    "gold pikachu", "foil replica", "novelty card",
     # ----------------------------------------------------------------
     # Auction-marketing copy for mystery/repack/bulk TCG lots. These
     # are dropshipped boxes of random cards (often counterfeit or

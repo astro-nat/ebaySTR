@@ -11,6 +11,39 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
 
 
+def _nan_safe_str(v) -> str:
+    """str(v) with NaN/None/pd.NA collapsed to ''.
+
+    DataFrame-sourced values are NaN-capable, and NaN is TRUTHY — so
+    `row.get('enriched_title') or row.get('title')` returns NaN
+    instead of falling through, and str(NaN) == 'nan' silently
+    poisons queries/URLs. Confirmed crash path 7/11: cache-merged
+    frames carry NaN enriched_title for uncached lots → NaN reached
+    title.lower() in the PC classifier → AttributeError aborted the
+    whole comps batch.
+    """
+    if v is None:
+        return ''
+    try:
+        if pd.isna(v):
+            return ''
+    except (TypeError, ValueError):
+        pass
+    return str(v)
+
+
+class _CompPriceList(list):
+    """A list of comp prices that also reports relevance-filter stats.
+
+    Behaves exactly like list[float] for existing callers; the lookup
+    flow reads `.relevance_dropped` to annotate price_source when
+    off-topic comps were discarded. Per-call instance → thread-safe
+    under the comp ThreadPoolExecutor (unlike an attribute on the
+    shared EbayPriceLookup instance).
+    """
+    relevance_dropped = 0
+
+
 # Title-specificity markers — when present in a lot title, single-comp
 # catalog matches (PriceCharting / GoCollect, count=1) are usually
 # trustworthy because the title carries enough info to disambiguate the
@@ -43,6 +76,39 @@ def _has_title_specificity(title: str) -> bool:
     return any(p.search(title) for p in _TITLE_SPECIFICITY_MARKERS)
 
 
+# Title markers signaling new-in-box / sealed / never-used condition.
+# These lots sit at the HIGH end of comp distributions — applying the
+# Q1-anchored variance cap drags resale down to used-comp territory,
+# under-pricing NOS items by 50-80%. Hill Country 5/21: Henckels Zwilling
+# 8pc Steak Knife Set NOS scored profit -$5 with $45 capped resale; real
+# NOS Zwilling steak sets clear $80-180.
+_NOS_PATTERNS = (
+    re.compile(r"\bN\.?O\.?S\.?\b", re.IGNORECASE),
+    re.compile(r"\bnew\s+old\s+stock\b", re.IGNORECASE),
+    re.compile(r"\bMIB\b", re.IGNORECASE),
+    re.compile(r"\bNIB\b", re.IGNORECASE),
+    re.compile(r"\bM\.?I\.?S\.?B\.?\b", re.IGNORECASE),  # MISB: mint in sealed box
+    re.compile(r"\bsealed\b", re.IGNORECASE),
+    re.compile(r"\bunopened\b", re.IGNORECASE),
+    re.compile(r"\bnew\s+in\s+(?:box|package|pkg)\b", re.IGNORECASE),
+    re.compile(r"\bfactory[\s-]?sealed\b", re.IGNORECASE),
+    re.compile(r"\bbrand[\s-]?new\b", re.IGNORECASE),
+    re.compile(r"\bdeadstock\b", re.IGNORECASE),
+)
+
+
+def _has_nos_marker(title: str) -> bool:
+    """True when the title signals new-in-box / sealed / NOS condition.
+
+    Used to short-circuit the wide-spread variance cap — NOS lots
+    belong in the high-end of the comp distribution, so anchoring to
+    Q1 mis-prices them by a factor of 2-3×.
+    """
+    if not title:
+        return False
+    return any(p.search(title) for p in _NOS_PATTERNS)
+
+
 class EbayPriceLookup:
     # Class-level scrape stats. Updated by _scrape_ebay_sold_prices on
     # every call. Read by the UI after a comp run finishes so the user
@@ -66,6 +132,10 @@ class EbayPriceLookup:
         # message instead of the generic "scraper blocked" warning.
         'scrapingbee_auth_fail': 0,
         'scrapingbee_quota_fail': 0,
+        # Off-topic comps discarded by the relevance filter (comp
+        # title doesn't contain the query's terms). High counts mean
+        # eBay's keyword match is drifting away from the lot titles.
+        'relevance_dropped': 0,
     }
 
     @classmethod
@@ -82,7 +152,7 @@ class EbayPriceLookup:
 
     def __init__(self, app_id: str, cert_id: str, pricecharting=None,
                  scrapingbee_key: Optional[str] = None,
-                 gocollect=None,
+                 gocollect=None,   # deprecated no-op — account never approved
                  mercari_enabled: bool = False):
         """eBay-only price lookup, optionally augmented with PriceCharting.
 
@@ -112,14 +182,12 @@ class EbayPriceLookup:
         # Mercari integration removed; flag retained as no-op for
         # backward compatibility with existing call sites.
         self.mercari_enabled = False
-        # GoCollect: curated CGC/BGS-graded comic prices. Tried FIRST
-        # for graded comic lots — its grade-specific data outperforms
-        # both PriceCharting (which matches at the series level, not
-        # the grade level) and the eBay-sold scrape (which contaminates
-        # results with modern reprints for rare keys). Pass None to
-        # disable; module-level enabled flag also short-circuits when
-        # the daily quota is exhausted.
-        self.gocollect = gocollect
+        # GoCollect integration removed 7/6 — the API-access
+        # application was rejected, so the lookup tier never had a
+        # working key. The constructor arg is retained as a no-op for
+        # signature compat; graded comics now route through
+        # PriceCharting + the eBay-sold scrape like everything else.
+        self.gocollect = None
         self._token: Optional[str] = None
         # Guard token fetch under parallel workers — avoids redundant OAuth calls
         self._token_lock = threading.Lock()
@@ -294,10 +362,82 @@ class EbayPriceLookup:
         except Exception:
             return None
 
-    def _scrape_ebay_sold_prices(self, query: str, max_prices: int = 30) -> list:
-        """Scrape actual sold prices from eBay's sold listings page.
+    # --- Comp-relevance filtering ------------------------------------
+    # eBay's keyword search is permissive: "Notebook Paper & Cards"
+    # (a real Longview lot) returned 21 trading-card listings in a
+    # tight $136-147 band — consistently priced, consistently the
+    # WRONG product, and invisible to the variance detector. The fix
+    # is to keep the comp TITLES during scraping and require each comp
+    # to actually contain the query's terms.
+    _RELEVANCE_STOPWORDS = frozenset({
+        'the', 'and', 'for', 'with', 'of', 'to', 'in', 'on', 'a', 'an',
+        'by', 'or', 'new', 'used', 'set', 'size',
+    })
 
-        Returns a list of sold prices (float). Empty list if scraping fails.
+    @classmethod
+    def _relevance_tokens(cls, text: str) -> list:
+        """Lowercased alnum tokens (len >= 3) minus stopwords."""
+        return [
+            t for t in re.findall(r'[a-z0-9]{3,}', (text or '').lower())
+            if t not in cls._RELEVANCE_STOPWORDS
+        ]
+
+    # Bulk-listing indicators. When the COMP title screams "big
+    # collection" but the QUERY doesn't, the comp is a quantity
+    # mismatch: a 3-car diecast lot comping against 50-car crate
+    # listings (7/12: "MAISTO EXPLORER, MAJORETTE COBRA, TC NASCAR"
+    # — three ~$10 cars — drew 3 collection comps at $125-150 and
+    # A-graded at $150 resale).
+    _BULK_TITLE_RE = re.compile(
+        r"\b(?:lot\s+of\s+\d+|\d{2,}\s*(?:pcs?|pieces?|cars?|count)\b|"
+        r"collection|bundle|huge\s+lot|large\s+lot|case\s+of|"
+        r"wholesale\s+lot|dealer\s+lot|estate\s+lot)\b",
+        re.IGNORECASE,
+    )
+
+    @classmethod
+    def _quantity_mismatch(cls, query: str, comp_title: str) -> bool:
+        """True when the comp is a bulk listing but the query isn't
+        (or vice versa) — those prices describe a different amount of
+        stuff and poison the median in either direction."""
+        if not comp_title:
+            return False
+        q_bulk = bool(cls._BULK_TITLE_RE.search(query or ''))
+        c_bulk = bool(cls._BULK_TITLE_RE.search(comp_title))
+        return q_bulk != c_bulk
+
+    @classmethod
+    def _comp_is_relevant(cls, query_tokens: list, comp_title: str) -> bool:
+        """True when the comp title contains >= 50% of the query's tokens.
+
+        Prefix matching per token ('lantern' hits 'lanterns'). Comps
+        with no title (price-only legacy markup) are treated as
+        relevant — no information is not negative information.
+        """
+        if not query_tokens:
+            return True
+        if not comp_title:
+            return True
+        comp_tokens = cls._relevance_tokens(comp_title)
+        if not comp_tokens:
+            return True
+        hits = 0
+        for q in query_tokens:
+            if any(c.startswith(q) or q.startswith(c) for c in comp_tokens):
+                hits += 1
+        need = max(1, -(-len(query_tokens) // 2))  # ceil(n/2)
+        return hits >= need
+
+    def _scrape_ebay_sold_listings(self, query: str,
+                                   max_prices: int = 30) -> list:
+        """Scrape (price, title) pairs from eBay's sold-listings page.
+
+        Handles three markup generations observed in production:
+          1. su-item-card (mid-2026)  — per-card title + price
+          2. s-card__price (early 2026) — price spans only (no title)
+          3. s-item__price (legacy)     — price spans only (no title)
+        Titles are None for generations 2-3; the relevance filter
+        passes those through unchecked.
         """
         type(self)._scrape_stats['ebay_sold_attempts'] += 1
         params = {
@@ -323,43 +463,68 @@ class EbayPriceLookup:
                 return []
 
             html = resp.text
+            pairs = []  # (price: float, title: str|None)
 
-            # Extract prices. eBay redesigned their search page in 2026
-            # — the price class became `s-card__price` (with various
-            # su-styled-text modifiers) instead of the older
-            # `s-item__price`. Try both patterns so the parser keeps
-            # working if eBay rolls back or different pages still use
-            # the old markup.
-            prices = []
+            def _parse_price(text):
+                m = re.search(r'\$([\d,]+(?:\.\d{2})?)', text)
+                if not m:
+                    return None
+                try:
+                    p = float(m.group(1).replace(",", ""))
+                except ValueError:
+                    return None
+                return p if 0.99 < p < 50000 else None
 
-            # NEW (2026) markup. Example block:
-            #   <span class="su-styled-text positive bold large-1
-            #                s-card__price">$20.00</span>
-            # 'strikethrough' variants are crossed-out original prices
-            # — the actual sold price is the non-strikethrough sibling.
-            new_blocks = re.findall(
-                r'class="([^"]*s-card__price[^"]*)"[^>]*>([^<]+)</span>',
-                html,
-            )
-            for class_str, content in new_blocks:
-                if 'strikethrough' in class_str:
-                    continue
-                if ' to ' in content.lower():
-                    continue
-                m = re.search(r'\$([\d,]+(?:\.\d{2})?)', content)
-                if m:
-                    try:
-                        p = float(m.group(1).replace(",", ""))
-                        if 0.99 < p < 50000:
-                            prices.append(p)
-                    except ValueError:
-                        pass
-                if len(prices) >= max_prices:
-                    break
+            # GEN 1 (mid-2026): one <div class="su-item-card s-item-card">
+            # per listing; title in a nested span under the
+            # su-item-card__title link, price in su-item-card__price.
+            # eBay pads the top of results with fake "Shop on eBay"
+            # placeholder cards ($20.00) — skipped by title match.
+            cards = re.split(r'<div class="su-item-card s-item-card"', html)
+            if len(cards) > 1:
+                title_re = re.compile(
+                    r'su-item-card__title.*?<span[^>]*>([^<]{5,250})</span>',
+                    re.DOTALL,
+                )
+                price_re = re.compile(
+                    r'su-item-card__price[^>]*>([^<]+)<'
+                )
+                for card in cards[1:]:
+                    chunk = card[:6000]
+                    tm = title_re.search(chunk)
+                    title = tm.group(1).strip() if tm else None
+                    if title and title.lower() == 'shop on ebay':
+                        continue
+                    pm = price_re.search(chunk)
+                    if not pm or ' to ' in pm.group(1).lower():
+                        continue
+                    p = _parse_price(pm.group(1))
+                    if p is not None:
+                        pairs.append((p, title))
+                    if len(pairs) >= max_prices:
+                        break
 
-            # LEGACY (pre-2026) markup. Only run if the new pattern
-            # found nothing — some result pages might lag.
-            if not prices:
+            # GEN 2 (early 2026): s-card__price spans. Price-only —
+            # titles aren't reliably adjacent in this markup.
+            # 'strikethrough' variants are crossed-out original prices.
+            if not pairs:
+                new_blocks = re.findall(
+                    r'class="([^"]*s-card__price[^"]*)"[^>]*>([^<]+)</span>',
+                    html,
+                )
+                for class_str, content in new_blocks:
+                    if 'strikethrough' in class_str:
+                        continue
+                    if ' to ' in content.lower():
+                        continue
+                    p = _parse_price(content)
+                    if p is not None:
+                        pairs.append((p, None))
+                    if len(pairs) >= max_prices:
+                        break
+
+            # GEN 3 (legacy): s-item__price spans, price-only.
+            if not pairs:
                 blocks = re.findall(
                     r'class="s-item__price"[^>]*>(.*?)</span>\s*</div>',
                     html,
@@ -373,27 +538,98 @@ class EbayPriceLookup:
                 for block in blocks:
                     if ' to ' in block.lower():
                         continue
-                    m = re.search(r'\$([\d,]+(?:\.\d{2})?)', block)
-                    if m:
-                        try:
-                            p = float(m.group(1).replace(",", ""))
-                            if 0.99 < p < 50000:
-                                prices.append(p)
-                        except ValueError:
-                            pass
-                    if len(prices) >= max_prices:
+                    p = _parse_price(block)
+                    if p is not None:
+                        pairs.append((p, None))
+                    if len(pairs) >= max_prices:
                         break
 
-            if prices:
+            if pairs:
                 type(self)._scrape_stats['ebay_sold_success'] += 1
-            return prices
+            return pairs
         except Exception:
             return []
+
+    def _scrape_ebay_sold_prices(self, query: str, max_prices: int = 30) -> list:
+        """Scrape sold prices for `query`, relevance-filtered.
+
+        Returns a _CompPriceList (a list subclass) of floats whose
+        `.relevance_dropped` attribute reports how many comps were
+        discarded for not containing the query's terms. Callers that
+        treat it as a plain list are unaffected.
+        """
+        pairs = self._scrape_ebay_sold_listings(query, max_prices=max_prices)
+        q_tokens = self._relevance_tokens(query)
+        kept = _CompPriceList()
+        dropped = 0
+        for price, title in pairs:
+            if (self._comp_is_relevant(q_tokens, title)
+                    and not self._quantity_mismatch(query, title)):
+                kept.append(price)
+            else:
+                dropped += 1
+        kept.relevance_dropped = dropped
+        if dropped:
+            type(self)._scrape_stats['relevance_dropped'] = (
+                type(self)._scrape_stats.get('relevance_dropped', 0) + dropped
+            )
+        return kept
 
     # NOTE: Mercari sold-listings integration was removed. The previous
     # _scrape_mercari_sold_prices and _extract_mercari_prices helpers
     # have been deleted; the comp pipeline is now eBay-only (with
     # PriceCharting / GoCollect tiers preserved).
+
+    def fetch_amazon_price(self, url: str) -> Optional[float]:
+        """Fetch the live Amazon buy-box price for a product URL.
+
+        Liquidation lots carry 'Retailer Product URL:
+        https://www.amazon.com/dp/ASIN' in their descriptions — the
+        live price beats the auctioneer's stated retail (which can be
+        stale or inflated). Routed through ScrapingBee (~10-25
+        credits); the existing credit counters track the spend.
+
+        Returns the price as float, or None on any failure (blocked,
+        unavailable listing, unparseable page).
+        """
+        if not url or 'amazon.' not in url:
+            return None
+        type(self)._scrape_stats['amazon_price_attempts'] = (
+            type(self)._scrape_stats.get('amazon_price_attempts', 0) + 1
+        )
+        try:
+            resp = self._proxied_get(url, params={}, timeout=30)
+            if resp is None or resp.status_code != 200:
+                return None
+            html = resp.text
+            # NOTE: do NOT bail on 'Currently unavailable' appearing
+            # anywhere — Amazon ships it in i18n string tables
+            # ("currentlyUnavailableMessage") on every page. A truly
+            # unavailable listing simply has no buy-box priceAmount.
+            # Buy-box price patterns, most-specific first:
+            #   1. JSON blob: "priceAmount":241.00 — appears exactly
+            #      once per page (verified on a live A2Z lot's ASIN);
+            #      page-wide a-offscreen spans are carousel noise.
+            #   2. a-offscreen span INSIDE the corePrice region only.
+            m = re.search(r'"priceAmount"\s*:\s*([\d.]+)', html)
+            if not m:
+                _core = html.find('corePrice_feature_div')
+                if _core >= 0:
+                    m = re.search(
+                        r'class="a-offscreen">\$([\d,]+(?:\.\d{2})?)<',
+                        html[_core:_core + 4000],
+                    )
+            if not m:
+                return None
+            price = float(m.group(1).replace(',', ''))
+            if 1.0 <= price <= 50000.0:
+                type(self)._scrape_stats['amazon_price_success'] = (
+                    type(self)._scrape_stats.get('amazon_price_success', 0) + 1
+                )
+                return price
+            return None
+        except Exception:
+            return None
 
     def _price_stats(self, prices: list) -> Optional[dict]:
         """Compute median, low (Q1), high (Q3) from a list of prices."""
@@ -427,8 +663,8 @@ class EbayPriceLookup:
         7-word query commonly returns zero, while the same first 3 words
         return hundreds. We stop as soon as we clear the ≥3 sold-comp bar.
 
-        ``pc_only=True`` restricts the lookup to GoCollect + PriceCharting
-        (curated catalogs only) and skips the eBay sold-listings scrape
+        ``pc_only=True`` restricts the lookup to PriceCharting
+        (curated catalog only) and skips the eBay sold-listings scrape
         entirely. Used for stylized/replica lots where eBay scraped
         comps would return authentic-brand contamination, but PC's
         catalog-keyed matching is safe — PC simply returns None for
@@ -449,25 +685,12 @@ class EbayPriceLookup:
             }
             or None if no data available.
         """
-        # Tier 1: GoCollect for professionally-graded comics. Their
-        # data is keyed by issue + specific grade so a 'Phantom Lady
-        # 17 CGC 4.0' lookup returns the actual graded fair-market
-        # value, not modern-reprint contamination from eBay or
-        # series-level averages from PriceCharting. Fires only when
-        # the title carries an explicit grading callout (CGC/BGS/SGC/
-        # CBCS/PSA + grade number).
-        if self.gocollect is not None and self.gocollect.enabled:
-            try:
-                gc_result = self.gocollect.lookup(title)
-                if gc_result is not None:
-                    return gc_result
-            except Exception:
-                pass  # Best-effort — never let GoCollect break the run
-
-        # Tier 2: PriceCharting for games / TCG / comics. Aggregated
+        # Tier 1: PriceCharting for games / TCG / comics. Aggregated
         # sold data, condition-normalized, canonical product ID.
-        # Strong on Pokemon/MTG/video games; weaker than GoCollect on
-        # graded comics specifically, hence the order.
+        # Strong on Pokemon/MTG/video games. (A GoCollect tier for
+        # graded comics used to sit above this — removed 7/6 when the
+        # API application was rejected; graded comics now comp via PC
+        # + the eBay-sold scrape.)
         if self.pricecharting is not None and self.pricecharting.enabled:
             try:
                 pc_result = self.pricecharting.lookup(title)
@@ -494,9 +717,13 @@ class EbayPriceLookup:
 
         for idx, query in enumerate(variants):
             ebay_prices = []
+            rel_dropped = 0
             try:
                 time.sleep(0.3)
                 ebay_prices = self._scrape_ebay_sold_prices(query)
+                # Capture relevance stats BEFORE outlier filtering
+                # (which returns a plain list, losing the attribute).
+                rel_dropped = getattr(ebay_prices, 'relevance_dropped', 0)
                 ebay_prices = self._filter_outliers(ebay_prices)
             except Exception:
                 ebay_prices = []
@@ -513,6 +740,12 @@ class EbayPriceLookup:
                     # were for the specific product vs a generic keyword.
                     if idx > 0:
                         source = f"{source} [short query]"
+                    # Surface how many off-topic comps the relevance
+                    # filter discarded — a high count means eBay's
+                    # keyword match drifted and the survivors deserve
+                    # a skeptical eye.
+                    if rel_dropped:
+                        source = f"{source} [{rel_dropped} off-topic dropped]"
                     return {
                         **stats,
                         "count": len(combined),
@@ -526,18 +759,23 @@ class EbayPriceLookup:
             # Remember the first variant that produced ANY comps so we can
             # surface at least a rough number if none hit the ≥3 bar.
             if combined and best_partial is None:
-                best_partial = (list(combined), list(ebay_prices), query)
+                best_partial = (
+                    list(combined), list(ebay_prices), query, rel_dropped,
+                )
 
         # All sold-comp variants failed to clear ≥3. Use the best partial
         # if we have one (1-2 comps) before falling back to active listings.
         if best_partial is not None:
-            combined, ebay_prices, matched_q = best_partial
+            combined, ebay_prices, matched_q, rel_dropped = best_partial
             stats = self._price_stats(combined)
             if stats:
+                source = "sold (thin comps)"
+                if rel_dropped:
+                    source = f"{source} [{rel_dropped} off-topic dropped]"
                 return {
                     **stats,
                     "count": len(combined),
-                    "source": "sold (thin comps)",
+                    "source": source,
                     "ebay_count": len(ebay_prices),
                     # Mercari integration removed; zero-out for app.py compat.
                     "mercari_count": 0,
@@ -815,7 +1053,8 @@ class EbayPriceLookup:
             str_results = []
             source_counts: dict = {}
             for _, row in sample.iterrows():
-                title = row.get(title_col) or row.get('title', '')
+                title = (_nan_safe_str(row.get(title_col))
+                 or _nan_safe_str(row.get('title')))
                 res, src = self.lookup_str(title)
                 if res is not None:
                     str_results.append(res)
@@ -881,7 +1120,8 @@ class EbayPriceLookup:
         # Pre-extract titles + auction names so worker threads don't touch
         # pandas (which isn't thread-safe for concurrent .at assignments).
         titles = [
-            (row.get('enriched_title') or row.get('title', '') or '')
+            (_nan_safe_str(row.get('enriched_title'))
+                 or _nan_safe_str(row.get('title')))
             for _, row in df.iterrows()
         ]
         auctions = (
@@ -1087,18 +1327,29 @@ class EbayPriceLookup:
                     # eBay value $7-14, our prior 2.5×-low cap of $59
                     # was still 5× too high.
                     spread = high / low
-                    if spread > 10.0:
-                        cap_mult = 1.0
-                    elif spread > 5.0:
-                        cap_mult = 1.5
+                    # NOS / sealed / MIB exception: these lots belong
+                    # in the upper half of the comp distribution, not
+                    # anchored to Q1. Use the unmodified median (no
+                    # cap) since the wide-spread comes from mixing
+                    # used + new comps and the user's lot IS new.
+                    # Hill Country 5/21 Henckels Zwilling 8pc NOS:
+                    # capped to $45 → profit -$5; uncapped median ~$120
+                    # → profit ~$60.
+                    if _has_nos_marker(title):
+                        source = f"{source} ⚠ wide-spread (NOS floor)"
                     else:
-                        cap_mult = 2.5
-                    cap = round(cap_mult * low, 2)
-                    if median is not None and median > cap:
-                        median = cap
-                        source = f"{source} ⚠ wide-spread (capped)"
-                    else:
-                        source = f"{source} ⚠ wide-spread"
+                        if spread > 10.0:
+                            cap_mult = 1.0
+                        elif spread > 5.0:
+                            cap_mult = 1.5
+                        else:
+                            cap_mult = 2.5
+                        cap = round(cap_mult * low, 2)
+                        if median is not None and median > cap:
+                            median = cap
+                            source = f"{source} ⚠ wide-spread (capped)"
+                        else:
+                            source = f"{source} ⚠ wide-spread"
 
                 # ---- Single-comp catalog match ceiling ----
                 # PriceCharting / GoCollect catalog matches return count=1

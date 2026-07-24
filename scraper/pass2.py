@@ -3,6 +3,7 @@ import os
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Optional
 
 import pandas as pd
 
@@ -191,6 +192,26 @@ _OUTPUT_SCHEMA = {
     "additionalProperties": False,
 }
 
+# Gemini-flavored twin of _OUTPUT_SCHEMA: no `additionalProperties`
+# (Gemini rejects it) and an explicit `propertyOrdering`. Used only when
+# the photo tier is routed to Gemini via `vision_provider`.
+_GEMINI_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "verdict": {"type": "string", "enum": _RISK_LABELS},
+        "confidence": {
+            "type": "number",
+            "description": "Confidence 0-100 in the verdict.",
+        },
+        "reason": {
+            "type": "string",
+            "description": "Short justification under 80 characters.",
+        },
+    },
+    "required": ["verdict", "confidence", "reason"],
+    "propertyOrdering": ["verdict", "confidence", "reason"],
+}
+
 
 _SYSTEM_PROMPT = """You evaluate auction lot descriptions and photos and classify each item's condition. You will be given either a text description or an image of a single auction lot, and must return a JSON object with the verdict, a confidence score, and a brief reason.
 
@@ -243,7 +264,7 @@ class Phase2Scraper:
     # the text classifier nothing to chew on.
     _MIN_DESC_FOR_TEXT_API = 80
 
-    def __init__(self, model_name: str = None):
+    def __init__(self, model_name: str = None, vision_provider: str = None):
         cfg = load_config()
         anth = cfg.get("anthropic", {}) or {}
         self.api_key = (
@@ -255,6 +276,22 @@ class Phase2Scraper:
             model_name or anth.get("model") or self.DEFAULT_MODEL
         )
         self._client = None  # lazy-init on first API call
+        # Gemini config for the PHOTO tier only (the text tier always
+        # stays on Claude — it's cheap and tuned). `vision_provider`:
+        #   'claude'    → Claude photo classify (None if no Anthropic key)
+        #   'gemini'    → Gemini photo classify (None if no Google key)
+        #   'auto'/None → free first: Gemini if keyed, else Claude
+        gem = cfg.get("gemini", {}) or {}
+        self.gemini_api_key = (
+            gem.get("api_key")
+            or os.environ.get("GEMINI_API_KEY")
+            or os.environ.get("GOOGLE_API_KEY")
+            or None
+        )
+        self.gemini_model = gem.get("model") or "gemini-flash-lite-latest"
+        self.vision_provider = (
+            vision_provider or gem.get("provider") or "auto"
+        ).lower()
 
     @property
     def client(self):
@@ -262,8 +299,39 @@ class Phase2Scraper:
         if self._client is None and self.api_key:
             try:
                 import anthropic
-                self._client = anthropic.Anthropic(api_key=self.api_key)
+                import httpx
+                from scraper._ssl_compat import make_ssl_context
+                # Explicit truststore-backed SSL context. The SDK's
+                # default httpx client trusts only certifi, which
+                # Norton/corp-MITM re-signed certs are not in — every
+                # API call died with APIConnectionError on this box
+                # (7/6 Hayworth run: 160/160 image_api_failed).
+                # `truststore.inject_into_ssl()` at app startup is NOT
+                # sufficient for httpx (see scraper/_ssl_compat.py
+                # docstring) — pass the context explicitly, same as
+                # pass1 does for HiBid calls.
+                self._client = anthropic.Anthropic(
+                    api_key=self.api_key,
+                    http_client=httpx.Client(verify=make_ssl_context()),
+                )
             except ImportError:
+                # A missing SDK used to fail SILENTLY here — every lot
+                # got labeled `no_api_key` even though the key was fine,
+                # and the 7/6 Hayworth Creek auction ran a full keyless
+                # audit (150 Unknown verdicts, comps spent on unvetted
+                # lots) before anyone noticed. Shout to the terminal
+                # once per process so the root cause is visible.
+                import sys as _sys
+                if not getattr(Phase2Scraper, '_sdk_warned', False):
+                    Phase2Scraper._sdk_warned = True
+                    print(
+                        "[AUDIT] FATAL: `anthropic` package is not "
+                        "installed in this venv — API key is configured "
+                        "but unusable. Every lot will be marked "
+                        "audit_source=no_api_key. Fix with: "
+                        "pip install anthropic",
+                        file=_sys.stderr, flush=True,
+                    )
                 return None
         return self._client
 
@@ -352,18 +420,52 @@ class Phase2Scraper:
 
         return enriched
 
-    def _classify_by_text_api(self, clean_desc: str):
-        """Tier 2: send the cleaned description to Claude.
-
-        Returns the parsed result dict on success, or None if the API
-        call failed (network error, rate limit, parse error, no client).
-        Caller falls through to the image tier or marks as Unknown on None.
-        """
-        if not self.client:
+    def _classify_text_gemini(self, snippet: str):
+        """Gemini text-condition classify. Same output shape as the Claude
+        text tier; returns None on any failure."""
+        from scraper.vision_provider import gemini_text_json
+        data = gemini_text_json(
+            api_key=self.gemini_api_key,
+            model=self.gemini_model,
+            system_prompt=_SYSTEM_PROMPT,
+            user_text=(
+                "Classify the condition of this auction lot.\n\n"
+                f"DESCRIPTION:\n{snippet}"
+            ),
+            response_schema=_GEMINI_OUTPUT_SCHEMA,
+        )
+        if not data or "verdict" not in data:
             return None
+        verdict = data["verdict"]
+        try:
+            conf = float(data.get("confidence", 70))
+        except (TypeError, ValueError):
+            conf = 70.0
+        return {
+            "verdict": verdict,
+            "confidence": conf,
+            "red_flag": verdict in _RED_FLAG_LABELS,
+            "source": "text_api",
+            "reason": data.get("reason", ""),
+        }
+
+    def _classify_by_text_api(self, clean_desc: str):
+        """Tier 2: send the cleaned description to the text model.
+
+        Routes to Gemini or Claude per `vision_provider` (the selector
+        governs the whole audit AI, not just photos, so 'Gemini' means
+        zero Claude spend). Returns the parsed result dict on success, or
+        None if the call failed (network error, rate limit, parse error,
+        no client). Caller falls through to the image tier or marks as
+        Unknown on None.
+        """
         # Trim to a generous limit — input cost is dwarfed by per-call
         # latency, so giving the model more context is cheap.
         snippet = clean_desc[:2500]
+        if self._image_provider() == "gemini":
+            return self._classify_text_gemini(snippet)
+        if not self.client:
+            return None
         try:
             response = self.client.messages.create(
                 model=self.model_name,
@@ -398,14 +500,121 @@ class Phase2Scraper:
         except Exception:
             return None
 
-    def _classify_by_image_api(self, thumbnail_url: str):
-        """Tier 3: send the thumbnail URL to Claude vision.
+    def _download_thumbnail(self, url: str):
+        """Download a HiBid CDN image → (bytes, media_type) or (None, None).
 
-        Anthropic fetches the URL server-side — no client-side download.
-        Returns None on failure so the caller can mark the lot as Unknown.
+        HiBid's CDN requires a Referer header — that's exactly why the
+        old URL-source approach died: Anthropic's server-side fetcher
+        sends no Referer, HiBid blocks it, and the API returns 400
+        "Unable to download the file" for EVERY image call (7/6
+        Hayworth: 160/160 image_api_failed). Same download pattern as
+        vision_enrich._download_image, plus the truststore SSL context
+        for Norton/corp TLS inspection.
         """
-        if not self.client or not thumbnail_url:
+        if not url:
+            return None, None
+        try:
+            import httpx
+            from scraper._ssl_compat import make_ssl_context
+            if getattr(self, '_img_client', None) is None:
+                # Benign race under the audit thread pool — double
+                # creation just wastes one client object.
+                self._img_client = httpx.Client(
+                    verify=make_ssl_context(), timeout=20,
+                    follow_redirects=True,
+                )
+            r = self._img_client.get(url, headers={
+                "Referer": "https://hibid.com/",
+                "User-Agent": "Mozilla/5.0",
+            })
+            if r.status_code == 200 and len(r.content) > 1000:
+                mt = (r.headers.get('content-type') or 'image/jpeg')
+                mt = mt.split(';')[0].strip()
+                if not mt.startswith('image/'):
+                    mt = 'image/jpeg'
+                return r.content, mt
+        except Exception:
+            pass
+        return None, None
+
+    def _image_provider(self) -> Optional[str]:
+        """Which engine runs the audit AI, per `vision_provider`.
+
+        Honors the user's CHOICE authoritatively — an explicit 'gemini'
+        returns 'gemini' even if the key is missing, so the tiers no-op to
+        None (keyword-only) rather than silently cross-falling-back to the
+        paid engine and spending credits the user meant to avoid. 'auto'
+        picks whichever engine has a key, free tier first. Returns
+        'gemini', 'claude', or None (no engine available at all).
+        """
+        p = self.vision_provider
+        if p == "gemini":
+            return "gemini"
+        if p == "claude":
+            return "claude"
+        # auto: free first, then paid, else nothing
+        if self.gemini_api_key:
+            return "gemini"
+        if self.api_key:
+            return "claude"
+        return None
+
+    def _classify_image_gemini(self, img_bytes: bytes, media_type: str):
+        """Gemini photo-condition classify. Same output shape as the
+        Claude image tier; returns None on any failure."""
+        from scraper.vision_provider import gemini_vision_json
+        data = gemini_vision_json(
+            api_key=self.gemini_api_key,
+            model=self.gemini_model,
+            system_prompt=_SYSTEM_PROMPT,
+            image_bytes=img_bytes,
+            media_type=media_type,
+            user_text=(
+                "Classify the condition of this auction lot based on the "
+                "photo. The description was too short to use, so this is "
+                "your only signal."
+            ),
+            response_schema=_GEMINI_OUTPUT_SCHEMA,
+        )
+        if not data or "verdict" not in data:
             return None
+        verdict = data["verdict"]
+        try:
+            conf = float(data.get("confidence", 60))
+        except (TypeError, ValueError):
+            conf = 60.0
+        return {
+            "verdict": verdict,
+            "confidence": conf,
+            "red_flag": verdict in _RED_FLAG_LABELS,
+            "source": "image_api",
+            "reason": data.get("reason", ""),
+        }
+
+    def _classify_by_image_api(self, thumbnail_url: str):
+        """Tier 3: download the thumbnail, send base64 to the vision model.
+
+        Routes to Gemini or Claude per `vision_provider`. Returns None on
+        failure so the caller can mark the lot as Unknown. A failed
+        download RAISES so the batch loop's first-error logger surfaces it
+        (a silent None here hid the HiBid-Referer failure for an entire
+        production run).
+        """
+        _provider = self._image_provider()
+        if not _provider or not thumbnail_url:
+            return None
+        img_bytes, media_type = self._download_thumbnail(thumbnail_url)
+        if img_bytes is None:
+            raise RuntimeError(
+                f"thumbnail download failed (HiBid CDN): {thumbnail_url[:90]}"
+            )
+        if _provider == "gemini":
+            return self._classify_image_gemini(img_bytes, media_type)
+        # --- Claude path (default) ---
+        if not self.client:
+            return None
+        import base64 as _b64
+        b64_data = _b64.standard_b64encode(img_bytes).decode("ascii")
         try:
             response = self.client.messages.create(
                 model=self.model_name,
@@ -417,8 +626,9 @@ class Phase2Scraper:
                         {
                             "type": "image",
                             "source": {
-                                "type": "url",
-                                "url": thumbnail_url,
+                                "type": "base64",
+                                "media_type": media_type,
+                                "data": b64_data,
                             },
                         },
                         {
@@ -669,11 +879,29 @@ class Phase2Scraper:
                     futures[fut] = ('image', i)
 
                 last_live = time.time()
+                _first_api_error_logged = False
                 for fut in as_completed(futures):
                     kind, i = futures[fut]
                     try:
                         result = fut.result()
-                    except Exception:
+                    except Exception as _api_exc:
+                        # Log the FIRST failure per run with full detail.
+                        # These used to vanish entirely — the 7/6 Hayworth
+                        # run failed 160/160 API calls (SSL) and the only
+                        # visible symptom was `image_api_failed` in a CSV
+                        # export. One loud line makes systemic failures
+                        # (bad key, SSL, dead model name) diagnosable
+                        # without spamming 160 tracebacks.
+                        if not _first_api_error_logged:
+                            _first_api_error_logged = True
+                            import sys as _sys
+                            print(
+                                f"[AUDIT] {kind}_api call failed "
+                                f"({type(_api_exc).__name__}: {_api_exc}) "
+                                f"— further failures this run logged "
+                                f"only in audit_source counts.",
+                                file=_sys.stderr, flush=True,
+                            )
                         result = None
                     if result is None:
                         # API failed — don't punish the lot, mark Unknown
