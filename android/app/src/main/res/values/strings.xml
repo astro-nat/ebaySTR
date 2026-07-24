@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Resale Analyzer</string>
+    <string name="subtitle">Instant eBay flip analysis</string>
+    <string name="scan_item">Scan Item</string>
+    <string name="criteria_hint">Criteria: ≥80% STR · ≥500% ROI · Buyer pays shipping</string>
+    <string name="capture">Take Photo</string>
+    <string name="retake">Retake</string>
+    <string name="next">Next →</string>
+    <string name="cost_hint">Purchase cost ($)</string>
+    <string name="analyzing">Analyzing item…</string>
+    <string name="analyzing_detail">Identifying item · Checking eBay sold data · Calculating ROI</string>
+    <string name="str_label">Sell-Through Rate</string>
+    <string name="avg_sale_price">Avg eBay Sale Price</string>
+    <string name="price_range">Price range</string>
+    <string name="your_cost">Your Cost</string>
+    <string name="ebay_fee">eBay Fees (13.25% + $0.30)</string>
+    <string name="net_proceeds">Net Proceeds</string>
+    <string name="roi_label">ROI after fees</string>
+    <string name="scan_another">Scan Another Item</string>
+    <string name="go_back">Go Back</string>
+</resources>

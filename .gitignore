@@ -30,3 +30,11 @@ exports/
 .cache/
 # Python virtual env (never commit)
 .venv/
+
+# Android
+android/.gradle/
+android/local.properties
+android/app/build/
+android/build/
+*.apk
+*.aab
