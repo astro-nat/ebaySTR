@@ -26,10 +26,28 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
+from scraper._ssl_compat import make_ssl_context
+
 
 _SESSION_PATH = Path(".cache") / "hibid_session.json"
 _LOCK = threading.Lock()
 _GRAPHQL_URL = "https://hibid.com/graphql"
+
+# Shared truststore-backed client. Raw httpx.post() trusts only certifi,
+# which dies under Norton / corp TLS inspection (SSL: CERTIFICATE_VERIFY_
+# FAILED) — the same MITM issue that killed the Anthropic/HiBid calls until
+# each module passed an explicit context. Build once, reuse.
+_SSL_CLIENT: Optional[httpx.Client] = None
+_CLIENT_LOCK = threading.Lock()
+
+
+def _client() -> httpx.Client:
+    global _SSL_CLIENT
+    if _SSL_CLIENT is None:
+        with _CLIENT_LOCK:
+            if _SSL_CLIENT is None:
+                _SSL_CLIENT = httpx.Client(verify=make_ssl_context(), timeout=30.0)
+    return _SSL_CLIENT
 
 # Standard headers every authenticated HiBid GraphQL request uses.
 # Mirrors the Chrome HAR captures so we look like a real browser.
@@ -148,7 +166,9 @@ def _post_graphql(
         "query": query,
     }
     try:
-        resp = httpx.post(_GRAPHQL_URL, headers=headers, json=payload, timeout=timeout)
+        resp = _client().post(
+            _GRAPHQL_URL, headers=headers, json=payload, timeout=timeout,
+        )
     except httpx.HTTPError as e:
         raise RuntimeError(f"HiBid GraphQL request failed: {e}") from e
 
@@ -470,6 +490,223 @@ def fetch_all_current_bids(
     }
 
 
+# ---------------------------------------------------------------------
+# Watchlist — the lots the user has starred on HiBid (hibid.com/account/
+# watchlist). Same GraphQL shape as CurrentBids (both return BuyerEvent
+# lot lists), but the `watchList` root field also carries description /
+# pictures / estimate per lot, so ONE call yields everything the comps +
+# audit + vision pipeline needs — no per-lot fetches.
+# ---------------------------------------------------------------------
+_WATCHLIST_QUERY = """
+query WatchListSearch(
+  $pageNumber: Int!,
+  $pageLength: Int!,
+  $isArchived: Boolean = false,
+  $hideClosedLots: Boolean = false,
+  $auctionId: Int = null,
+  $buyerLotStatusGroup: BuyerLotStatusGroup = null,
+  $sortOrder: BuyerEventItemSortOrder = null,
+  $monthRange: AltBidPastBidsRange = null,
+  $sortDirection: SortDirection = DESC,
+  $groupByAuction: Boolean = true,
+  $auctionSortDirection: SortDirection = ASC
+) {
+  watchList(
+    input: {
+      isArchived: $isArchived,
+      groupByAuction: $groupByAuction,
+      auctionSortDirection: $auctionSortDirection,
+      hideClosedLots: $hideClosedLots,
+      auctionId: $auctionId,
+      buyerLotStatusGroup: $buyerLotStatusGroup,
+      sortOrder: $sortOrder,
+      monthRange: $monthRange
+    }
+    pageNumber: $pageNumber
+    pageLength: $pageLength
+    sortDirection: $sortDirection
+  ) {
+    auctions {
+      id
+      eventName
+      lotCount
+      eventDateEnd
+      eventCity
+      eventState
+      buyerPremium
+      buyerPremiumRate
+      shippingAndPickupInfo
+    }
+    pagedResults {
+      totalCount
+      filteredCount
+      pageNumber
+      pageLength
+      results {
+        id
+        lotNumber
+        lead
+        description
+        pictureCount
+        estimate
+        bidAmount
+        auction {
+          id
+          eventName
+          eventDateEnd
+          buyerPremium
+          buyerPremiumRate
+          shippingAndPickupInfo
+        }
+        pictures {
+          thumbnailLocation
+          hdThumbnailLocation
+          fullSizeLocation
+        }
+        lotState {
+          highBid
+          buyerHighBid
+          buyerBidStatus
+          minBid
+          status
+          timeLeft
+          isClosed
+          isArchived
+        }
+      }
+    }
+  }
+}
+"""
+
+
+def _parse_watchlist_lot(r: Dict[str, Any]) -> Dict[str, Any]:
+    """Shape one raw watchList result into a lead-ready dict."""
+    ls = r.get("lotState") or {}
+    a = r.get("auction") or {}
+    pics = r.get("pictures") or []
+    first = pics[0] if pics else {}
+    # HiBid's watchlist exposes buyerPremium as FREE TEXT ("Buyers premium
+    # is 20%") with buyerPremiumRate=1 as a "not filled" flag — so the
+    # numeric _normalize_buyer_premium wrongly returns 100%. Use pass1's
+    # text parser, which returns the MULTIPLIER form (1.20) the leads-df
+    # grading pipeline expects, first-percent-wins for cash/card tiers.
+    from .pass1 import parse_buyer_premium_pct
+    bp_mult = parse_buyer_premium_pct(
+        a.get("buyerPremium"), a.get("buyerPremiumRate"),
+    )
+    high = ls.get("highBid") or 0.0
+    my = ls.get("buyerHighBid") or 0.0
+    return {
+        "lot_id": str(r.get("id") or ""),
+        "lot_number": r.get("lotNumber"),
+        "title": r.get("lead") or "",
+        "description": r.get("description") or "",
+        "auction_id": a.get("id"),
+        "auction": a.get("eventName") or "",
+        "closing_date": a.get("eventDateEnd") or "",
+        "auction_cond_ship": a.get("shippingAndPickupInfo") or "",
+        "auction_buyer_premium_pct": bp_mult,
+        "current_bid": high,
+        "my_bid": my,
+        "next_bid": ls.get("minBid"),
+        "bid_status": ls.get("buyerBidStatus") or "",
+        "time_left": ls.get("timeLeft") or "",
+        "is_closed": bool(ls.get("isClosed")),
+        "auctioneer_est": r.get("estimate") or "",
+        "image_count": r.get("pictureCount") or 0,
+        "thumbnail_url": first.get("thumbnailLocation") or "",
+        "hd_thumbnail_url": first.get("hdThumbnailLocation") or "",
+        "fullsize_url": first.get("fullSizeLocation") or "",
+        "lot_link": f"https://hibid.com/lot/{r.get('id')}" if r.get("id") else "",
+    }
+
+
+def fetch_watchlist(
+    page_length: int = 100,
+    page_number: int = 1,
+    only_open: bool = False,
+    token: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Fetch one page of the user's HiBid watchlist (starred lots).
+
+    Returns ``{auctions, lots, total_count, filtered_count, page_number,
+    page_length}`` where each lot is a lead-ready dict (see
+    ``_parse_watchlist_lot``): title, description, current_bid, next_bid,
+    thumbnail_url, auction, buyer premium, etc.
+    """
+    variables = {
+        "isArchived": False,
+        "groupByAuction": True,
+        "auctionSortDirection": "ASC",
+        "hideClosedLots": bool(only_open),
+        "auctionId": 0,
+        "buyerLotStatusGroup": "ALL",
+        "sortOrder": "SALES_ORDER",
+        "monthRange": "THREE_MONTHS",
+        "sortDirection": "ASC",
+        "pageNumber": int(page_number),
+        "pageLength": int(min(max(page_length, 1), 100)),
+    }
+    data = _post_graphql(
+        "WatchListSearch", _WATCHLIST_QUERY, variables, token=token,
+    )
+    wl = data.get("watchList") or {}
+    auctions = wl.get("auctions") or []
+    paged = wl.get("pagedResults") or {}
+    raw = paged.get("results") or []
+    lots: List[Dict[str, Any]] = []
+    for r in raw:
+        if only_open and (r.get("lotState") or {}).get("isClosed"):
+            continue
+        lots.append(_parse_watchlist_lot(r))
+    return {
+        "auctions": auctions,
+        "lots": lots,
+        "total_count": paged.get("totalCount") or 0,
+        "filtered_count": paged.get("filteredCount") or 0,
+        "page_number": paged.get("pageNumber") or 1,
+        "page_length": paged.get("pageLength") or 0,
+    }
+
+
+def fetch_all_watchlist(
+    only_open: bool = False,
+    token: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Paginate through the entire watchlist. Same shape as
+    ``fetch_watchlist`` but ``lots`` holds every page."""
+    page = 1
+    all_lots: List[Dict[str, Any]] = []
+    auctions: List[Dict[str, Any]] = []
+    seen: set = set()
+    total = 0
+    filtered = 0
+    while True:
+        result = fetch_watchlist(
+            page_length=100, page_number=page,
+            only_open=only_open, token=token,
+        )
+        all_lots.extend(result["lots"])
+        for a in result.get("auctions") or []:
+            if a.get("id") not in seen:
+                auctions.append(a)
+                seen.add(a.get("id"))
+        total = result["total_count"]
+        filtered = result["filtered_count"]
+        if len(result["lots"]) < 100 or len(all_lots) >= (filtered or total):
+            break
+        page += 1
+        if page > 50:  # safety cap — 5000 watched lots is an edge case
+            break
+    return {
+        "auctions": auctions,
+        "lots": all_lots,
+        "total_count": total,
+        "filtered_count": filtered,
+    }
+
+
 def _normalize_buyer_premium(
     buyer_premium: Any,
     buyer_premium_rate: Any,
@@ -518,6 +755,7 @@ def _safe_float(x: Any) -> Optional[float]:
 __all__ = [
     "set_auth_token", "get_auth_token", "clear_auth_token", "session_metadata",
     "fetch_account_info", "fetch_current_bids", "fetch_all_current_bids",
+    "fetch_watchlist", "fetch_all_watchlist",
     "auto_record_won_purchases",
 ]
 

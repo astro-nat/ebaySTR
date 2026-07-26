@@ -799,6 +799,10 @@ _STATE_DEFAULTS = {
     # through the BOLO matcher + melt detector.
     'sleeper_hunt_enabled':      True,
     'sleeper_max_lots':          300,   # vision-enrichment budget cap
+    # Suspected-BOLO: catch theme+form suspects the text matcher can't see
+    # ("Disney backpack" → maybe Loungefly) and vision-confirm the brand
+    # from the photo before surfacing. Shares the sleeper_max_lots cap.
+    'suspected_bolo_enabled':    True,
 
     # --- Multi-auction KEYWORD scan flow ---
     # When set to a non-empty string, the post-fetch handler filters
@@ -1704,6 +1708,20 @@ def _render_live_hibid_view():
             secs = int(cache_age_s % 60)
             st.caption(f"Last sync: {mins}m {secs}s ago")
 
+    # ---- Watchlist comps action ----------------------------------
+    # Pull every open lot the user starred on hibid.com/account/watchlist
+    # and run the full audit → eBay comps → buy-grade pipeline on them.
+    if st.button(
+        "🔖 Run comps on my HiBid watchlist",
+        key="hibid_watchlist_comps",
+        help="Fetch every open lot you've starred on HiBid and run the "
+             "full audit + eBay comps + buy-grade pipeline — tells you "
+             "which of your watched lots are actually worth bidding on.",
+        width='stretch',
+        type='primary',
+    ):
+        _load_watchlist_for_comps(_hibid_account)
+
     # ---- Stop-signal table ---------------------------------------
     if cache:
         _render_active_bids_with_stop_signal(cache)
@@ -1981,6 +1999,106 @@ def _render_active_bids_with_stop_signal(cache):
                     st.metric("Est resale", f"${r['est_resale']:,.0f}")
                 else:
                     st.metric("Est resale", "—")
+
+
+def _watchlist_to_leads_df(lots: list) -> pd.DataFrame:
+    """Shape HiBid watchlist lots into a pipeline-ready leads DataFrame.
+
+    Mirrors the column shape pass1 produces so the standard analyze
+    pipeline (BOLO → audit → comps → grading) runs unchanged. Fields
+    HiBid's watchlist doesn't expose (bid_count, auctioneer estimate
+    range, HiBid logistics tag) are left blank/NaN — the pipeline fills
+    or defaults them.
+    """
+    if not lots:
+        return pd.DataFrame()
+    rows = []
+    for l in lots:
+        rows.append({
+            'lot_id': l.get('lot_id'),
+            'auction': l.get('auction') or 'HiBid watchlist',
+            'auction_id': l.get('auction_id'),
+            'closing_date': l.get('closing_date') or '',
+            'source': 'watchlist',
+            'title': l.get('title') or '',
+            'lot_link': l.get('lot_link') or '',
+            'category': '',
+            'current_bid': l.get('current_bid') or 0.0,
+            'next_bid': l.get('next_bid'),
+            'my_bid': l.get('my_bid'),
+            'bid_count': None,
+            'est_cost': l.get('current_bid') or 0.0,
+            'auctioneer_est_low': None,
+            'auctioneer_est_high': None,
+            'status': 'CLOSED' if l.get('is_closed') else 'OPEN',
+            'time_left': l.get('time_left') or '',
+            'description': l.get('description') or '',
+            'logistics_ease': '',
+            'thumbnail_url': l.get('thumbnail_url') or '',
+            'hd_thumbnail_url': l.get('hd_thumbnail_url') or '',
+            'fullsize_url': l.get('fullsize_url') or '',
+            'image_count': l.get('image_count') or 0,
+            'auction_buyer_premium_pct': l.get('auction_buyer_premium_pct'),
+            'auction_cond_ship': l.get('auction_cond_ship') or '',
+        })
+    return pd.DataFrame(rows)
+
+
+def _load_watchlist_for_comps(_hibid_account) -> None:
+    """Fetch the HiBid watchlist, shape it, and hand it to the analyze
+    pipeline as a synthetic '🔖 Watchlist' auction. Reruns on success.
+
+    Self-contained (no phase-1 fetch needed) — the watchlist API returns
+    title/description/photo/premium per lot in one authenticated call.
+    """
+    with st.status("🔖 Fetching your HiBid watchlist…", expanded=True) as _wl_status:
+        try:
+            payload = _hibid_account.fetch_all_watchlist(only_open=True)
+        except Exception as e:
+            _wl_status.update(label="🔖 Watchlist fetch failed.", state="error")
+            msg = str(e)
+            if "401" in msg or "expired" in msg.lower() or "invalid" in msg.lower():
+                st.error(
+                    "⚠️ Your HiBid token is invalid or expired. Open the "
+                    "**🔐 HiBid token** panel below and paste a fresh one."
+                )
+            else:
+                st.error(f"⚠️ Couldn't fetch your watchlist: {msg[:200]}")
+            return
+        lots = payload.get('lots') or []
+        st.write(
+            f"**{len(lots)}** open watched lots across "
+            f"{len(payload.get('auctions') or [])} auctions."
+        )
+        df = _watchlist_to_leads_df(lots)
+        if df.empty:
+            _wl_status.update(label="🔖 Watchlist is empty.", state="complete")
+            st.warning("No open lots on your HiBid watchlist right now.")
+            return
+        # BOLO-match now so proven-lane tagging + grading are ready.
+        df = _compute_bolo_columns(df)
+        _wl_status.update(
+            label=f"🔖 Watchlist loaded — {len(df)} lots → running comps",
+            state="complete", expanded=False,
+        )
+    label = f"🔖 My HiBid watchlist — {len(df)} lots"
+    st.session_state.selected_leads = df.reset_index(drop=True)
+    st.session_state.current_auction = label
+    _save_last_scan_view(label, st.session_state.selected_leads)
+    _clear_fetched_frame()
+    st.session_state.phase1_leads = pd.DataFrame()
+    st.session_state.audit_results = {}
+    # Reset auto-pipeline / scope flags (same as the scan branches) so the
+    # standard audit → credit gate → comps flow fires fresh.
+    for _k in ('_comps_has_more', '_comps_auction_str_map', '_comps_stats',
+               '_comps_credit_confirmed', '_audit_scope',
+               '_audit_scope_total_lots', '_auto_pipeline_attempts',
+               '_audit_confirmed'):
+        st.session_state.pop(_k, None)
+    st.session_state._comps_free_only_mode = False
+    st.session_state.audit_running = False
+    st.session_state.comps_running = False
+    st.rerun()
 
 
 def _render_hibid_setup_panel(_hibid_account, *, expand_token: bool):
@@ -2497,6 +2615,142 @@ def _score_sleeper_candidates(df: pd.DataFrame) -> pd.DataFrame:
     cand['_sleeper_score'] = score
     cand = cand[cand['_sleeper_score'] >= 2]
     return cand.sort_values('_sleeper_score', ascending=False)
+
+
+# ---------------------------------------------------------------------
+# SUSPECTED-LANE detection — the "it COULD be a Loungefly" gate.
+#
+# The text BOLO matcher needs the brand word ("Loungefly") in the title.
+# But auctions constantly list high-value easy-ship items by THEME + FORM
+# without the brand: "Disney mini backpack", "sunglasses w/ case", "wireless
+# earbuds". Each of these is a *suspect* for a proven money-lane but not a
+# confirmed hit — a Disney backpack might be a $90 Loungefly or a $8 generic.
+#
+# So we flag suspects on cheap text signals (theme + form regex, free —
+# already in the fetch), then hand ONLY the suspects to Gemini vision to
+# confirm the brand from the photo (look for the Loungefly tag, the Ray-Ban
+# etch, the AirPods stem). Confirmed → re-matched into a real BOLO hit;
+# unconfirmed → dropped. This is the "catch potential BOLOs, then confirm
+# with the photo" flow.
+#
+# Each lane: a `form` regex (required — the item type) and an optional
+# `theme` regex (the franchise/context). A lot is a suspect when form hits
+# AND (theme is None OR theme hits) AND it isn't already a text BOLO match.
+# `brands`/`tell` are passed to the vision prompt so it knows what to look
+# for. Extend this list to add lanes — the pipeline is generic.
+# ---------------------------------------------------------------------
+_SUSPECTED_LANES = [
+    {
+        "lane": "pop_culture_bag",
+        "label": "Loungefly / collectible fandom bag",
+        "theme": re.compile(
+            r"\b(?:disney|pixar|star\s*wars|marvel|dc\s*comics|"
+            r"harry\s*potter|pokemon|sanrio|hello\s*kitty|stitch|"
+            r"mickey|minnie|nightmare\s*before\s*christmas|nbc|"
+            r"studio\s*ghibli|ghibli|sailor\s*moon|naruto|"
+            r"dragon\s*ball|kingdom\s*hearts|coraline|hocus\s*pocus|"
+            r"villains|princess|winnie\s*the\s*pooh|little\s*mermaid|"
+            r"my\s*hero|demon\s*slayer|bluey|encanto|"
+            r"nintendo|zelda|kirby|sega|sonic)\b",
+            re.IGNORECASE),
+        "form": re.compile(
+            r"\b(?:mini\s*backpack|backpack|wallet|crossbody|cross\s*body|"
+            r"purse|tote\s*bag|cardholder|card\s*holder|wristlet|"
+            r"coin\s*purse|fanny\s*pack|belt\s*bag|cosmetic\s*bag|"
+            r"pencil\s*case|lunch\s*box|lunchbox)\b",
+            re.IGNORECASE),
+        "brands": "Loungefly (most valuable), Bioworld, Danielle Nicole, "
+                  "Cakeworthy, Stoney Clover",
+        "tell": "a woven Loungefly logo tag sewn on the front, Loungefly-"
+                "branded zipper pulls, or a Loungefly interior lining/label. "
+                "A plain licensed backpack with no such brand tag is generic "
+                "and NOT a hit.",
+    },
+    {
+        "lane": "designer_eyewear_case",
+        "label": "Designer sunglasses / eyewear case",
+        "theme": None,
+        "form": re.compile(
+            r"\b(?:sunglass(?:es)?|eyewear|eyeglass(?:es)?|shades|"
+            r"eye\s*glasses)\b",
+            re.IGNORECASE),
+        "brands": "Ray-Ban, Oakley, Gucci, Prada, Persol, Tom Ford, "
+                  "Maui Jim, Chrome Hearts, Cartier, Versace, Dior, "
+                  "Oliver Peoples",
+        "tell": "a designer logo/etch on the lens or temple arm, or a "
+                "branded case (Ray-Ban, Oakley, Gucci, etc.). Drugstore / "
+                "gas-station / unbranded readers are NOT hits.",
+    },
+    {
+        "lane": "small_electronics",
+        "label": "Premium small electronics (easy-ship)",
+        "theme": None,
+        "form": re.compile(
+            r"\b(?:earbuds|ear\s*buds|earphones|headphones|"
+            r"portable\s*speaker|bluetooth\s*speaker|smart\s*watch|"
+            r"smartwatch|fitness\s*tracker|action\s*cam(?:era)?|"
+            r"drone|handheld\s*(?:game|console)|e-?reader|"
+            r"graphing\s*calculator|dash\s*cam)\b",
+            re.IGNORECASE),
+        "brands": "Apple (AirPods/Watch), Bose, Sony, JBL, Sonos, Beats, "
+                  "Garmin, Fitbit, GoPro, DJI, Nintendo, Kindle, "
+                  "Texas Instruments (TI-84)",
+        "tell": "a visible brand logo/model on the device or box (Apple, "
+                "Bose, Sony, GoPro, DJI, Nintendo, etc.). Unbranded / "
+                "no-name gadgets are NOT hits.",
+    },
+]
+
+# Combined pre-filter: cheap single test to skip lots that can't match any
+# lane's form before running per-lane regex.
+_ANY_SUSPECTED_FORM_RE = re.compile(
+    "|".join(f"(?:{lane['form'].pattern})" for lane in _SUSPECTED_LANES),
+    re.IGNORECASE,
+)
+
+
+def _score_suspected_lane_candidates(df: pd.DataFrame) -> pd.DataFrame:
+    """Return BOLO-unmatched rows that LOOK like a proven lane by theme+form.
+
+    Adds `_suspected_lane`, `_suspected_label`, `_suspected_brands`,
+    `_suspected_tell` columns so the vision pass knows what to confirm.
+    Cheap text-only gate (regex over title+description); no API cost here —
+    the (small) cost is the vision confirmation the caller runs on these.
+    """
+    if df is None or df.empty or 'title' not in df.columns:
+        return pd.DataFrame()
+    hay = (
+        df['title'].fillna('').astype(str)
+        + ' '
+        + (df['description'].fillna('').astype(str)
+           if 'description' in df.columns else '')
+    )
+    # Cheap combined pre-filter first.
+    pre = hay.str.contains(_ANY_SUSPECTED_FORM_RE, na=False)
+    sub = df[pre]
+    if sub.empty:
+        return pd.DataFrame()
+    hay_sub = hay[pre]
+    lane_col, label_col, brands_col, tell_col = {}, {}, {}, {}
+    for idx, h in hay_sub.items():
+        for lane in _SUSPECTED_LANES:
+            if not lane['form'].search(h):
+                continue
+            if lane['theme'] is not None and not lane['theme'].search(h):
+                continue
+            lane_col[idx] = lane['lane']
+            label_col[idx] = lane['label']
+            brands_col[idx] = lane['brands']
+            tell_col[idx] = lane['tell']
+            break  # first lane wins
+    if not lane_col:
+        return pd.DataFrame()
+    out = df.loc[list(lane_col)].copy()
+    out['_suspected_lane'] = pd.Series(lane_col)
+    out['_suspected_label'] = pd.Series(label_col)
+    out['_suspected_brands'] = pd.Series(brands_col)
+    out['_suspected_tell'] = pd.Series(tell_col)
+    return out
 
 
 # Canadian-province codes — auctions located in Canada are flagged
@@ -8999,6 +9253,152 @@ if (
                      f"hunt failed (non-fatal): "
                      f"{type(_sl_exc).__name__}: {_sl_exc}")
 
+        # ================================================================
+        # SUSPECTED-BOLO pass — theme+form suspects the TEXT matcher can't
+        # see ("Disney backpack" → maybe Loungefly; "sunglasses" → maybe
+        # designer), each vision-CONFIRMED by its brand tell before it
+        # counts. Only confirmed brands that re-match the BOLO list surface.
+        # Runs alongside the container sleeper hunt; hits merge the same
+        # way. Non-fatal by design.
+        # ================================================================
+        _susp_hits = pd.DataFrame()
+        _susp_n = 0
+        if (st.session_state.get('suspected_bolo_enabled', True)
+                and 'bolo_brand' in _scan_df.columns):
+            try:
+                with st.status(
+                    "🔎 Suspected-BOLO — vision-confirming brand suspects…",
+                    expanded=True,
+                ) as _su_status:
+                    _unm2 = _scan_df[_scan_df['bolo_brand'].isna()]
+                    _sc = _score_suspected_lane_candidates(_unm2)
+                    _cap2 = int(
+                        st.session_state.get('sleeper_max_lots', 300) or 300
+                    )
+                    _susp_n = len(_sc)
+                    _sc = _sc.head(_cap2)
+                    st.write(
+                        f"**{_susp_n}** theme+form suspects (Loungefly bags, "
+                        f"designer eyewear, premium small electronics); "
+                        f"vision-confirming the top **{len(_sc)}**."
+                    )
+                    if not _sc.empty and 'thumbnail_url' in _sc.columns:
+                        from scraper.vision_enrich import EbayImageEnricher
+                        from scraper.config_loader import load_config
+                        _cfg2 = load_config()
+                        _enr2 = EbayImageEnricher(
+                            _cfg2['ebay']['app_id'], _cfg2['ebay']['cert_id'],
+                            anthropic_api_key=(
+                                (_cfg2.get('anthropic') or {}).get('api_key')
+                            ),
+                            gemini_api_key=(
+                                (_cfg2.get('gemini') or {}).get('api_key')
+                            ),
+                            vision_provider=str(
+                                st.session_state.get('vision_provider', 'claude')
+                            ).lower(),
+                        )
+                        from concurrent.futures import (
+                            ThreadPoolExecutor as _SuPool,
+                            as_completed as _su_done,
+                        )
+                        _su_prog = st.progress(0.0, text="Confirming brands…")
+
+                        def _do_confirm(idx):
+                            try:
+                                r = _enr2.confirm_lane(
+                                    str(_sc.at[idx, 'thumbnail_url'] or ''),
+                                    str(_sc.at[idx, '_suspected_label'] or ''),
+                                    str(_sc.at[idx, '_suspected_brands'] or ''),
+                                    str(_sc.at[idx, '_suspected_tell'] or ''),
+                                )
+                                return idx, r
+                            except Exception:
+                                return idx, None
+
+                        _confirmed = {}   # idx -> confirmed brand
+                        _nd = 0
+                        _su_t0 = _time.time()
+                        with _SuPool(max_workers=8) as _ex2:
+                            _fs = [
+                                _ex2.submit(_do_confirm, idx)
+                                for idx in _sc.index
+                            ]
+                            for _f in _su_done(_fs):
+                                idx, r = _f.result()
+                                _nd += 1
+                                if r and r.get('confident') and r.get('brand'):
+                                    _confirmed[idx] = r['brand']
+                                _su_prog.progress(
+                                    _nd / len(_fs),
+                                    text=(
+                                        f"Confirming brands… {_nd}/{len(_fs)}"
+                                        f" · {len(_confirmed)} confirmed"
+                                    ),
+                                )
+                        _su_prog.empty()
+                        tlog("SUSPECT",
+                             f"confirmed {len(_confirmed)}/{len(_sc)}",
+                             f"in {_time.time() - _su_t0:.1f}s")
+                        if _confirmed:
+                            # Prepend the vision-confirmed brand to the title
+                            # and re-run the standard BOLO pass so the hit
+                            # inherits pricing / auth / disqualifiers.
+                            _rows = _sc.loc[list(_confirmed)].copy()
+                            _orig2 = _rows['title'].copy()
+                            _rows['title'] = pd.Series(
+                                {i: f"{_confirmed[i]} {_orig2[i]}"
+                                 for i in _confirmed}
+                            )
+                            _rows = _compute_bolo_columns(_rows)
+                            _hm = (
+                                _rows['bolo_brand'].notna()
+                                if 'bolo_brand' in _rows.columns
+                                else pd.Series(False, index=_rows.index)
+                            )
+                            _susp_hits = _rows[_hm].copy()
+                            if not _susp_hits.empty:
+                                _susp_hits['enriched_title'] = _susp_hits['title']
+                                _susp_hits['title'] = _orig2.loc[_susp_hits.index]
+                                _susp_hits['sleeper_hit'] = True
+                                _susp_hits['suspected_confirmed'] = True
+                                _prev2 = " · ".join(
+                                    f"*{str(_susp_hits.at[i, 'title'])[:35]}* → "
+                                    f"{_confirmed[i]}"
+                                    for i in list(_susp_hits.index)[:4]
+                                )
+                                st.write(
+                                    f"🔎 **{len(_susp_hits)}** confirmed brand "
+                                    f"hit(s) from photos: {_prev2}"
+                                )
+                    _su_status.update(
+                        label=(
+                            f"🔎 Suspected-BOLO: {len(_susp_hits)} confirmed "
+                            f"from {min(_susp_n, _cap2)} photo-reads"
+                        ),
+                        state="complete",
+                        expanded=bool(len(_susp_hits)),
+                    )
+            except Exception as _su_exc:
+                tlog("SUSPECT",
+                     f"hunt failed (non-fatal): "
+                     f"{type(_su_exc).__name__}: {_su_exc}")
+        # Fold suspected-BOLO hits into the sleeper-hit merge below.
+        if not _susp_hits.empty:
+            _susp_hits = _susp_hits.drop(
+                columns=['_suspected_lane', '_suspected_label',
+                         '_suspected_brands', '_suspected_tell'],
+                errors='ignore',
+            )
+            _sleeper_hits = (
+                pd.concat([_sleeper_hits, _susp_hits], ignore_index=False)
+                if not _sleeper_hits.empty else _susp_hits
+            )
+            # A lot could theoretically qualify for both hunts — keep one.
+            _sleeper_hits = _sleeper_hits[
+                ~_sleeper_hits.index.duplicated(keep='first')
+            ]
+
         if not _sleeper_hits.empty:
             _sleeper_hits = _sleeper_hits.drop(
                 columns=['_sleeper_score'], errors='ignore'
@@ -9032,6 +9432,7 @@ if (
             'auctions': n_auctions,
             'match_auctions': n_match_auctions,
             'sleepers': int(len(_sleeper_hits)),
+            'suspected': int(len(_susp_hits)),
         }
         # Load directly without going through _load_auction_for_analysis
         # (which would try to merge cached data keyed by a single
@@ -9646,10 +10047,19 @@ if current_auction and not st.session_state.selected_leads.empty:
                 f"({scan_summary['match_auctions']} of "
                 f"{scan_summary['auctions']} auctions had matches)"
             )
-            if scan_summary.get('sleepers'):
+            # `sleepers` folds in the suspected-BOLO confirmations; split
+            # them so each hunt's contribution is visible.
+            _susp_ct = int(scan_summary.get('suspected') or 0)
+            _cont_ct = int(scan_summary.get('sleepers') or 0) - _susp_ct
+            if _cont_ct > 0:
                 caption_bits.append(
-                    f"🕵️ {scan_summary['sleepers']} sleeper hit(s) — "
+                    f"🕵️ {_cont_ct} sleeper hit(s) — "
                     f"container lots identified from photos"
+                )
+            if _susp_ct > 0:
+                caption_bits.append(
+                    f"🔎 {_susp_ct} suspected-BOLO confirmed — brand read "
+                    f"from the photo (Loungefly, designer eyewear, etc.)"
                 )
 
         # Keyword scan summary — parallel to the BOLO scan banner above.

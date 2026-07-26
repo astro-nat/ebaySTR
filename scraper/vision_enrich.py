@@ -104,6 +104,47 @@ _GEMINI_OUTPUT_SCHEMA = {
     "propertyOrdering": ["title", "confident", "reason"],
 }
 
+# --- Targeted brand-confirmation tier (suspected-lane flow) ---
+# Used when the text gate flagged a lot as a SUSPECT for a proven lane
+# (e.g. "Disney backpack" → maybe a Loungefly). We don't want a generic
+# identify — we want a yes/no on the specific valuable brand, read from
+# the photo's tell (the Loungefly tag, the Ray-Ban etch). Empty brand ==
+# generic/unbranded == not a hit.
+_CONFIRM_SYSTEM_PROMPT = """You authenticate auction photos for a reseller. You are shown ONE photo of an item that MIGHT be a valuable brand-name piece. Identify the actual brand ONLY from what is VISIBLE in the photo — a logo, a sewn tag, an etched/printed mark, a model name, or an unmistakable branded design.
+
+Rules:
+- Do NOT infer a brand from the item type or the licensed character alone. A Disney backpack is only a Loungefly if you can see a Loungefly tag — otherwise it is a generic licensed bag.
+- If the specific brand mark is not visible, or you are unsure, the item is generic: return brand "".
+- "confident" is true ONLY when you can actually see the brand's mark in the photo.
+
+Return JSON: brand (the exact brand name, or "" if generic/unbranded/uncertain), confident (boolean), reason (under 80 chars — name what you saw)."""
+
+_CONFIRM_OUTPUT_SCHEMA = {  # Claude flavor (additionalProperties)
+    "type": "object",
+    "properties": {
+        "brand": {"type": "string",
+                  "description": "Exact brand name, or empty string if generic."},
+        "confident": {"type": "boolean",
+                      "description": "true only if the brand mark is visible."},
+        "reason": {"type": "string", "description": "Under 80 chars."},
+    },
+    "required": ["brand", "confident", "reason"],
+    "additionalProperties": False,
+}
+
+_CONFIRM_GEMINI_SCHEMA = {  # Gemini flavor (propertyOrdering, no additionalProperties)
+    "type": "object",
+    "properties": {
+        "brand": {"type": "string",
+                  "description": "Exact brand name, or empty string if generic."},
+        "confident": {"type": "boolean",
+                      "description": "true only if the brand mark is visible."},
+        "reason": {"type": "string", "description": "Under 80 chars."},
+    },
+    "required": ["brand", "confident", "reason"],
+    "propertyOrdering": ["brand", "confident", "reason"],
+}
+
 _CLAUDE_SYSTEM_PROMPT = """You identify products from auction-listing photos so they can be searched on eBay's marketplace. Given an image, produce the most specific eBay-searchable title you can.
 
 Title format:
@@ -496,6 +537,79 @@ class EbayImageEnricher:
             "title": title,
             "confidence": 0.85 if data.get("confident") else 0.3,
             "reason": (data.get("reason") or "")[:120],
+        }
+
+    def _claude_confirm(self, image_bytes: bytes, media_type: str,
+                        user_text: str) -> Optional[Dict]:
+        """Claude twin of the Gemini confirm call. Returns raw {brand,
+        confident, reason} dict or None."""
+        if not self.anthropic_client or not image_bytes:
+            return None
+        try:
+            b64 = base64.standard_b64encode(image_bytes).decode("ascii")
+            response = self.anthropic_client.messages.create(
+                model=self.anthropic_model,
+                max_tokens=200,
+                system=_CONFIRM_SYSTEM_PROMPT,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "source": {
+                            "type": "base64", "media_type": media_type,
+                            "data": b64}},
+                        {"type": "text", "text": user_text},
+                    ],
+                }],
+                output_config={"format": {
+                    "type": "json_schema", "schema": _CONFIRM_OUTPUT_SCHEMA}},
+            )
+            text = next(
+                (b.text for b in response.content if b.type == "text"), "")
+            return json.loads(text) if text else None
+        except Exception:
+            return None
+
+    def confirm_lane(self, thumbnail_url: str, label: str,
+                     brands: str, tell: str) -> Optional[Dict]:
+        """Confirm the brand of a suspected-lane lot from its photo.
+
+        Targeted yes/no on a specific valuable brand (vs the generic
+        identify in enrich_one). Returns:
+          {brand: str, confident: bool, reason: str, source: 'gemini'|'claude'}
+        with brand='' meaning generic/unbranded/uncertain, or None on any
+        failure (no provider, download fail, parse error). eBay's image
+        tier isn't used here — brand tells (a sewn Loungefly tag) don't
+        survive catalog matching; we go straight to the vision model.
+        """
+        provider = self._resolve_provider()
+        if provider is None:
+            return None
+        img = self._download_image(thumbnail_url)
+        if not img:
+            return None
+        media_type = self._detect_media_type(thumbnail_url)
+        user_text = (
+            f"This auction photo may be a {label}. Valuable brands to look "
+            f"for: {brands}. Only name a brand if you can actually SEE its "
+            f"mark in the photo — the tell is: {tell} Return JSON per the "
+            f"schema; brand \"\" if generic/unbranded/uncertain."
+        )
+        if provider == "gemini":
+            from scraper.vision_provider import gemini_vision_json
+            data = gemini_vision_json(
+                api_key=self.gemini_api_key, model=self.gemini_model,
+                system_prompt=_CONFIRM_SYSTEM_PROMPT, image_bytes=img,
+                media_type=media_type, user_text=user_text,
+                response_schema=_CONFIRM_GEMINI_SCHEMA)
+        else:  # claude
+            data = self._claude_confirm(img, media_type, user_text)
+        if not data:
+            return None
+        return {
+            "brand": (data.get("brand") or "").strip(),
+            "confident": bool(data.get("confident")),
+            "reason": (data.get("reason") or "")[:140],
+            "source": provider,
         }
 
     # ------------------------------------------------------------ public API
