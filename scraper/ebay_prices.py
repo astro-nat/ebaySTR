@@ -136,6 +136,12 @@ class EbayPriceLookup:
         # title doesn't contain the query's terms). High counts mean
         # eBay's keyword match is drifting away from the lot titles.
         'relevance_dropped': 0,
+        # SoldComps API (paid eBay sold-data provider) — the primary
+        # sold-comp source now that eBay captcha-blocks the direct scrape.
+        'soldcomps_calls': 0,
+        'soldcomps_hits': 0,        # calls that returned >= 1 sold item
+        'soldcomps_auth_fail': 0,   # 401/403 — bad key
+        'soldcomps_quota_fail': 0,  # 429 — monthly request cap hit
     }
 
     @classmethod
@@ -152,6 +158,7 @@ class EbayPriceLookup:
 
     def __init__(self, app_id: str, cert_id: str, pricecharting=None,
                  scrapingbee_key: Optional[str] = None,
+                 soldcomps_key: Optional[str] = None,
                  gocollect=None,   # deprecated no-op — account never approved
                  mercari_enabled: bool = False):
         """eBay-only price lookup, optionally augmented with PriceCharting.
@@ -179,6 +186,13 @@ class EbayPriceLookup:
         self.cert_id = cert_id
         self.pricecharting = pricecharting
         self.scrapingbee_key = scrapingbee_key
+        # SoldComps API key — primary sold-comp source (real eBay sold
+        # data via https://sold-comps.com). eBay now captcha-blocks the
+        # direct sold-listings scrape, so this is how we get true sold
+        # prices; the old scrape is kept only as a fallback. Per-instance
+        # cache so repeated identical queries in one run cost one request.
+        self.soldcomps_key = soldcomps_key or None
+        self._soldcomps_cache: dict = {}
         # Mercari integration removed; flag retained as no-op for
         # backward compatibility with existing call sites.
         self.mercari_enabled = False
@@ -454,12 +468,35 @@ class EbayPriceLookup:
             )
             if resp is None:
                 return []
-            # 403 / very-short body = anti-bot block, not "no results".
-            # Tracking this separately so the UI can warn the user.
-            if resp.status_code in (403, 429) or len(resp.text) < 500:
+            _txt = resp.text or ''
+            _low = _txt.lower()
+            # Does the page actually contain listing markup? (any markup
+            # generation). If not, it's not a results page.
+            _has_listings = (
+                'su-item-card' in _txt
+                or 's-item__price' in _txt
+                or 's-card__price' in _txt
+            )
+            # 403 / very-short body = classic anti-bot block. NEW (7/2026):
+            # eBay now serves a FULL-SIZE captcha / "verify yourself" /
+            # sign-in interstitial (HTTP 200, 40KB+) on the sold-listings
+            # endpoint — it sails past the tiny-body check and looks like
+            # "0 results", silently poisoning every comp with the active-
+            # listing fallback. Detect the challenge page explicitly:
+            # listing markup ABSENT and a challenge marker PRESENT.
+            _is_challenge = not _has_listings and (
+                'pardon our interruption' in _low
+                or 'enter the characters you see' in _low
+                or 'please verify yourself' in _low
+                or 'checking your browser' in _low
+                or ('captcha' in _low and 'signin' in _low)
+            )
+            if (resp.status_code in (403, 429)
+                    or len(_txt) < 500
+                    or _is_challenge):
                 type(self)._scrape_stats['ebay_sold_blocked'] += 1
                 return []
-            if resp.status_code != 200 or len(resp.text) < 1000:
+            if resp.status_code != 200 or len(_txt) < 1000:
                 return []
 
             html = resp.text
@@ -550,15 +587,81 @@ class EbayPriceLookup:
         except Exception:
             return []
 
-    def _scrape_ebay_sold_prices(self, query: str, max_prices: int = 30) -> list:
-        """Scrape sold prices for `query`, relevance-filtered.
+    def _fetch_soldcomps_pairs(self, query: str, count: int = 120):
+        """Fetch (price, title) sold pairs from the SoldComps API.
 
-        Returns a _CompPriceList (a list subclass) of floats whose
-        `.relevance_dropped` attribute reports how many comps were
-        discarded for not containing the query's terms. Callers that
-        treat it as a plain list are unaffected.
+        The paid drop-in replacement for the eBay sold-listings scrape
+        (which eBay now captcha-blocks). Returns a list of (float, str)
+        pairs, or None on any failure (no key, HTTP error, quota, parse).
+        Cached per query on the instance so repeated identical lookups in
+        one run cost a single API request.
         """
-        pairs = self._scrape_ebay_sold_listings(query, max_prices=max_prices)
+        if not self.soldcomps_key or not query:
+            return None
+        if query in self._soldcomps_cache:
+            return self._soldcomps_cache[query]
+        pairs = None
+        try:
+            # Explicit truststore SSL context — raw httpx.get trusts only
+            # certifi, which dies under Norton/corp TLS inspection. Build
+            # the client once per instance (same pattern as pass2/vision).
+            if getattr(self, '_sc_client', None) is None:
+                from scraper._ssl_compat import make_ssl_context
+                self._sc_client = httpx.Client(
+                    verify=make_ssl_context(), timeout=40,
+                )
+            type(self)._scrape_stats['soldcomps_calls'] += 1
+            resp = self._sc_client.get(
+                "https://api.sold-comps.com/v1/scrape",
+                headers={"Authorization": f"Bearer {self.soldcomps_key}"},
+                params={
+                    "keyword": query,
+                    "count": min(max(int(count), 1), 240),
+                    "daysToScrape": 90,
+                },
+            )
+            if resp.status_code == 200:
+                items = (resp.json() or {}).get("items") or []
+                out = []
+                for it in items:
+                    raw = it.get("soldPrice")
+                    try:
+                        p = float(str(raw).replace(",", "").replace("$", "").strip())
+                    except (TypeError, ValueError):
+                        continue
+                    if 0.99 < p < 50000:
+                        out.append((p, it.get("title") or ""))
+                pairs = out
+                if out:
+                    type(self)._scrape_stats['soldcomps_hits'] += 1
+            elif resp.status_code in (401, 403):
+                type(self)._scrape_stats['soldcomps_auth_fail'] += 1
+            elif resp.status_code == 429:
+                type(self)._scrape_stats['soldcomps_quota_fail'] += 1
+        except Exception:
+            pairs = None
+        self._soldcomps_cache[query] = pairs
+        return pairs
+
+    def _scrape_ebay_sold_prices(self, query: str, max_prices: int = 30) -> list:
+        """Get relevance-filtered sold prices for `query`.
+
+        Source priority: SoldComps API (real sold data — primary now that
+        eBay captcha-blocks the direct scrape) → the legacy eBay scrape as
+        fallback. Returns a _CompPriceList (a list subclass) of floats
+        whose `.relevance_dropped` reports how many comps were discarded
+        for not containing the query's terms, and whose `.sold_via`
+        records which source produced the data ('SoldComps' or 'eBay').
+        Callers that treat it as a plain list are unaffected.
+        """
+        sold_via = 'eBay'
+        pairs = None
+        if self.soldcomps_key:
+            pairs = self._fetch_soldcomps_pairs(query, count=max(120, max_prices))
+            if pairs:
+                sold_via = 'SoldComps'
+        if not pairs:
+            pairs = self._scrape_ebay_sold_listings(query, max_prices=max_prices)
         q_tokens = self._relevance_tokens(query)
         kept = _CompPriceList()
         dropped = 0
@@ -569,6 +672,7 @@ class EbayPriceLookup:
             else:
                 dropped += 1
         kept.relevance_dropped = dropped
+        kept.sold_via = sold_via
         if dropped:
             type(self)._scrape_stats['relevance_dropped'] = (
                 type(self)._scrape_stats.get('relevance_dropped', 0) + dropped
@@ -718,12 +822,18 @@ class EbayPriceLookup:
         for idx, query in enumerate(variants):
             ebay_prices = []
             rel_dropped = 0
+            sold_via = 'eBay'
             try:
-                time.sleep(0.3)
+                # No inter-request sleep needed on the SoldComps path (it's
+                # an API, not a scrape); keep the polite delay only when
+                # falling back to the direct scrape.
+                if not self.soldcomps_key:
+                    time.sleep(0.3)
                 ebay_prices = self._scrape_ebay_sold_prices(query)
-                # Capture relevance stats BEFORE outlier filtering
-                # (which returns a plain list, losing the attribute).
+                # Capture attrs BEFORE outlier filtering (which returns a
+                # plain list, losing them).
                 rel_dropped = getattr(ebay_prices, 'relevance_dropped', 0)
+                sold_via = getattr(ebay_prices, 'sold_via', 'eBay')
                 ebay_prices = self._filter_outliers(ebay_prices)
             except Exception:
                 ebay_prices = []
@@ -734,7 +844,7 @@ class EbayPriceLookup:
                 combined = self._filter_outliers(combined)
                 stats = self._price_stats(combined)
                 if stats:
-                    source = "sold (eBay)"
+                    source = f"sold ({sold_via})"
                     # Annotate source with the fallback level if we had to
                     # drop down — helps the user eyeball whether the comps
                     # were for the specific product vs a generic keyword.
@@ -761,15 +871,16 @@ class EbayPriceLookup:
             if combined and best_partial is None:
                 best_partial = (
                     list(combined), list(ebay_prices), query, rel_dropped,
+                    sold_via,
                 )
 
         # All sold-comp variants failed to clear ≥3. Use the best partial
         # if we have one (1-2 comps) before falling back to active listings.
         if best_partial is not None:
-            combined, ebay_prices, matched_q, rel_dropped = best_partial
+            combined, ebay_prices, matched_q, rel_dropped, sold_via = best_partial
             stats = self._price_stats(combined)
             if stats:
-                source = "sold (thin comps)"
+                source = f"sold (thin comps · {sold_via})"
                 if rel_dropped:
                     source = f"{source} [{rel_dropped} off-topic dropped]"
                 return {

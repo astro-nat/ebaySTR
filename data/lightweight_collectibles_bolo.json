@@ -29,15 +29,30 @@
       "category": "vintage_lantern",
       "tier": 2,
       "models": [
-        "Coleman 200A", "Coleman 200a", "Coleman 200",
-        "Coleman 220", "Coleman 220E", "Coleman 220F", "Coleman 220H",
-        "Coleman 228", "Coleman 228E", "Coleman 228F", "Coleman 228H",
-        "Coleman 242", "Coleman 242C",
-        "Coleman 275", "Coleman 282", "Coleman 286",
-        "Coleman 290", "Coleman 295",
-        "Coleman 321", "Coleman 321A",
-        "Coleman lantern", "Coleman gas lantern",
-        "Coleman propane lantern", "Coleman kerosene lantern",
+        "Coleman 200A",
+        "Coleman 200a",
+        "Coleman 200",
+        "Coleman 220",
+        "Coleman 220E",
+        "Coleman 220F",
+        "Coleman 220H",
+        "Coleman 228",
+        "Coleman 228E",
+        "Coleman 228F",
+        "Coleman 228H",
+        "Coleman 242",
+        "Coleman 242C",
+        "Coleman 275",
+        "Coleman 282",
+        "Coleman 286",
+        "Coleman 290",
+        "Coleman 295",
+        "Coleman 321",
+        "Coleman 321A",
+        "Coleman lantern",
+        "Coleman gas lantern",
+        "Coleman propane lantern",
+        "Coleman kerosene lantern",
         "Coleman white gas"
       ],
       "era_markers": [
@@ -49,13 +64,36 @@
         "Sunshine of the Night logo (older premium)"
       ],
       "comp_ranges_usd": [
-        {"item": "200A red lantern (working, dated)", "low": 50, "high": 150},
-        {"item": "200A in original box", "low": 130, "high": 280},
-        {"item": "220/228 dual-mantle (yellow globe)", "low": 60, "high": 180},
-        {"item": "242C nickel-plated (rare)", "low": 200, "high": 500},
-        {"item": "vintage 1950s-60s (any working)", "low": 80, "high": 220}
+        {
+          "item": "200A red lantern (working, dated)",
+          "low": 50,
+          "high": 150
+        },
+        {
+          "item": "200A in original box",
+          "low": 130,
+          "high": 280
+        },
+        {
+          "item": "220/228 dual-mantle (yellow globe)",
+          "low": 60,
+          "high": 180
+        },
+        {
+          "item": "242C nickel-plated (rare)",
+          "low": 200,
+          "high": 500
+        },
+        {
+          "item": "vintage 1950s-60s (any working)",
+          "low": 80,
+          "high": 220
+        }
       ],
-      "target_buy_usd": {"low": 5, "high": 40},
+      "target_buy_usd": {
+        "low": 5,
+        "high": 40
+      },
       "platform_primary": "eBay",
       "platform_secondary": "Etsy",
       "comp_query_template": "coleman {model} lantern vintage",
@@ -68,13 +106,23 @@
       "category": "premium_drinkware",
       "tier": 2,
       "models": [
-        "Yeti Rambler 30oz", "Yeti Rambler 20oz", "Yeti Rambler 10oz",
-        "Yeti Rambler 14oz", "Yeti Rambler 18oz", "Yeti Rambler 36oz",
-        "Yeti Rambler bottle", "Yeti Rambler tumbler",
-        "Yeti colster", "Yeti slim colster", "Yeti tall colster",
-        "Yeti Rambler half gallon", "Yeti Rambler 1 gallon",
-        "Yeti wine tumbler", "Yeti stackable pint",
-        "Yeti Yonder", "Yeti Daytrip"
+        "Yeti Rambler 30oz",
+        "Yeti Rambler 20oz",
+        "Yeti Rambler 10oz",
+        "Yeti Rambler 14oz",
+        "Yeti Rambler 18oz",
+        "Yeti Rambler 36oz",
+        "Yeti Rambler bottle",
+        "Yeti Rambler tumbler",
+        "Yeti colster",
+        "Yeti slim colster",
+        "Yeti tall colster",
+        "Yeti Rambler half gallon",
+        "Yeti Rambler 1 gallon",
+        "Yeti wine tumbler",
+        "Yeti stackable pint",
+        "Yeti Yonder",
+        "Yeti Daytrip"
       ],
       "era_markers": [
         "Yeti branding stamped on bottom",
@@ -84,12 +132,31 @@
         "MagSlider lid vs Strawcap lid"
       ],
       "comp_ranges_usd": [
-        {"item": "Limited-edition tumbler (Cosmic Lilac, Charcoal etc.)", "low": 50, "high": 130},
-        {"item": "Standard Rambler 30oz / 20oz", "low": 25, "high": 50},
-        {"item": "Discontinued color tumbler", "low": 60, "high": 180},
-        {"item": "Yeti Rambler half-gallon jug", "low": 70, "high": 130}
+        {
+          "item": "Limited-edition tumbler (Cosmic Lilac, Charcoal etc.)",
+          "low": 50,
+          "high": 130
+        },
+        {
+          "item": "Standard Rambler 30oz / 20oz",
+          "low": 25,
+          "high": 50
+        },
+        {
+          "item": "Discontinued color tumbler",
+          "low": 60,
+          "high": 180
+        },
+        {
+          "item": "Yeti Rambler half-gallon jug",
+          "low": 70,
+          "high": 130
+        }
       ],
-      "target_buy_usd": {"low": 3, "high": 25},
+      "target_buy_usd": {
+        "low": 3,
+        "high": 25
+      },
       "platform_primary": "eBay",
       "platform_secondary": "Poshmark",
       "comp_query_template": "yeti {model} {color}",
@@ -102,14 +169,30 @@
       "category": "battery_charger",
       "tier": 2,
       "models": [
-        "NOCO Genius", "NOCO G750", "NOCO G3500", "NOCO G7200",
-        "NOCO GB40", "NOCO GB50", "NOCO GB70", "NOCO GB150",
-        "NOCO Boost Plus", "NOCO Boost HD", "NOCO Boost Pro",
-        "NOCO Genius1", "NOCO Genius5", "NOCO Genius10",
-        "Schumacher SC1280", "Schumacher SC1281", "Schumacher SP1297",
-        "Schumacher DSR131", "Schumacher SE-4022",
-        "CTEK MUS 4.3", "CTEK MXS 5.0", "CTEK CT5",
-        "Battery Tender Junior", "Battery Tender Plus"
+        "NOCO Genius",
+        "NOCO G750",
+        "NOCO G3500",
+        "NOCO G7200",
+        "NOCO GB40",
+        "NOCO GB50",
+        "NOCO GB70",
+        "NOCO GB150",
+        "NOCO Boost Plus",
+        "NOCO Boost HD",
+        "NOCO Boost Pro",
+        "NOCO Genius1",
+        "NOCO Genius5",
+        "NOCO Genius10",
+        "Schumacher SC1280",
+        "Schumacher SC1281",
+        "Schumacher SP1297",
+        "Schumacher DSR131",
+        "Schumacher SE-4022",
+        "CTEK MUS 4.3",
+        "CTEK MXS 5.0",
+        "CTEK CT5",
+        "Battery Tender Junior",
+        "Battery Tender Plus"
       ],
       "era_markers": [
         "NOCO branding (red + black housing)",
@@ -119,13 +202,36 @@
         "Genuine vs counterfeit (verify hologram on package)"
       ],
       "comp_ranges_usd": [
-        {"item": "NOCO GB40 Boost Plus jump starter", "low": 80, "high": 130},
-        {"item": "NOCO Genius G3500 / G7200", "low": 60, "high": 120},
-        {"item": "Schumacher SC1280 / SC1281", "low": 80, "high": 140},
-        {"item": "CTEK MUS 4.3 / MXS 5.0", "low": 60, "high": 120},
-        {"item": "Battery Tender Plus / Junior", "low": 30, "high": 60}
+        {
+          "item": "NOCO GB40 Boost Plus jump starter",
+          "low": 80,
+          "high": 130
+        },
+        {
+          "item": "NOCO Genius G3500 / G7200",
+          "low": 60,
+          "high": 120
+        },
+        {
+          "item": "Schumacher SC1280 / SC1281",
+          "low": 80,
+          "high": 140
+        },
+        {
+          "item": "CTEK MUS 4.3 / MXS 5.0",
+          "low": 60,
+          "high": 120
+        },
+        {
+          "item": "Battery Tender Plus / Junior",
+          "low": 30,
+          "high": 60
+        }
       ],
-      "target_buy_usd": {"low": 3, "high": 30},
+      "target_buy_usd": {
+        "low": 3,
+        "high": 30
+      },
       "platform_primary": "eBay",
       "platform_secondary": null,
       "comp_query_template": "{brand} {model}",
@@ -138,14 +244,26 @@
       "category": "vintage_helmet",
       "tier": 2,
       "models": [
-        "Bell 500-TX", "Bell Star", "Bell Magnum",
-        "Bell Toptex", "Bell Moto-3", "Bell Moto-4", "Bell Moto-5",
+        "Bell 500-TX",
+        "Bell Star",
+        "Bell Magnum",
+        "Bell Toptex",
+        "Bell Moto-3",
+        "Bell Moto-4",
+        "Bell Moto-5",
         "Bell R-T",
-        "Arai Quantum-X", "Arai Corsair", "Arai Signet",
-        "Shoei RF-1400", "Shoei X-Spirit", "Shoei GT-Air",
-        "AGV K6", "AGV Pista GP",
-        "Vintage Bell helmet", "Vintage Buco helmet",
-        "Vintage Snell helmet", "Vintage half helmet",
+        "Arai Quantum-X",
+        "Arai Corsair",
+        "Arai Signet",
+        "Shoei RF-1400",
+        "Shoei X-Spirit",
+        "Shoei GT-Air",
+        "AGV K6",
+        "AGV Pista GP",
+        "Vintage Bell helmet",
+        "Vintage Buco helmet",
+        "Vintage Snell helmet",
+        "Vintage half helmet",
         "Steve McQueen Bell"
       ],
       "era_markers": [
@@ -157,14 +275,41 @@
         "1970s-80s Bell Moto-3 / Bell Star = collector premium"
       ],
       "comp_ranges_usd": [
-        {"item": "Bell Star / 500-TX vintage", "low": 130, "high": 350},
-        {"item": "Bell Moto-3 (1970s motocross)", "low": 200, "high": 500},
-        {"item": "Vintage Buco / Buco Defender", "low": 150, "high": 400},
-        {"item": "Shoei RF-1400 (modern)", "low": 280, "high": 480},
-        {"item": "Arai Corsair / Quantum-X (modern)", "low": 380, "high": 700},
-        {"item": "AGV K6 / Pista GP (modern)", "low": 280, "high": 750}
+        {
+          "item": "Bell Star / 500-TX vintage",
+          "low": 130,
+          "high": 350
+        },
+        {
+          "item": "Bell Moto-3 (1970s motocross)",
+          "low": 200,
+          "high": 500
+        },
+        {
+          "item": "Vintage Buco / Buco Defender",
+          "low": 150,
+          "high": 400
+        },
+        {
+          "item": "Shoei RF-1400 (modern)",
+          "low": 280,
+          "high": 480
+        },
+        {
+          "item": "Arai Corsair / Quantum-X (modern)",
+          "low": 380,
+          "high": 700
+        },
+        {
+          "item": "AGV K6 / Pista GP (modern)",
+          "low": 280,
+          "high": 750
+        }
       ],
-      "target_buy_usd": {"low": 10, "high": 80},
+      "target_buy_usd": {
+        "low": 10,
+        "high": 80
+      },
       "platform_primary": "eBay",
       "platform_secondary": null,
       "comp_query_template": "{brand} {model} helmet",
@@ -177,16 +322,28 @@
       "category": "vintage_audio",
       "tier": 2,
       "models": [
-        "Zenith Transoceanic", "Zenith Royal 3000",
-        "Zenith T600", "Zenith H500", "Zenith G500",
+        "Zenith Transoceanic",
+        "Zenith Royal 3000",
+        "Zenith T600",
+        "Zenith H500",
+        "Zenith G500",
         "Zenith Wave Magnet",
-        "Sony ICF-7600", "Sony ICF-2010", "Sony ICF-SW77",
-        "Sony TR-63", "Sony TR-65", "Sony TFM",
-        "Grundig Satellit 700", "Grundig Yacht Boy",
-        "Grundig Satellit 800", "Grundig G3",
-        "Panasonic RF-2200", "Panasonic RF-4900",
-        "Realistic DX-440", "Hallicrafters S-38",
-        "Hallicrafters S-40", "Hallicrafters S-120"
+        "Sony ICF-7600",
+        "Sony ICF-2010",
+        "Sony ICF-SW77",
+        "Sony TR-63",
+        "Sony TR-65",
+        "Sony TFM",
+        "Grundig Satellit 700",
+        "Grundig Yacht Boy",
+        "Grundig Satellit 800",
+        "Grundig G3",
+        "Panasonic RF-2200",
+        "Panasonic RF-4900",
+        "Realistic DX-440",
+        "Hallicrafters S-38",
+        "Hallicrafters S-40",
+        "Hallicrafters S-120"
       ],
       "era_markers": [
         "Zenith Transoceanic = the iconic shortwave portable",
@@ -196,14 +353,41 @@
         "Working condition with original strap / accessories = +30%"
       ],
       "comp_ranges_usd": [
-        {"item": "Zenith Transoceanic Royal 1000 (1950s-60s)", "low": 200, "high": 600},
-        {"item": "Zenith Transoceanic Royal 3000", "low": 130, "high": 380},
-        {"item": "Sony ICF-2010 working", "low": 280, "high": 580},
-        {"item": "Sony ICF-7600", "low": 100, "high": 250},
-        {"item": "Grundig Satellit 700 / 800", "low": 200, "high": 480},
-        {"item": "Hallicrafters S-38 / S-40", "low": 100, "high": 280}
+        {
+          "item": "Zenith Transoceanic Royal 1000 (1950s-60s)",
+          "low": 200,
+          "high": 600
+        },
+        {
+          "item": "Zenith Transoceanic Royal 3000",
+          "low": 130,
+          "high": 380
+        },
+        {
+          "item": "Sony ICF-2010 working",
+          "low": 280,
+          "high": 580
+        },
+        {
+          "item": "Sony ICF-7600",
+          "low": 100,
+          "high": 250
+        },
+        {
+          "item": "Grundig Satellit 700 / 800",
+          "low": 200,
+          "high": 480
+        },
+        {
+          "item": "Hallicrafters S-38 / S-40",
+          "low": 100,
+          "high": 280
+        }
       ],
-      "target_buy_usd": {"low": 10, "high": 80},
+      "target_buy_usd": {
+        "low": 10,
+        "high": 80
+      },
       "platform_primary": "eBay",
       "platform_secondary": null,
       "comp_query_template": "{brand} {model} radio vintage",
@@ -216,14 +400,30 @@
       "category": "protective_case",
       "tier": 2,
       "models": [
-        "Pelican 1170", "Pelican 1200", "Pelican 1300",
-        "Pelican 1400", "Pelican 1450", "Pelican 1500",
-        "Pelican 1510", "Pelican 1520", "Pelican 1535",
-        "Pelican 1610", "Pelican 1620", "Pelican 1650",
-        "Pelican Vault V200", "Pelican Vault V300", "Pelican Vault V730",
-        "Pelican Air 1535", "Pelican Air 1615", "Pelican Air 1745",
-        "Pelican Storm iM2050", "Pelican Storm iM2300", "Pelican Storm iM2400",
-        "Pelican Ruck R20", "Pelican Ruck R40", "Pelican Ruck R60"
+        "Pelican 1170",
+        "Pelican 1200",
+        "Pelican 1300",
+        "Pelican 1400",
+        "Pelican 1450",
+        "Pelican 1500",
+        "Pelican 1510",
+        "Pelican 1520",
+        "Pelican 1535",
+        "Pelican 1610",
+        "Pelican 1620",
+        "Pelican 1650",
+        "Pelican Vault V200",
+        "Pelican Vault V300",
+        "Pelican Vault V730",
+        "Pelican Air 1535",
+        "Pelican Air 1615",
+        "Pelican Air 1745",
+        "Pelican Storm iM2050",
+        "Pelican Storm iM2300",
+        "Pelican Storm iM2400",
+        "Pelican Ruck R20",
+        "Pelican Ruck R40",
+        "Pelican Ruck R60"
       ],
       "era_markers": [
         "Pelican branding embossed on shell",
@@ -234,14 +434,41 @@
         "1450 / 1500 are the most-popular consumer sizes"
       ],
       "comp_ranges_usd": [
-        {"item": "Pelican 1620 (large)", "low": 130, "high": 220},
-        {"item": "Pelican 1500 / 1510 (carry-on size)", "low": 100, "high": 180},
-        {"item": "Pelican 1450 / 1400 (mid-size)", "low": 80, "high": 140},
-        {"item": "Pelican 1170 / 1200 / 1300 (small)", "low": 50, "high": 100},
-        {"item": "Pelican Vault V200 / V300 (gun case)", "low": 100, "high": 200},
-        {"item": "Pelican Air 1535 (lighter)", "low": 130, "high": 240}
+        {
+          "item": "Pelican 1620 (large)",
+          "low": 130,
+          "high": 220
+        },
+        {
+          "item": "Pelican 1500 / 1510 (carry-on size)",
+          "low": 100,
+          "high": 180
+        },
+        {
+          "item": "Pelican 1450 / 1400 (mid-size)",
+          "low": 80,
+          "high": 140
+        },
+        {
+          "item": "Pelican 1170 / 1200 / 1300 (small)",
+          "low": 50,
+          "high": 100
+        },
+        {
+          "item": "Pelican Vault V200 / V300 (gun case)",
+          "low": 100,
+          "high": 200
+        },
+        {
+          "item": "Pelican Air 1535 (lighter)",
+          "low": 130,
+          "high": 240
+        }
       ],
-      "target_buy_usd": {"low": 10, "high": 80},
+      "target_buy_usd": {
+        "low": 10,
+        "high": 80
+      },
       "platform_primary": "eBay",
       "platform_secondary": null,
       "comp_query_template": "pelican {model}",
@@ -254,18 +481,34 @@
       "category": "pocket_knife",
       "tier": 2,
       "models": [
-        "Spyderco Para Military 2", "Spyderco PM2", "Spyderco Paramilitary 2",
-        "Spyderco Manix 2", "Spyderco Endura", "Spyderco Delica",
-        "Spyderco Native 5", "Spyderco Tenacious", "Spyderco Sage",
-        "Benchmade Bugout 535", "Benchmade Mini Bugout",
-        "Benchmade Griptilian 551", "Benchmade Mini Griptilian",
-        "Benchmade Adamas 275", "Benchmade Bailout",
-        "Benchmade Infidel", "Benchmade 940",
-        "Microtech Ultratech", "Microtech Combat Troodon",
-        "Microtech Halo", "Microtech UTX-85",
-        "Zero Tolerance ZT 0350", "ZT 0562", "ZT 0566",
-        "Hinderer XM-18", "Hinderer Halftrack",
-        "CRKT M16", "Cold Steel Recon 1"
+        "Spyderco Para Military 2",
+        "Spyderco PM2",
+        "Spyderco Paramilitary 2",
+        "Spyderco Manix 2",
+        "Spyderco Endura",
+        "Spyderco Delica",
+        "Spyderco Native 5",
+        "Spyderco Tenacious",
+        "Spyderco Sage",
+        "Benchmade Bugout 535",
+        "Benchmade Mini Bugout",
+        "Benchmade Griptilian 551",
+        "Benchmade Mini Griptilian",
+        "Benchmade Adamas 275",
+        "Benchmade Bailout",
+        "Benchmade Infidel",
+        "Benchmade 940",
+        "Microtech Ultratech",
+        "Microtech Combat Troodon",
+        "Microtech Halo",
+        "Microtech UTX-85",
+        "Zero Tolerance ZT 0350",
+        "ZT 0562",
+        "ZT 0566",
+        "Hinderer XM-18",
+        "Hinderer Halftrack",
+        "CRKT M16",
+        "Cold Steel Recon 1"
       ],
       "era_markers": [
         "Spyderco round-thumb-hole opener (signature)",
@@ -277,14 +520,41 @@
         "Original box + sheath + papers = +30%"
       ],
       "comp_ranges_usd": [
-        {"item": "Microtech Ultratech (auto OTF)", "low": 280, "high": 480},
-        {"item": "Microtech Combat Troodon", "low": 380, "high": 600},
-        {"item": "Hinderer XM-18 (custom maker)", "low": 480, "high": 900},
-        {"item": "Benchmade Bugout 535 / Mini", "low": 130, "high": 230},
-        {"item": "Spyderco Para Military 2", "low": 130, "high": 220},
-        {"item": "ZT 0350 / 0562", "low": 130, "high": 250}
+        {
+          "item": "Microtech Ultratech (auto OTF)",
+          "low": 280,
+          "high": 480
+        },
+        {
+          "item": "Microtech Combat Troodon",
+          "low": 380,
+          "high": 600
+        },
+        {
+          "item": "Hinderer XM-18 (custom maker)",
+          "low": 480,
+          "high": 900
+        },
+        {
+          "item": "Benchmade Bugout 535 / Mini",
+          "low": 130,
+          "high": 230
+        },
+        {
+          "item": "Spyderco Para Military 2",
+          "low": 130,
+          "high": 220
+        },
+        {
+          "item": "ZT 0350 / 0562",
+          "low": 130,
+          "high": 250
+        }
       ],
-      "target_buy_usd": {"low": 5, "high": 130},
+      "target_buy_usd": {
+        "low": 5,
+        "high": 130
+      },
       "platform_primary": "eBay",
       "platform_secondary": null,
       "comp_query_template": "{brand} {model}",
@@ -297,17 +567,29 @@
       "category": "multi_tool",
       "tier": 2,
       "models": [
-        "Leatherman Wave Plus", "Leatherman Wave +",
-        "Leatherman Charge Plus", "Leatherman Charge +",
-        "Leatherman Surge", "Leatherman Skeletool",
-        "Leatherman Wingman", "Leatherman Sidekick",
-        "Leatherman Free P4", "Leatherman Free P2",
-        "Leatherman Signal", "Leatherman OHT",
-        "Leatherman Style PS", "Leatherman Squirt",
-        "Gerber Suspension", "Gerber MP600", "Gerber MP1",
-        "Gerber Center-Drive", "Gerber Truss",
-        "Victorinox SwissTool", "Victorinox SwissTool Spirit",
-        "Sog PowerAssist", "Sog PowerLock"
+        "Leatherman Wave Plus",
+        "Leatherman Wave +",
+        "Leatherman Charge Plus",
+        "Leatherman Charge +",
+        "Leatherman Surge",
+        "Leatherman Skeletool",
+        "Leatherman Wingman",
+        "Leatherman Sidekick",
+        "Leatherman Free P4",
+        "Leatherman Free P2",
+        "Leatherman Signal",
+        "Leatherman OHT",
+        "Leatherman Style PS",
+        "Leatherman Squirt",
+        "Gerber Suspension",
+        "Gerber MP600",
+        "Gerber MP1",
+        "Gerber Center-Drive",
+        "Gerber Truss",
+        "Victorinox SwissTool",
+        "Victorinox SwissTool Spirit",
+        "Sog PowerAssist",
+        "Sog PowerLock"
       ],
       "era_markers": [
         "Leatherman branding etched on jaw",
@@ -317,14 +599,41 @@
         "Discontinued models (Leatherman Squirt PS4) command premium"
       ],
       "comp_ranges_usd": [
-        {"item": "Leatherman Wave Plus / Charge Plus", "low": 100, "high": 200},
-        {"item": "Leatherman Surge (largest)", "low": 130, "high": 230},
-        {"item": "Leatherman Free P4", "low": 130, "high": 220},
-        {"item": "Leatherman Skeletool", "low": 60, "high": 110},
-        {"item": "Discontinued Leatherman (Squirt PS4 etc.)", "low": 130, "high": 280},
-        {"item": "Gerber MP600", "low": 50, "high": 100}
+        {
+          "item": "Leatherman Wave Plus / Charge Plus",
+          "low": 100,
+          "high": 200
+        },
+        {
+          "item": "Leatherman Surge (largest)",
+          "low": 130,
+          "high": 230
+        },
+        {
+          "item": "Leatherman Free P4",
+          "low": 130,
+          "high": 220
+        },
+        {
+          "item": "Leatherman Skeletool",
+          "low": 60,
+          "high": 110
+        },
+        {
+          "item": "Discontinued Leatherman (Squirt PS4 etc.)",
+          "low": 130,
+          "high": 280
+        },
+        {
+          "item": "Gerber MP600",
+          "low": 50,
+          "high": 100
+        }
       ],
-      "target_buy_usd": {"low": 5, "high": 60},
+      "target_buy_usd": {
+        "low": 5,
+        "high": 60
+      },
       "platform_primary": "eBay",
       "platform_secondary": null,
       "comp_query_template": "{brand} {model}",
@@ -337,18 +646,33 @@
       "category": "metal_detector",
       "tier": 2,
       "models": [
-        "Bounty Hunter Discovery 3300", "Bounty Hunter Tracker IV",
-        "Bounty Hunter Land Ranger Pro", "Bounty Hunter Pioneer",
-        "Bounty Hunter Time Ranger", "Bounty Hunter Quick Draw",
-        "Garrett AT Pro", "Garrett AT Max", "Garrett AT Gold",
-        "Garrett Ace 200", "Garrett Ace 300", "Garrett Ace 400",
-        "Garrett Apex", "Garrett Pro-Pointer AT",
-        "Whites Spectra V3i", "Whites MX Sport", "Whites Coinmaster",
+        "Bounty Hunter Discovery 3300",
+        "Bounty Hunter Tracker IV",
+        "Bounty Hunter Land Ranger Pro",
+        "Bounty Hunter Pioneer",
+        "Bounty Hunter Time Ranger",
+        "Bounty Hunter Quick Draw",
+        "Garrett AT Pro",
+        "Garrett AT Max",
+        "Garrett AT Gold",
+        "Garrett Ace 200",
+        "Garrett Ace 300",
+        "Garrett Ace 400",
+        "Garrett Apex",
+        "Garrett Pro-Pointer AT",
+        "Whites Spectra V3i",
+        "Whites MX Sport",
+        "Whites Coinmaster",
         "Whites TreasureMaster",
-        "Minelab Equinox 600", "Minelab Equinox 800",
-        "Minelab Manticore", "Minelab CTX 3030",
-        "XP Deus II", "XP ORX",
-        "Fisher F22", "Fisher F44", "Fisher F75"
+        "Minelab Equinox 600",
+        "Minelab Equinox 800",
+        "Minelab Manticore",
+        "Minelab CTX 3030",
+        "XP Deus II",
+        "XP ORX",
+        "Fisher F22",
+        "Fisher F44",
+        "Fisher F75"
       ],
       "era_markers": [
         "Bounty Hunter / Garrett / Whites / Minelab / XP / Fisher branding",
@@ -357,19 +681,286 @@
         "Bag / cover accessory (Garrett soft case)"
       ],
       "comp_ranges_usd": [
-        {"item": "Minelab Equinox 800", "low": 600, "high": 900},
-        {"item": "XP Deus II", "low": 1200, "high": 1700},
-        {"item": "Garrett AT Max / AT Pro", "low": 380, "high": 600},
-        {"item": "Whites Spectra V3i (discontinued)", "low": 600, "high": 1100},
-        {"item": "Bounty Hunter Discovery 3300 / Land Ranger Pro", "low": 130, "high": 280},
-        {"item": "Bounty Hunter Tracker IV (entry)", "low": 60, "high": 100}
+        {
+          "item": "Minelab Equinox 800",
+          "low": 600,
+          "high": 900
+        },
+        {
+          "item": "XP Deus II",
+          "low": 1200,
+          "high": 1700
+        },
+        {
+          "item": "Garrett AT Max / AT Pro",
+          "low": 380,
+          "high": 600
+        },
+        {
+          "item": "Whites Spectra V3i (discontinued)",
+          "low": 600,
+          "high": 1100
+        },
+        {
+          "item": "Bounty Hunter Discovery 3300 / Land Ranger Pro",
+          "low": 130,
+          "high": 280
+        },
+        {
+          "item": "Bounty Hunter Tracker IV (entry)",
+          "low": 60,
+          "high": 100
+        }
       ],
-      "target_buy_usd": {"low": 10, "high": 200},
+      "target_buy_usd": {
+        "low": 10,
+        "high": 200
+      },
       "platform_primary": "eBay",
       "platform_secondary": null,
       "comp_query_template": "{brand} {model} metal detector",
       "ship_class": "small_box",
       "notes": "Metal detectors are an enthusiast hobby with sustained demand. Minelab + XP are the premium tier (used by serious hunters); Garrett + Whites are mid-tier consumer favorites; Bounty Hunter is entry tier. Whites Electronics went out of business in 2020 — their detectors are appreciating as supply dwindles. Detectors break down compactly into shafts + control box for shipping.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Stanley",
+      "category": "premium_drinkware",
+      "tier": 2,
+      "models": [
+        "Stanley Quencher",
+        "Stanley Quencher H2.0",
+        "Stanley Quencher H2.0 FlowState",
+        "Stanley Quencher 40oz",
+        "Stanley Quencher 30oz",
+        "Stanley Quencher 20oz",
+        "Stanley Quencher 64oz",
+        "Stanley FlowState Tumbler",
+        "Stanley IceFlow",
+        "Stanley IceFlow Flip Straw",
+        "Stanley IceFlow Tumbler",
+        "Stanley AeroLight",
+        "Stanley AeroLight Transit",
+        "Stanley ProTour Flip Straw",
+        "Stanley Cross Bottle",
+        "Stanley All Day Slim Bottle",
+        "Stanley Adventure Quencher",
+        "Stanley tumbler",
+        "Stanley water bottle",
+        "Stanley travel mug",
+        "Stanley Quencher tumbler",
+        "Stanley Starbucks",
+        "Stanley Target exclusive",
+        "Stanley Valentine",
+        "Stanley Watercolor",
+        "Stanley limited edition",
+        "Stanley Karol G",
+        "Stanley Pool Quencher",
+        "Stanley Citron",
+        "Stanley Rose Quartz",
+        "Stanley Cosmo",
+        "Stanley Tigerlily",
+        "Stanley collab"
+      ],
+      "_disqualifiers": [
+        "hockey",
+        "nhl",
+        "stanley cup final",
+        "stanley cup champion",
+        "stanley cup playoff",
+        "championship banner",
+        "trophy replica",
+        "hockey puck",
+        "hockey jersey",
+        "engraved champions",
+        "stanley tools",
+        "stanley tool",
+        "fatmax",
+        "tape measure",
+        "screwdriver",
+        "hammer",
+        "socket set",
+        "wrench",
+        "utility knife",
+        "tool box",
+        "toolbox",
+        "chisel",
+        "stud finder",
+        "power tool",
+        "hand tool",
+        "stanley bostitch",
+        "staple gun",
+        "black & decker",
+        "black and decker",
+        "level tool",
+        "organizer bin",
+        "hammertone",
+        "green thermos",
+        "banner",
+        "puck",
+        "jersey",
+        "trophy",
+        "commemorative",
+        "medallion",
+        "autograph",
+        "signed photo",
+        "framed photo",
+        "collector plate",
+        "collectible plate",
+        "lithograph"
+      ],
+      "era_markers": [
+        "Discontinued / retired colors (Winter '23 Target, Watercolor Dunes, Cosmo, Tigerlily) resell 2-4x retail",
+        "Retailer-exclusive collabs (Starbucks, Target, Olive & June, Karol G) command the biggest premiums",
+        "Valentine's / holiday drops sell out and spike on resale",
+        "Standard in-stock colors are near-retail commodity — only limited / discontinued colorways beat retail"
+      ],
+      "comp_ranges_usd": [
+        {
+          "item": "Collab / retailer-exclusive Quencher (Starbucks, Target, Karol G)",
+          "low": 50,
+          "high": 150
+        },
+        {
+          "item": "Discontinued color Quencher 40oz",
+          "low": 45,
+          "high": 110
+        },
+        {
+          "item": "Standard Quencher 40oz / IceFlow",
+          "low": 20,
+          "high": 45
+        }
+      ],
+      "target_buy_usd": {
+        "low": 3,
+        "high": 25
+      },
+      "platform_primary": "eBay",
+      "platform_secondary": "Poshmark",
+      "comp_query_template": "stanley {model} {color}",
+      "ship_class": "small_box",
+      "notes": "The resale play is DISCONTINUED colors + retailer collabs (Starbucks / Target / Karol G), NOT standard in-stock colors, which sell at or below retail. STRONG disqualifiers required: 'Stanley' also means NHL Stanley Cup memorabilia and Stanley / Black & Decker hand tools — both filtered. Vintage green hammertone thermoses are a different, lower-value lane, excluded.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Owala",
+      "category": "premium_drinkware",
+      "tier": 2,
+      "models": [
+        "Owala FreeSip",
+        "Owala FreeSip 24oz",
+        "Owala FreeSip 32oz",
+        "Owala FreeSip 40oz",
+        "Owala FreeSip 19oz",
+        "Owala Flip",
+        "Owala water bottle",
+        "Owala tumbler",
+        "Owala limited edition",
+        "Owala Sail Away",
+        "Owala Dreamy Field",
+        "Owala Neo Sage",
+        "Owala Retro Boardwalk",
+        "Owala Color Drop",
+        "Owala collab"
+      ],
+      "_disqualifiers": [
+        "replacement straw",
+        "replacement lid",
+        "straw only",
+        "lid only",
+        "boot only",
+        "silicone boot",
+        "carrying pouch only",
+        "replacement parts"
+      ],
+      "era_markers": [
+        "Limited / seasonal colors (Sail Away, Dreamy Field, Color Drop exclusives) resell above retail",
+        "Target / retailer exclusives are the premium drops",
+        "Standard colors are near-retail"
+      ],
+      "comp_ranges_usd": [
+        {
+          "item": "Limited / exclusive FreeSip color",
+          "low": 30,
+          "high": 65
+        },
+        {
+          "item": "Standard FreeSip 24oz / 32oz",
+          "low": 18,
+          "high": 35
+        }
+      ],
+      "target_buy_usd": {
+        "low": 3,
+        "high": 15
+      },
+      "platform_primary": "eBay",
+      "platform_secondary": "Poshmark",
+      "comp_query_template": "owala freesip {size} {color}",
+      "ship_class": "small_box",
+      "notes": "Owala FreeSip limited / seasonal colorways drive the resale premium; standard colors sell near retail. Accessory-only listings (replacement straw / lid / boot) filtered.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Hydro Flask",
+      "category": "premium_drinkware",
+      "tier": 2,
+      "models": [
+        "Hydro Flask",
+        "Hydroflask",
+        "Hydro Flask 32oz",
+        "Hydro Flask 40oz",
+        "Hydro Flask 24oz",
+        "Hydro Flask 21oz",
+        "Hydro Flask 18oz",
+        "Hydro Flask Wide Mouth",
+        "Hydro Flask Standard Mouth",
+        "Hydro Flask Trail",
+        "Hydro Flask Journey",
+        "Hydro Flask limited edition",
+        "Hydro Flask water bottle",
+        "Hydro Flask tumbler",
+        "Hydro Flask All Around",
+        "Hydro Flask collab"
+      ],
+      "_disqualifiers": [
+        "replacement lid",
+        "replacement cap",
+        "flex cap only",
+        "straw lid only",
+        "boot only",
+        "silicone boot",
+        "carrying strap only",
+        "bottle sling only",
+        "replacement parts",
+        "lid only"
+      ],
+      "era_markers": [
+        "Limited / discontinued colors + collabs (Disney, National Park, Polar Ombre) resell above retail",
+        "Standard colors are near-retail commodity"
+      ],
+      "comp_ranges_usd": [
+        {
+          "item": "Limited / collab / discontinued color",
+          "low": 30,
+          "high": 70
+        },
+        {
+          "item": "Standard 32oz / 40oz Wide Mouth",
+          "low": 20,
+          "high": 40
+        }
+      ],
+      "target_buy_usd": {
+        "low": 3,
+        "high": 18
+      },
+      "platform_primary": "eBay",
+      "platform_secondary": "Poshmark",
+      "comp_query_template": "hydro flask {size} {color}",
+      "ship_class": "small_box",
+      "notes": "Hydro Flask resale premium is in limited / discontinued colors + collabs (Disney, National Parks); standard colors near retail. Accessory-only listings filtered.",
       "condition_critical": true
     }
   ],

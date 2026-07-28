@@ -2075,8 +2075,12 @@ def _load_watchlist_for_comps(_hibid_account) -> None:
             _wl_status.update(label="🔖 Watchlist is empty.", state="complete")
             st.warning("No open lots on your HiBid watchlist right now.")
             return
-        # BOLO-match now so proven-lane tagging + grading are ready.
-        df = _compute_bolo_columns(df)
+        # NB: do NOT call _compute_bolo_columns here. This runs EARLY in the
+        # script (inside the 💰 My Bids popover render), before
+        # _compute_cpu_form_factor_columns (~line 7095, which
+        # _compute_bolo_columns depends on) has been defined this run →
+        # NameError. The analyze pipeline computes BOLO columns later,
+        # exactly like the keyword / multi-select loads do.
         _wl_status.update(
             label=f"🔖 Watchlist loaded — {len(df)} lots → running comps",
             state="complete", expanded=False,
@@ -6038,6 +6042,16 @@ def _compute_manual_check_flags(df):
                 f"${cb:.0f} bid, ~{tlh:.0f}h to close"
             )
 
+        # 9. Active-listing fallback — resale came from active ASKING
+        # prices, not sold comps (eBay is captcha-blocking the sold
+        # scrape). Unreliable — routinely matches accessories / lowball
+        # BINs. Surface so the number isn't taken at face value.
+        if 'active' in ps.lower() and not pd.isna(er):
+            reasons[i].append(
+                "resale from active listings, not sold comps — "
+                "eBay blocking sold data; verify manually"
+            )
+
         flags[i] = bool(reasons[i])
 
     df = df.copy()
@@ -6194,6 +6208,30 @@ def _compute_buy_score(df):
                 # No signals at all — pure unknown, sorts to the bottom.
                 scores[i] = signal_score
                 grades[i] = "❓ -"
+            continue
+
+        # ---- Active-listing fallback: resale exists but it's NOT sold ----
+        # eBay now captcha-blocks the sold-listings scrape, so the comp
+        # pipeline falls back to active ASKING prices (price_source
+        # 'active (eBay)'). Those are unreliable — they routinely match
+        # accessories / lowball BINs (a $35 Stanley priced at $9), which
+        # then hard-F a perfectly good lot. Same principle as the
+        # no-resale bucket above: F is for SOLD-comped-and-confirmed-bad,
+        # not for "we couldn't get real sold data." Route to the manual-
+        # research bucket so the grade tells the truth instead of lying.
+        if 'active' in ps.lower():
+            bc = float(bid_count_arr.iloc[i] or 0)
+            _sig = 0
+            if isinstance(bolo, str) and bolo.strip():
+                _sig += 15
+            if (not pd.isna(ah)) and ah > 0:
+                _sig += 10
+            if bc >= 3:
+                _sig += 8
+            elif bc >= 1:
+                _sig += 3
+            scores[i] = min(40, _sig)
+            grades[i] = "🔍 ?"
             continue
 
         # ---- Resale exists; decide effective bid for grading ----
@@ -6441,6 +6479,7 @@ def _run_ebay_comps(results_df):
         cfg["ebay"]["app_id"], cfg["ebay"]["cert_id"],
         pricecharting=pc_client,
         scrapingbee_key=sb_key,
+        soldcomps_key=(cfg.get("soldcomps") or {}).get("api_key") or None,
         mercari_enabled=bool(st.session_state.get('comps_use_mercari', False)),
     )
 
@@ -6712,6 +6751,7 @@ def _run_ebay_comps_chunk(audit_df, chunk_size: int = 200, on_lot_priced=None):
         cfg["ebay"]["app_id"], cfg["ebay"]["cert_id"],
         pricecharting=PriceChartingLookup(pc_token),
         scrapingbee_key=sb_key,
+        soldcomps_key=(cfg.get("soldcomps") or {}).get("api_key") or None,
     )
 
     label = f"💰 Comping next {len(chunk)} of {total_pending} pending lot(s)…"
@@ -7191,6 +7231,15 @@ def _apply_easy_ship_filter(df, *, drop_hard: bool = True):
     """
     reasons: list = []
     if df is None or df.empty:
+        return df, reasons
+
+    # Curated watchlist: the user hand-picked these lots, so the mailbox-
+    # keyword trim (which misses drinkware, plurals, and other easily-
+    # shipped items) is skipped entirely — comp everything they starred.
+    # Keyed off current_auction so it NEVER leaks into BOLO scans or normal
+    # auction loads. The other pre-audit filters (bid cap, category, metals)
+    # still apply, so the list stays narrowable.
+    if str(st.session_state.get('current_auction') or '').startswith('🔖'):
         return df, reasons
 
     if (
@@ -10368,6 +10417,15 @@ if current_auction and not st.session_state.selected_leads.empty:
             "⚡ Pre-audit filters — trim before ANY spend (audit + comps)",
             expanded=bool(len(_prev_df) >= 100),
         ):
+            _is_watchlist = str(
+                st.session_state.get('current_auction') or ''
+            ).startswith('🔖')
+            if _is_watchlist:
+                st.caption(
+                    "🔖 Curated watchlist — the **easy-ship** & **HARD** "
+                    "trims are off so every lot you starred gets comped. "
+                    "The other filters below still apply."
+                )
             _paf1, _paf2, _paf3 = st.columns(3)
             with _paf1:
                 st.number_input(
@@ -10409,13 +10467,17 @@ if current_auction and not st.session_state.selected_leads.empty:
                 st.checkbox(
                     "Easy-ship only (mailbox-size)",
                     key="comps_easy_ship_only",
-                    help="Keep only items that look mailbox-shippable.",
+                    disabled=_is_watchlist,
+                    help="Keep only items that look mailbox-shippable. "
+                         "Disabled for watchlists — you already curated them.",
                 )
             with _paf6:
                 st.checkbox(
                     "Exclude HARD logistics",
                     key="comps_exclude_hard",
-                    help="Skip items flagged hard to ship/pick up.",
+                    disabled=_is_watchlist,
+                    help="Skip items flagged hard to ship/pick up. "
+                         "Disabled for watchlists.",
                 )
             _paf7, _paf8 = st.columns([2, 1])
             with _paf7:
