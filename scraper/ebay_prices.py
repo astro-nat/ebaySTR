@@ -657,11 +657,21 @@ class EbayPriceLookup:
         sold_via = 'eBay'
         pairs = None
         if self.soldcomps_key:
+            # SoldComps is the authoritative sold-data source. If it returns
+            # nothing (quota hit or genuine no-match), do NOT fall back to
+            # the legacy eBay sold scrape — eBay captcha-blocks it, so it
+            # never returns data and only burns latency + ScrapingBee
+            # credits on a dead page. Let lookup_price_range drop straight
+            # to the free active-listing Browse API instead.
             pairs = self._fetch_soldcomps_pairs(query, count=max(120, max_prices))
             if pairs:
                 sold_via = 'SoldComps'
-        if not pairs:
+        else:
+            # No SoldComps key configured — the (now usually blocked) scrape
+            # is the only sold path available; keep trying it.
             pairs = self._scrape_ebay_sold_listings(query, max_prices=max_prices)
+        if pairs is None:
+            pairs = []
         q_tokens = self._relevance_tokens(query)
         kept = _CompPriceList()
         dropped = 0
