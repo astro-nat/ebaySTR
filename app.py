@@ -4773,6 +4773,73 @@ def _qualifies_for_audit_skip(row) -> bool:
     return True
 
 
+# Passive (non-powered) item types where an auctioneer's "untested /
+# unknown condition" note is meaningless boilerplate, NOT a real risk —
+# there's nothing to power on. A tumbler, backpack, or wallet marked
+# "not tested" is still perfectly sellable, so it shouldn't hard-F out of
+# comps. We relax ONLY the "untested" verdict — "broken / damaged / for
+# parts" stays a real red flag even on passive goods (a Stanley missing
+# its lid IS damaged).
+_PASSIVE_ITEM_RE = re.compile(
+    r"\b(?:"
+    r"tumbler|quencher|iceflow|flowstate|bottle|mug|thermos|flask|"
+    r"canteen|growler|drinkware|stein|goblet|"
+    r"backpack|purse|handbag|wallet|tote|crossbody|satchel|clutch|"
+    r"pouch|duffel|fanny\s*pack|"
+    r"shirt|t-?shirt|tee|hoodie|sweater|sweatshirt|jacket|coat|jersey|"
+    r"jeans|dress|skirt|hat|cap|beanie|scarf|"
+    r"shoe|shoes|sneaker|sneakers|boot|boots|heels|sandals|"
+    r"vase|figurine|statue|ornament|plate|plates|bowl|dish|platter|"
+    r"blanket|towel|pillow|quilt|rug|linen|tapestry|"
+    r"ring|necklace|bracelet|earrings?|pendant|brooch|jewelry"
+    r")\b",
+    re.IGNORECASE,
+)
+_PASSIVE_BOLO_CATEGORIES = frozenset({
+    'premium_drinkware', 'pop_culture_bag', 'designer_eyewear_case',
+    'vintage_jewelry', 'modern_jewelry', 'precious_metal',
+    'vintage_glassware', 'vintage_pottery', 'vintage_figurine',
+    'clothing_brand', 'western_wear', 'vintage_denim', 'vintage_graphic',
+})
+
+
+def _relax_untested_for_passive(df):
+    """Clear the 'untested / unknown condition' red flag for PASSIVE items.
+
+    Downgrades ONLY that verdict to 'normal wear and tear' (never
+    'broken/damaged/for parts') for passive item types — identified by
+    title keyword OR a passive BOLO category — so they flow to comps
+    instead of a hard F. Deterministic; safe to run on cached verdicts.
+    """
+    if df is None or len(df) == 0 or 'verdict' not in df.columns:
+        return df
+    verdict = df['verdict'].fillna('').astype(str).str.strip().str.lower()
+    untested = verdict == 'untested or unknown condition'
+    if not untested.any():
+        return df
+    title = (df['title'].fillna('').astype(str) if 'title' in df.columns
+             else pd.Series([''] * len(df), index=df.index))
+    passive_title = title.str.contains(_PASSIVE_ITEM_RE, na=False)
+    if 'bolo_category' in df.columns:
+        passive_cat = (df['bolo_category'].fillna('').astype(str)
+                       .isin(_PASSIVE_BOLO_CATEGORIES))
+    else:
+        passive_cat = pd.Series(False, index=df.index)
+    relax = untested & (passive_title | passive_cat)
+    if not relax.any():
+        return df
+    df = df.copy()
+    df.loc[relax, 'verdict'] = 'normal wear and tear'
+    if 'red_flag' in df.columns:
+        df.loc[relax, 'red_flag'] = False
+    if 'audit_source' in df.columns:
+        df.loc[relax, 'audit_source'] = (
+            df.loc[relax, 'audit_source'].fillna('').astype(str)
+            + '+passive_untested_ok'
+        )
+    return df
+
+
 def _run_ai_audit(leads_df, on_progress=None):
     """Run Phase 2 AI condition audit with detailed phase-by-phase status."""
     from scraper import Phase2Scraper
@@ -6293,10 +6360,24 @@ def _compute_buy_score(df):
         # resale / $3 max bid were getting A grade (~95) by % margin
         # alone; nominal profit was only ~$6.
         profit_at_max = net_resale - cost_at_bid
-        if profit_at_max < MIN_PROFIT_FLOOR:
-            scores[i] = 0
-            grades[i] = "⚫ F"
-            continue
+        # Soft profit gradient (replaced the old hard $20 F-floor 7/27).
+        # Low-dollar flips are RANKED into a profit band, not binary-killed
+        # — the user's inventory is $20-40 items netting $10-18 at a smart
+        # max bid, which is real money that deserves a C/D, not an auto-F.
+        # A lot that actually LOSES money still hard-F's above
+        # (margin_pct <= 0). The band becomes a grade CAP applied after the
+        # full score is computed, so a thin-margin small flip can't sneak
+        # an A on % alone (the Cole Haan $6-profit case) but still ranks.
+        if profit_at_max < 5:
+            _profit_cap = 15       # trivial → F
+        elif profit_at_max < 10:
+            _profit_cap = 34       # $5-10 → F (ranked within)
+        elif profit_at_max < 15:
+            _profit_cap = 49       # $10-15 → D
+        elif profit_at_max < MIN_PROFIT_FLOOR:
+            _profit_cap = 59       # $15-20 → C
+        else:
+            _profit_cap = None     # >= $20 → graded on merit
         margin_score = min(45.0, margin_pct * 22.5)
         # Discount the margin score when the comp itself is suspect.
         # Without this, a uncapped wide-spread comp with $1000 resale
@@ -6418,6 +6499,12 @@ def _compute_buy_score(df):
         # for what is a $3 AliExpress zircon ring).
         if dropship_arr.iloc[i]:
             score = min(score, 59)
+
+        # Cap 4: soft profit-band gradient (see _profit_cap above). Caps a
+        # small-dollar flip into its C/D/F band so % margin can't float it
+        # to an A, while still letting it rank instead of hard-F to 0.
+        if _profit_cap is not None:
+            score = min(score, _profit_cap)
 
         scores[i] = score
 
@@ -11653,8 +11740,8 @@ if current_auction and not st.session_state.selected_leads.empty:
 
             tlog("AUDIT", f"starting · {len(leads_df):,} leads to audit")
             _audit_t0 = _time.time()
-            st.session_state.audit_results = _run_ai_audit(
-                leads_df, on_progress=_on_audit_progress,
+            st.session_state.audit_results = _relax_untested_for_passive(
+                _run_ai_audit(leads_df, on_progress=_on_audit_progress)
             )
             _audit_elapsed = _time.time() - _audit_t0
             tlog("AUDIT",
