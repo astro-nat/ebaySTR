@@ -3312,6 +3312,21 @@ _BRAND_ALIASES: Dict[str, List[str]] = {
         "hummel", "m.i. hummel", "mi hummel", "goebel hummel",
         "goebel figurine",
     ],
+    # Disney character figurines (disney_figurine, added 2026-07-28). All
+    # distinctive enough for alias-only matches; the JSON models[] refine
+    # to specific pieces when present.
+    "Jim Shore Disney Traditions": [
+        "jim shore", "disney traditions", "heartwood creek",
+    ],
+    "Disney Showcase / Couture de Force": [
+        "disney showcase", "couture de force",
+    ],
+    "Walt Disney Classics Collection (WDCC)": [
+        "wdcc", "walt disney classics collection", "walt disney classics",
+    ],
+    "Grand Jester Studios Disney": [
+        "grand jester studios", "grand jester",
+    ],
     "Lladró figurines": [
         "lladro", "lladró",
     ],

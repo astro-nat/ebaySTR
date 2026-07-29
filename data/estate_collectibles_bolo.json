@@ -31,15 +31,28 @@
       "category": "vintage_figurine",
       "tier": 1,
       "models": [
-        "M.I. Hummel", "Hummel TMK", "Hummel 1", "Hummel 2",
-        "Hummel 3", "Hummel 4", "Hummel 5", "Hummel 6",
-        "Hummel 7", "Hummel 8",
-        "Hummel Apple Tree Boy", "Hummel Apple Tree Girl",
-        "Hummel Merry Wanderer", "Hummel Stormy Weather",
-        "Hummel Umbrella Boy", "Hummel Umbrella Girl",
-        "Hummel Goose Girl", "Hummel Be Patient",
-        "Hummel Little Pharmacist", "Hummel Doctor",
-        "Goebel figurine", "Goebel Hummel"
+        "M.I. Hummel",
+        "Hummel TMK",
+        "Hummel 1",
+        "Hummel 2",
+        "Hummel 3",
+        "Hummel 4",
+        "Hummel 5",
+        "Hummel 6",
+        "Hummel 7",
+        "Hummel 8",
+        "Hummel Apple Tree Boy",
+        "Hummel Apple Tree Girl",
+        "Hummel Merry Wanderer",
+        "Hummel Stormy Weather",
+        "Hummel Umbrella Boy",
+        "Hummel Umbrella Girl",
+        "Hummel Goose Girl",
+        "Hummel Be Patient",
+        "Hummel Little Pharmacist",
+        "Hummel Doctor",
+        "Goebel figurine",
+        "Goebel Hummel"
       ],
       "era_markers": [
         "Hummel signature on the back of the figurine",
@@ -49,13 +62,36 @@
         "West Germany vs Germany stamp (West Germany = pre-1990 premium)"
       ],
       "comp_ranges_usd": [
-        {"item": "Crown TMK-1 (1935-49) figurine", "low": 200, "high": 1500},
-        {"item": "Full Bee TMK-2 (1950-59) figurine", "low": 100, "high": 600},
-        {"item": "Stylized Bee TMK-3/4 (1960s)", "low": 60, "high": 280},
-        {"item": "Modern TMK-7/8 (post-1990)", "low": 30, "high": 100},
-        {"item": "Apple Tree Boy/Girl complete pair", "low": 130, "high": 380}
+        {
+          "item": "Crown TMK-1 (1935-49) figurine",
+          "low": 200,
+          "high": 1500
+        },
+        {
+          "item": "Full Bee TMK-2 (1950-59) figurine",
+          "low": 100,
+          "high": 600
+        },
+        {
+          "item": "Stylized Bee TMK-3/4 (1960s)",
+          "low": 60,
+          "high": 280
+        },
+        {
+          "item": "Modern TMK-7/8 (post-1990)",
+          "low": 30,
+          "high": 100
+        },
+        {
+          "item": "Apple Tree Boy/Girl complete pair",
+          "low": 130,
+          "high": 380
+        }
       ],
-      "target_buy_usd": {"low": 5, "high": 80},
+      "target_buy_usd": {
+        "low": 5,
+        "high": 80
+      },
       "platform_primary": "eBay",
       "platform_secondary": "Replacements.com",
       "comp_query_template": "hummel {model} tmk",
@@ -68,11 +104,17 @@
       "category": "vintage_figurine",
       "tier": 1,
       "models": [
-        "Lladro", "Lladró",
-        "Lladro Spain", "Lladró Spain",
-        "Lladro porcelain", "Lladro figurine",
-        "Don Quixote", "Lladro angel", "Lladro ballerina",
-        "Lladro mother", "Lladro retired"
+        "Lladro",
+        "Lladró",
+        "Lladro Spain",
+        "Lladró Spain",
+        "Lladro porcelain",
+        "Lladro figurine",
+        "Don Quixote",
+        "Lladro angel",
+        "Lladro ballerina",
+        "Lladro mother",
+        "Lladro retired"
       ],
       "era_markers": [
         "Lladró backstamp on bottom (blue-printed logo)",
@@ -82,11 +124,26 @@
         "Retired (discontinued) pieces command premium"
       ],
       "comp_ranges_usd": [
-        {"item": "Retired Lladró large figurine", "low": 200, "high": 1200},
-        {"item": "Retired Lladró small/medium", "low": 100, "high": 400},
-        {"item": "Current production figurine", "low": 60, "high": 250}
+        {
+          "item": "Retired Lladró large figurine",
+          "low": 200,
+          "high": 1200
+        },
+        {
+          "item": "Retired Lladró small/medium",
+          "low": 100,
+          "high": 400
+        },
+        {
+          "item": "Current production figurine",
+          "low": 60,
+          "high": 250
+        }
       ],
-      "target_buy_usd": {"low": 8, "high": 120},
+      "target_buy_usd": {
+        "low": 8,
+        "high": 120
+      },
       "platform_primary": "eBay",
       "platform_secondary": null,
       "comp_query_template": "lladro {model} retired",
@@ -99,14 +156,22 @@
       "category": "vintage_figurine",
       "tier": 1,
       "models": [
-        "Royal Doulton character jug", "Royal Doulton Toby jug",
-        "Royal Doulton figurine", "Royal Doulton HN",
-        "Royal Doulton Bunnykins", "Royal Doulton Pretty Ladies",
-        "Royal Doulton Old Charley", "Royal Doulton Long John Silver",
-        "Royal Doulton Falstaff", "Royal Doulton Drake",
-        "Royal Doulton D6", "Royal Doulton large jug",
-        "Royal Doulton small jug", "Royal Doulton mini jug",
-        "Royal Doulton tiny jug", "Royal Doulton Bairnsfather"
+        "Royal Doulton character jug",
+        "Royal Doulton Toby jug",
+        "Royal Doulton figurine",
+        "Royal Doulton HN",
+        "Royal Doulton Bunnykins",
+        "Royal Doulton Pretty Ladies",
+        "Royal Doulton Old Charley",
+        "Royal Doulton Long John Silver",
+        "Royal Doulton Falstaff",
+        "Royal Doulton Drake",
+        "Royal Doulton D6",
+        "Royal Doulton large jug",
+        "Royal Doulton small jug",
+        "Royal Doulton mini jug",
+        "Royal Doulton tiny jug",
+        "Royal Doulton Bairnsfather"
       ],
       "era_markers": [
         "Royal Doulton backstamp (lion + crown)",
@@ -117,13 +182,36 @@
         "Bone china marking on figurines"
       ],
       "comp_ranges_usd": [
-        {"item": "Limited / discontinued character jug (large)", "low": 150, "high": 600},
-        {"item": "Standard character jug (large)", "low": 60, "high": 220},
-        {"item": "Mini / Tiny character jug rare", "low": 80, "high": 280},
-        {"item": "HN figurine (Pretty Ladies)", "low": 70, "high": 300},
-        {"item": "Bunnykins figurine", "low": 30, "high": 150}
+        {
+          "item": "Limited / discontinued character jug (large)",
+          "low": 150,
+          "high": 600
+        },
+        {
+          "item": "Standard character jug (large)",
+          "low": 60,
+          "high": 220
+        },
+        {
+          "item": "Mini / Tiny character jug rare",
+          "low": 80,
+          "high": 280
+        },
+        {
+          "item": "HN figurine (Pretty Ladies)",
+          "low": 70,
+          "high": 300
+        },
+        {
+          "item": "Bunnykins figurine",
+          "low": 30,
+          "high": 150
+        }
       ],
-      "target_buy_usd": {"low": 5, "high": 80},
+      "target_buy_usd": {
+        "low": 5,
+        "high": 80
+      },
       "platform_primary": "eBay",
       "platform_secondary": "Replacements.com",
       "comp_query_template": "royal doulton {model} d6",
@@ -136,12 +224,18 @@
       "category": "vintage_figurine",
       "tier": 2,
       "models": [
-        "Wedgwood Jasperware", "Wedgwood Jasper Ware",
-        "Wedgwood blue jasper", "Wedgwood black jasper",
-        "Wedgwood green jasper", "Wedgwood lilac jasper",
-        "Wedgwood tri-color", "Wedgwood Queens Ware",
-        "Wedgwood basalt", "Wedgwood black basalt",
-        "Wedgwood Portland Vase", "Wedgwood limited",
+        "Wedgwood Jasperware",
+        "Wedgwood Jasper Ware",
+        "Wedgwood blue jasper",
+        "Wedgwood black jasper",
+        "Wedgwood green jasper",
+        "Wedgwood lilac jasper",
+        "Wedgwood tri-color",
+        "Wedgwood Queens Ware",
+        "Wedgwood basalt",
+        "Wedgwood black basalt",
+        "Wedgwood Portland Vase",
+        "Wedgwood limited",
         "Wedgwood bone china"
       ],
       "era_markers": [
@@ -152,12 +246,31 @@
         "Portland Vase reproductions are the iconic Wedgwood piece"
       ],
       "comp_ranges_usd": [
-        {"item": "Wedgwood Jasperware lilac (rare)", "low": 200, "high": 700},
-        {"item": "Wedgwood Jasperware sage green", "low": 130, "high": 400},
-        {"item": "Wedgwood Jasperware blue (common)", "low": 60, "high": 200},
-        {"item": "Wedgwood basalt black", "low": 100, "high": 350}
+        {
+          "item": "Wedgwood Jasperware lilac (rare)",
+          "low": 200,
+          "high": 700
+        },
+        {
+          "item": "Wedgwood Jasperware sage green",
+          "low": 130,
+          "high": 400
+        },
+        {
+          "item": "Wedgwood Jasperware blue (common)",
+          "low": 60,
+          "high": 200
+        },
+        {
+          "item": "Wedgwood basalt black",
+          "low": 100,
+          "high": 350
+        }
       ],
-      "target_buy_usd": {"low": 8, "high": 80},
+      "target_buy_usd": {
+        "low": 8,
+        "high": 80
+      },
       "platform_primary": "eBay",
       "platform_secondary": "Replacements.com",
       "comp_query_template": "wedgwood jasperware {color}",
@@ -170,13 +283,17 @@
       "category": "vintage_figurine",
       "tier": 2,
       "models": [
-        "Norman Rockwell figurine", "Norman Rockwell plate",
-        "Norman Rockwell limited edition", "Norman Rockwell signed",
+        "Norman Rockwell figurine",
+        "Norman Rockwell plate",
+        "Norman Rockwell limited edition",
+        "Norman Rockwell signed",
         "Saturday Evening Post Rockwell",
-        "Rockwell Heritage", "Rockwell Christmas",
+        "Rockwell Heritage",
+        "Rockwell Christmas",
         "Rockwell Triple Self Portrait",
         "Rockwell Doctor and Doll",
-        "Gorham Rockwell", "Knowles Rockwell"
+        "Gorham Rockwell",
+        "Knowles Rockwell"
       ],
       "era_markers": [
         "Norman Rockwell signature reproduced on the piece",
@@ -185,11 +302,26 @@
         "Original certificate of authenticity"
       ],
       "comp_ranges_usd": [
-        {"item": "Norman Rockwell figurine signed series", "low": 50, "high": 280},
-        {"item": "Norman Rockwell limited edition plate", "low": 30, "high": 130},
-        {"item": "Norman Rockwell original Saturday Evening Post print", "low": 60, "high": 250}
+        {
+          "item": "Norman Rockwell figurine signed series",
+          "low": 50,
+          "high": 280
+        },
+        {
+          "item": "Norman Rockwell limited edition plate",
+          "low": 30,
+          "high": 130
+        },
+        {
+          "item": "Norman Rockwell original Saturday Evening Post print",
+          "low": 60,
+          "high": 250
+        }
       ],
-      "target_buy_usd": {"low": 3, "high": 40},
+      "target_buy_usd": {
+        "low": 3,
+        "high": 40
+      },
       "platform_primary": "eBay",
       "platform_secondary": null,
       "comp_query_template": "norman rockwell {item}",
@@ -201,14 +333,22 @@
       "category": "vintage_pottery",
       "tier": 1,
       "models": [
-        "Roseville pottery", "Roseville vase",
-        "Roseville Pinecone", "Roseville Magnolia",
-        "Roseville Zephyr Lily", "Roseville Apple Blossom",
-        "Roseville Bushberry", "Roseville Snowberry",
-        "Roseville Freesia", "Roseville Iris",
-        "Roseville Foxglove", "Roseville Clematis",
-        "Roseville Water Lily", "Roseville Wisteria",
-        "Roseville Bleeding Heart", "Roseville Donatello"
+        "Roseville pottery",
+        "Roseville vase",
+        "Roseville Pinecone",
+        "Roseville Magnolia",
+        "Roseville Zephyr Lily",
+        "Roseville Apple Blossom",
+        "Roseville Bushberry",
+        "Roseville Snowberry",
+        "Roseville Freesia",
+        "Roseville Iris",
+        "Roseville Foxglove",
+        "Roseville Clematis",
+        "Roseville Water Lily",
+        "Roseville Wisteria",
+        "Roseville Bleeding Heart",
+        "Roseville Donatello"
       ],
       "era_markers": [
         "Roseville USA mark on bottom (impressed or raised)",
@@ -217,11 +357,26 @@
         "Color variations matter (Pinecone Brown most common, Blue/Green premium)"
       ],
       "comp_ranges_usd": [
-        {"item": "Roseville Pinecone large vase", "low": 200, "high": 600},
-        {"item": "Roseville Magnolia / Wisteria pieces", "low": 130, "high": 450},
-        {"item": "Roseville smaller bud vase / pieces", "low": 60, "high": 200}
+        {
+          "item": "Roseville Pinecone large vase",
+          "low": 200,
+          "high": 600
+        },
+        {
+          "item": "Roseville Magnolia / Wisteria pieces",
+          "low": 130,
+          "high": 450
+        },
+        {
+          "item": "Roseville smaller bud vase / pieces",
+          "low": 60,
+          "high": 200
+        }
       ],
-      "target_buy_usd": {"low": 5, "high": 60},
+      "target_buy_usd": {
+        "low": 5,
+        "high": 60
+      },
       "platform_primary": "eBay",
       "platform_secondary": "Etsy",
       "comp_query_template": "roseville pottery {pattern}",
@@ -233,15 +388,27 @@
       "category": "vintage_pottery",
       "tier": 2,
       "models": [
-        "Hull pottery", "Hull vase", "Hull cookie jar",
-        "Hull Magnolia", "Hull Tulip", "Hull Sunglow",
+        "Hull pottery",
+        "Hull vase",
+        "Hull cookie jar",
+        "Hull Magnolia",
+        "Hull Tulip",
+        "Hull Sunglow",
         "Hull Little Red Riding Hood",
-        "McCoy pottery", "McCoy USA", "McCoy cookie jar",
-        "McCoy planter", "McCoy Pottery cookie jar",
-        "Weller pottery", "Weller Forest", "Weller Hudson",
-        "Weller Coppertone", "Weller Sicard",
-        "Rookwood pottery", "Rookwood vellum",
-        "Rookwood production", "Rookwood Cincinnati",
+        "McCoy pottery",
+        "McCoy USA",
+        "McCoy cookie jar",
+        "McCoy planter",
+        "McCoy Pottery cookie jar",
+        "Weller pottery",
+        "Weller Forest",
+        "Weller Hudson",
+        "Weller Coppertone",
+        "Weller Sicard",
+        "Rookwood pottery",
+        "Rookwood vellum",
+        "Rookwood production",
+        "Rookwood Cincinnati",
         "Roseville Cherry Blossom"
       ],
       "era_markers": [
@@ -252,14 +419,41 @@
         "Hand-painted vs decal-applied artwork"
       ],
       "comp_ranges_usd": [
-        {"item": "Rookwood vellum vase signed", "low": 280, "high": 1500},
-        {"item": "Rookwood production vase", "low": 100, "high": 400},
-        {"item": "Hull Little Red Riding Hood", "low": 150, "high": 500},
-        {"item": "Hull Magnolia / Tulip vase", "low": 60, "high": 220},
-        {"item": "McCoy cookie jar (vintage)", "low": 40, "high": 180},
-        {"item": "Weller Coppertone / Sicard", "low": 130, "high": 600}
+        {
+          "item": "Rookwood vellum vase signed",
+          "low": 280,
+          "high": 1500
+        },
+        {
+          "item": "Rookwood production vase",
+          "low": 100,
+          "high": 400
+        },
+        {
+          "item": "Hull Little Red Riding Hood",
+          "low": 150,
+          "high": 500
+        },
+        {
+          "item": "Hull Magnolia / Tulip vase",
+          "low": 60,
+          "high": 220
+        },
+        {
+          "item": "McCoy cookie jar (vintage)",
+          "low": 40,
+          "high": 180
+        },
+        {
+          "item": "Weller Coppertone / Sicard",
+          "low": 130,
+          "high": 600
+        }
       ],
-      "target_buy_usd": {"low": 3, "high": 80},
+      "target_buy_usd": {
+        "low": 3,
+        "high": 80
+      },
       "platform_primary": "eBay",
       "platform_secondary": "Etsy",
       "comp_query_template": "{brand} pottery {pattern}",
@@ -272,14 +466,22 @@
       "category": "vintage_glassware",
       "tier": 1,
       "models": [
-        "Fenton Art Glass", "Fenton glass",
-        "Fenton carnival glass", "Fenton iridescent",
-        "Fenton hobnail", "Fenton milk glass hobnail",
-        "Fenton burmese", "Fenton custard",
-        "Fenton opalescent", "Fenton silvercrest",
-        "Fenton emerald", "Fenton ruby",
-        "Fenton Bicentennial", "Fenton hand painted",
-        "Fenton signed", "Fenton retired"
+        "Fenton Art Glass",
+        "Fenton glass",
+        "Fenton carnival glass",
+        "Fenton iridescent",
+        "Fenton hobnail",
+        "Fenton milk glass hobnail",
+        "Fenton burmese",
+        "Fenton custard",
+        "Fenton opalescent",
+        "Fenton silvercrest",
+        "Fenton emerald",
+        "Fenton ruby",
+        "Fenton Bicentennial",
+        "Fenton hand painted",
+        "Fenton signed",
+        "Fenton retired"
       ],
       "era_markers": [
         "Fenton acid-etched logo on bottom (used 1970+)",
@@ -289,12 +491,31 @@
         "Fenton sticker (paper label) on older pieces"
       ],
       "comp_ranges_usd": [
-        {"item": "Fenton carnival glass rare color", "low": 130, "high": 480},
-        {"item": "Fenton burmese signed", "low": 100, "high": 350},
-        {"item": "Fenton hobnail milk glass piece", "low": 30, "high": 150},
-        {"item": "Fenton hand-painted artist signed", "low": 80, "high": 280}
+        {
+          "item": "Fenton carnival glass rare color",
+          "low": 130,
+          "high": 480
+        },
+        {
+          "item": "Fenton burmese signed",
+          "low": 100,
+          "high": 350
+        },
+        {
+          "item": "Fenton hobnail milk glass piece",
+          "low": 30,
+          "high": 150
+        },
+        {
+          "item": "Fenton hand-painted artist signed",
+          "low": 80,
+          "high": 280
+        }
       ],
-      "target_buy_usd": {"low": 3, "high": 60},
+      "target_buy_usd": {
+        "low": 3,
+        "high": 60
+      },
       "platform_primary": "eBay",
       "platform_secondary": "Etsy",
       "comp_query_template": "fenton {pattern} {color}",
@@ -307,15 +528,24 @@
       "category": "vintage_glassware",
       "tier": 2,
       "models": [
-        "Imperial Candlewick", "Candlewick glass",
-        "Candlewick crystal", "Candlewick punch bowl",
-        "Heisey glass", "Heisey crystal",
-        "Heisey Orchid", "Heisey Rose",
-        "Cambridge glass", "Cambridge Rose Point",
-        "Cambridge Caprice", "Fostoria",
-        "Fostoria American", "Fostoria Coin",
-        "Westmoreland glass", "Westmoreland milk glass",
-        "Tiffin glass", "Indiana glass"
+        "Imperial Candlewick",
+        "Candlewick glass",
+        "Candlewick crystal",
+        "Candlewick punch bowl",
+        "Heisey glass",
+        "Heisey crystal",
+        "Heisey Orchid",
+        "Heisey Rose",
+        "Cambridge glass",
+        "Cambridge Rose Point",
+        "Cambridge Caprice",
+        "Fostoria",
+        "Fostoria American",
+        "Fostoria Coin",
+        "Westmoreland glass",
+        "Westmoreland milk glass",
+        "Tiffin glass",
+        "Indiana glass"
       ],
       "era_markers": [
         "Imperial Candlewick: pattern of bead-and-button glass clusters",
@@ -325,12 +555,31 @@
         "Made-in-USA marker on most"
       ],
       "comp_ranges_usd": [
-        {"item": "Imperial Candlewick rare piece (punch bowl set)", "low": 200, "high": 700},
-        {"item": "Cambridge Rose Point individual piece", "low": 30, "high": 150},
-        {"item": "Heisey Orchid stemware", "low": 30, "high": 130},
-        {"item": "Fostoria American piece", "low": 25, "high": 100}
+        {
+          "item": "Imperial Candlewick rare piece (punch bowl set)",
+          "low": 200,
+          "high": 700
+        },
+        {
+          "item": "Cambridge Rose Point individual piece",
+          "low": 30,
+          "high": 150
+        },
+        {
+          "item": "Heisey Orchid stemware",
+          "low": 30,
+          "high": 130
+        },
+        {
+          "item": "Fostoria American piece",
+          "low": 25,
+          "high": 100
+        }
       ],
-      "target_buy_usd": {"low": 3, "high": 50},
+      "target_buy_usd": {
+        "low": 3,
+        "high": 50
+      },
       "platform_primary": "eBay",
       "platform_secondary": "Replacements.com",
       "comp_query_template": "{brand} {pattern}",
@@ -342,18 +591,36 @@
       "category": "vintage_jewelry",
       "tier": 2,
       "models": [
-        "Trifari", "Crown Trifari", "Trifari signed",
-        "Eisenberg", "Eisenberg Original", "Eisenberg Ice",
-        "Weiss", "Weiss rhinestone", "Weiss signed",
-        "Miriam Haskell", "Haskell glass beads",
-        "Hobé", "Hobe jewelry", "Hobé signed",
-        "Coro", "Coro Craft", "Coro duette",
-        "Sarah Coventry", "Sarah Cov",
-        "Boucher", "Marcel Boucher",
-        "Hattie Carnegie", "Schiaparelli",
-        "Joseff of Hollywood", "Kramer",
-        "Schreiner", "Lisner",
-        "Monet", "Napier", "Bogoff"
+        "Trifari",
+        "Crown Trifari",
+        "Trifari signed",
+        "Eisenberg",
+        "Eisenberg Original",
+        "Eisenberg Ice",
+        "Weiss",
+        "Weiss rhinestone",
+        "Weiss signed",
+        "Miriam Haskell",
+        "Haskell glass beads",
+        "Hobé",
+        "Hobe jewelry",
+        "Hobé signed",
+        "Coro",
+        "Coro Craft",
+        "Coro duette",
+        "Sarah Coventry",
+        "Sarah Cov",
+        "Boucher",
+        "Marcel Boucher",
+        "Hattie Carnegie",
+        "Schiaparelli",
+        "Joseff of Hollywood",
+        "Kramer",
+        "Schreiner",
+        "Lisner",
+        "Monet",
+        "Napier",
+        "Bogoff"
       ],
       "era_markers": [
         "Signature stamped or impressed on the back (Trifari, Coro, Weiss, etc.)",
@@ -363,15 +630,46 @@
         "Original tag / earring backs / clasp markings"
       ],
       "comp_ranges_usd": [
-        {"item": "Schiaparelli signed piece", "low": 280, "high": 1500},
-        {"item": "Joseff of Hollywood", "low": 200, "high": 800},
-        {"item": "Eisenberg Original (pre-1945)", "low": 130, "high": 600},
-        {"item": "Crown Trifari brooch / set", "low": 60, "high": 280},
-        {"item": "Weiss rhinestone brooch", "low": 50, "high": 220},
-        {"item": "Miriam Haskell brooch / earrings", "low": 100, "high": 400},
-        {"item": "Coro Craft / Hobé signed", "low": 40, "high": 180}
+        {
+          "item": "Schiaparelli signed piece",
+          "low": 280,
+          "high": 1500
+        },
+        {
+          "item": "Joseff of Hollywood",
+          "low": 200,
+          "high": 800
+        },
+        {
+          "item": "Eisenberg Original (pre-1945)",
+          "low": 130,
+          "high": 600
+        },
+        {
+          "item": "Crown Trifari brooch / set",
+          "low": 60,
+          "high": 280
+        },
+        {
+          "item": "Weiss rhinestone brooch",
+          "low": 50,
+          "high": 220
+        },
+        {
+          "item": "Miriam Haskell brooch / earrings",
+          "low": 100,
+          "high": 400
+        },
+        {
+          "item": "Coro Craft / Hobé signed",
+          "low": 40,
+          "high": 180
+        }
       ],
-      "target_buy_usd": {"low": 3, "high": 60},
+      "target_buy_usd": {
+        "low": 3,
+        "high": 60
+      },
       "platform_primary": "eBay",
       "platform_secondary": "Etsy",
       "comp_query_template": "{brand} {item} signed",
@@ -384,16 +682,24 @@
       "category": "modern_jewelry",
       "tier": 2,
       "models": [
-        "James Avery sterling", "James Avery silver",
-        "James Avery charm", "James Avery bracelet",
-        "James Avery ring", "James Avery necklace",
+        "James Avery sterling",
+        "James Avery silver",
+        "James Avery charm",
+        "James Avery bracelet",
+        "James Avery ring",
+        "James Avery necklace",
         "James Avery retired",
-        "Brighton silver", "Brighton bracelet",
-        "Brighton heart", "Brighton necklace",
+        "Brighton silver",
+        "Brighton bracelet",
+        "Brighton heart",
+        "Brighton necklace",
         "Brighton retired",
-        "Pandora bracelet", "Pandora charm",
-        "Pandora ring", "Pandora ALE",
-        "Pandora retired", "Pandora limited edition"
+        "Pandora bracelet",
+        "Pandora charm",
+        "Pandora ring",
+        "Pandora ALE",
+        "Pandora retired",
+        "Pandora limited edition"
       ],
       "era_markers": [
         "James Avery JA stamp + sterling 925 mark",
@@ -403,13 +709,36 @@
         "Original pouch / box adds premium"
       ],
       "comp_ranges_usd": [
-        {"item": "James Avery retired charm bracelet (full)", "low": 130, "high": 500},
-        {"item": "Pandora retired charm (Disney / Mickey / rare)", "low": 60, "high": 280},
-        {"item": "Brighton heart bracelet retired", "low": 60, "high": 180},
-        {"item": "Standard James Avery sterling charm", "low": 25, "high": 70},
-        {"item": "Standard Pandora charm", "low": 18, "high": 60}
+        {
+          "item": "James Avery retired charm bracelet (full)",
+          "low": 130,
+          "high": 500
+        },
+        {
+          "item": "Pandora retired charm (Disney / Mickey / rare)",
+          "low": 60,
+          "high": 280
+        },
+        {
+          "item": "Brighton heart bracelet retired",
+          "low": 60,
+          "high": 180
+        },
+        {
+          "item": "Standard James Avery sterling charm",
+          "low": 25,
+          "high": 70
+        },
+        {
+          "item": "Standard Pandora charm",
+          "low": 18,
+          "high": 60
+        }
       ],
-      "target_buy_usd": {"low": 3, "high": 50},
+      "target_buy_usd": {
+        "low": 3,
+        "high": 50
+      },
       "platform_primary": "eBay",
       "platform_secondary": "Poshmark",
       "comp_query_template": "{brand} {item}",
@@ -422,12 +751,17 @@
       "category": "modern_jewelry",
       "tier": 2,
       "models": [
-        "Swarovski crystal", "Swarovski figurine",
-        "Swarovski necklace", "Swarovski bracelet",
-        "Swarovski earrings", "Swarovski ring",
+        "Swarovski crystal",
+        "Swarovski figurine",
+        "Swarovski necklace",
+        "Swarovski bracelet",
+        "Swarovski earrings",
+        "Swarovski ring",
         "Swarovski Annual Edition",
-        "Swarovski Centenary", "Swarovski Disney",
-        "Swarovski retired", "Swarovski limited",
+        "Swarovski Centenary",
+        "Swarovski Disney",
+        "Swarovski retired",
+        "Swarovski limited",
         "Swarovski crystal society"
       ],
       "era_markers": [
@@ -437,12 +771,31 @@
         "Annual Edition pieces (1987+ series)"
       ],
       "comp_ranges_usd": [
-        {"item": "Swarovski Annual Edition figurine", "low": 130, "high": 600},
-        {"item": "SCS member-only retired piece", "low": 200, "high": 800},
-        {"item": "Standard Swarovski figurine", "low": 30, "high": 130},
-        {"item": "Swarovski crystal jewelry piece", "low": 25, "high": 120}
+        {
+          "item": "Swarovski Annual Edition figurine",
+          "low": 130,
+          "high": 600
+        },
+        {
+          "item": "SCS member-only retired piece",
+          "low": 200,
+          "high": 800
+        },
+        {
+          "item": "Standard Swarovski figurine",
+          "low": 30,
+          "high": 130
+        },
+        {
+          "item": "Swarovski crystal jewelry piece",
+          "low": 25,
+          "high": 120
+        }
       ],
-      "target_buy_usd": {"low": 3, "high": 50},
+      "target_buy_usd": {
+        "low": 3,
+        "high": 50
+      },
       "platform_primary": "eBay",
       "platform_secondary": null,
       "comp_query_template": "swarovski {model}",
@@ -455,11 +808,17 @@
       "category": "vintage_toys",
       "tier": 1,
       "models": [
-        "Steiff", "Steiff bear", "Steiff teddy",
-        "Steiff button-in-ear", "Steiff knopf im ohr",
-        "Steiff Mohair", "Steiff antique",
-        "Steiff 1900", "Steiff vintage",
-        "Steiff limited edition", "Steiff Zotty",
+        "Steiff",
+        "Steiff bear",
+        "Steiff teddy",
+        "Steiff button-in-ear",
+        "Steiff knopf im ohr",
+        "Steiff Mohair",
+        "Steiff antique",
+        "Steiff 1900",
+        "Steiff vintage",
+        "Steiff limited edition",
+        "Steiff Zotty",
         "Steiff Margarete Steiff"
       ],
       "era_markers": [
@@ -470,12 +829,31 @@
         "Antique Steiff (pre-WWII) = museum-tier"
       ],
       "comp_ranges_usd": [
-        {"item": "Antique pre-WWII Steiff bear", "low": 800, "high": 5000},
-        {"item": "Vintage 1950s-60s Steiff", "low": 200, "high": 700},
-        {"item": "Modern Steiff limited edition", "low": 130, "high": 400},
-        {"item": "Standard Steiff (post-1990)", "low": 60, "high": 180}
+        {
+          "item": "Antique pre-WWII Steiff bear",
+          "low": 800,
+          "high": 5000
+        },
+        {
+          "item": "Vintage 1950s-60s Steiff",
+          "low": 200,
+          "high": 700
+        },
+        {
+          "item": "Modern Steiff limited edition",
+          "low": 130,
+          "high": 400
+        },
+        {
+          "item": "Standard Steiff (post-1990)",
+          "low": 60,
+          "high": 180
+        }
       ],
-      "target_buy_usd": {"low": 5, "high": 80},
+      "target_buy_usd": {
+        "low": 5,
+        "high": 80
+      },
       "platform_primary": "eBay",
       "platform_secondary": "Etsy",
       "comp_query_template": "steiff {model}",
@@ -488,14 +866,21 @@
       "category": "vintage_toys",
       "tier": 2,
       "models": [
-        "Vintage Fisher-Price", "Fisher-Price Little People",
-        "Fisher-Price A-Frame", "Fisher-Price Family Farm",
-        "Fisher-Price Castle", "Fisher-Price Pull Toy",
-        "Fisher-Price Bus", "Fisher-Price Clock",
-        "Fisher-Price Music Box", "Fisher-Price Chatter Telephone",
-        "Fisher-Price Snoopy", "Fisher-Price farmer in the dell",
+        "Vintage Fisher-Price",
+        "Fisher-Price Little People",
+        "Fisher-Price A-Frame",
+        "Fisher-Price Family Farm",
+        "Fisher-Price Castle",
+        "Fisher-Price Pull Toy",
+        "Fisher-Price Bus",
+        "Fisher-Price Clock",
+        "Fisher-Price Music Box",
+        "Fisher-Price Chatter Telephone",
+        "Fisher-Price Snoopy",
+        "Fisher-Price farmer in the dell",
         "Fisher-Price Adventure People",
-        "Fisher-Price 1960s", "Fisher-Price 1970s"
+        "Fisher-Price 1960s",
+        "Fisher-Price 1970s"
       ],
       "era_markers": [
         "Wood + paper litho construction (pre-1980 = vintage)",
@@ -505,12 +890,31 @@
         "Original box / accessories double value"
       ],
       "comp_ranges_usd": [
-        {"item": "Vintage Family Farm w/ Little People + accessories", "low": 80, "high": 280},
-        {"item": "Vintage Castle complete", "low": 100, "high": 380},
-        {"item": "Wooden Little People sets (1960s-70s)", "low": 50, "high": 200},
-        {"item": "Vintage Music Box / Chatter Telephone", "low": 25, "high": 80}
+        {
+          "item": "Vintage Family Farm w/ Little People + accessories",
+          "low": 80,
+          "high": 280
+        },
+        {
+          "item": "Vintage Castle complete",
+          "low": 100,
+          "high": 380
+        },
+        {
+          "item": "Wooden Little People sets (1960s-70s)",
+          "low": 50,
+          "high": 200
+        },
+        {
+          "item": "Vintage Music Box / Chatter Telephone",
+          "low": 25,
+          "high": 80
+        }
       ],
-      "target_buy_usd": {"low": 2, "high": 35},
+      "target_buy_usd": {
+        "low": 2,
+        "high": 35
+      },
       "platform_primary": "eBay",
       "platform_secondary": null,
       "comp_query_template": "vintage fisher-price {model}",
@@ -523,13 +927,19 @@
       "category": "vintage_basket",
       "tier": 2,
       "models": [
-        "Longaberger basket", "Longaberger Heritage",
-        "Longaberger Christmas", "Longaberger Mother's Day",
-        "Longaberger May Series", "Longaberger Bee",
-        "Longaberger Founders", "Longaberger signed",
-        "Longaberger retired", "Longaberger Dresden",
+        "Longaberger basket",
+        "Longaberger Heritage",
+        "Longaberger Christmas",
+        "Longaberger Mother's Day",
+        "Longaberger May Series",
+        "Longaberger Bee",
+        "Longaberger Founders",
+        "Longaberger signed",
+        "Longaberger retired",
+        "Longaberger Dresden",
         "Longaberger Woven Memories",
-        "Longaberger small basket", "Longaberger medium basket"
+        "Longaberger small basket",
+        "Longaberger medium basket"
       ],
       "era_markers": [
         "Longaberger signature on basket bottom (signed by weaver)",
@@ -539,12 +949,31 @@
         "Limited edition / commemorative pieces command premium"
       ],
       "comp_ranges_usd": [
-        {"item": "Longaberger Founders / large rare", "low": 130, "high": 480},
-        {"item": "Longaberger Christmas / Mother's Day series", "low": 80, "high": 250},
-        {"item": "Longaberger standard medium with liner", "low": 35, "high": 100},
-        {"item": "Longaberger small basket", "low": 25, "high": 60}
+        {
+          "item": "Longaberger Founders / large rare",
+          "low": 130,
+          "high": 480
+        },
+        {
+          "item": "Longaberger Christmas / Mother's Day series",
+          "low": 80,
+          "high": 250
+        },
+        {
+          "item": "Longaberger standard medium with liner",
+          "low": 35,
+          "high": 100
+        },
+        {
+          "item": "Longaberger small basket",
+          "low": 25,
+          "high": 60
+        }
       ],
-      "target_buy_usd": {"low": 3, "high": 40},
+      "target_buy_usd": {
+        "low": 3,
+        "high": 40
+      },
       "platform_primary": "eBay",
       "platform_secondary": "Etsy",
       "comp_query_template": "longaberger {model}",
@@ -556,11 +985,16 @@
       "category": "modern_pottery",
       "tier": 2,
       "models": [
-        "Rae Dunn", "Rae Dunn pottery",
-        "Rae Dunn mug", "Rae Dunn canister",
-        "Rae Dunn pitcher", "Rae Dunn farmhouse",
-        "Rae Dunn season", "Rae Dunn limited",
-        "Rae Dunn Magenta", "Rae Dunn LL"
+        "Rae Dunn",
+        "Rae Dunn pottery",
+        "Rae Dunn mug",
+        "Rae Dunn canister",
+        "Rae Dunn pitcher",
+        "Rae Dunn farmhouse",
+        "Rae Dunn season",
+        "Rae Dunn limited",
+        "Rae Dunn Magenta",
+        "Rae Dunn LL"
       ],
       "era_markers": [
         "Rae Dunn signature on bottom",
@@ -569,11 +1003,26 @@
         "Discontinued seasonal pieces (Halloween, Christmas, etc.) = premium"
       ],
       "comp_ranges_usd": [
-        {"item": "Rae Dunn rare seasonal mug", "low": 60, "high": 200},
-        {"item": "Rae Dunn cellar / canister set", "low": 80, "high": 250},
-        {"item": "Rae Dunn standard mug", "low": 15, "high": 50}
+        {
+          "item": "Rae Dunn rare seasonal mug",
+          "low": 60,
+          "high": 200
+        },
+        {
+          "item": "Rae Dunn cellar / canister set",
+          "low": 80,
+          "high": 250
+        },
+        {
+          "item": "Rae Dunn standard mug",
+          "low": 15,
+          "high": 50
+        }
       ],
-      "target_buy_usd": {"low": 1, "high": 25},
+      "target_buy_usd": {
+        "low": 1,
+        "high": 25
+      },
       "platform_primary": "eBay",
       "platform_secondary": "Mercari",
       "comp_query_template": "rae dunn {model}",
@@ -585,11 +1034,16 @@
       "category": "vintage_figurine",
       "tier": 2,
       "models": [
-        "Lenox limited edition", "Lenox figurine",
-        "Lenox china collection", "Lenox Disney",
-        "Lenox Carousel", "Lenox Heritage",
-        "Lenox Christmas", "Lenox crystal",
-        "Lenox Princess", "Lenox bone china",
+        "Lenox limited edition",
+        "Lenox figurine",
+        "Lenox china collection",
+        "Lenox Disney",
+        "Lenox Carousel",
+        "Lenox Heritage",
+        "Lenox Christmas",
+        "Lenox crystal",
+        "Lenox Princess",
+        "Lenox bone china",
         "Lenox Made in USA"
       ],
       "era_markers": [
@@ -599,11 +1053,26 @@
         "Hand-painted detailing on premium figurines"
       ],
       "comp_ranges_usd": [
-        {"item": "Lenox Carousel limited edition figurine", "low": 100, "high": 350},
-        {"item": "Lenox Disney figurine", "low": 80, "high": 280},
-        {"item": "Standard Lenox bone china piece", "low": 30, "high": 120}
+        {
+          "item": "Lenox Carousel limited edition figurine",
+          "low": 100,
+          "high": 350
+        },
+        {
+          "item": "Lenox Disney figurine",
+          "low": 80,
+          "high": 280
+        },
+        {
+          "item": "Standard Lenox bone china piece",
+          "low": 30,
+          "high": 120
+        }
       ],
-      "target_buy_usd": {"low": 3, "high": 30},
+      "target_buy_usd": {
+        "low": 3,
+        "high": 30
+      },
       "platform_primary": "eBay",
       "platform_secondary": "Replacements.com",
       "comp_query_template": "lenox {model}",
@@ -615,13 +1084,21 @@
       "category": "premium_crystal",
       "tier": 1,
       "models": [
-        "Steuben crystal", "Steuben glass", "Steuben sculpture",
-        "Steuben Corning", "Steuben hand cooler",
-        "Waterford crystal", "Waterford Lismore",
-        "Waterford Marquis", "Waterford Alana",
-        "Waterford Colleen", "Waterford limited",
-        "Waterford bowl", "Waterford vase",
-        "Waterford bell", "Waterford ornament"
+        "Steuben crystal",
+        "Steuben glass",
+        "Steuben sculpture",
+        "Steuben Corning",
+        "Steuben hand cooler",
+        "Waterford crystal",
+        "Waterford Lismore",
+        "Waterford Marquis",
+        "Waterford Alana",
+        "Waterford Colleen",
+        "Waterford limited",
+        "Waterford bowl",
+        "Waterford vase",
+        "Waterford bell",
+        "Waterford ornament"
       ],
       "era_markers": [
         "Steuben S signature etched into base",
@@ -630,12 +1107,31 @@
         "Original presentation box + paperwork"
       ],
       "comp_ranges_usd": [
-        {"item": "Steuben hand cooler / sculpture", "low": 280, "high": 1500},
-        {"item": "Waterford Lismore set (8 pcs)", "low": 280, "high": 800},
-        {"item": "Waterford Lismore individual stem", "low": 50, "high": 160},
-        {"item": "Waterford bowl / vase Made in Ireland", "low": 130, "high": 480}
+        {
+          "item": "Steuben hand cooler / sculpture",
+          "low": 280,
+          "high": 1500
+        },
+        {
+          "item": "Waterford Lismore set (8 pcs)",
+          "low": 280,
+          "high": 800
+        },
+        {
+          "item": "Waterford Lismore individual stem",
+          "low": 50,
+          "high": 160
+        },
+        {
+          "item": "Waterford bowl / vase Made in Ireland",
+          "low": 130,
+          "high": 480
+        }
       ],
-      "target_buy_usd": {"low": 8, "high": 130},
+      "target_buy_usd": {
+        "low": 8,
+        "high": 130
+      },
       "platform_primary": "eBay",
       "platform_secondary": "Replacements.com",
       "comp_query_template": "{brand} {pattern}",
@@ -647,11 +1143,16 @@
       "category": "vintage_figurine",
       "tier": 1,
       "models": [
-        "Belleek", "Belleek China",
-        "Belleek Ireland", "Belleek Parian",
-        "Belleek shamrock", "Belleek basket",
-        "Belleek figurine", "Belleek vase",
-        "Belleek tea set", "Belleek harp"
+        "Belleek",
+        "Belleek China",
+        "Belleek Ireland",
+        "Belleek Parian",
+        "Belleek shamrock",
+        "Belleek basket",
+        "Belleek figurine",
+        "Belleek vase",
+        "Belleek tea set",
+        "Belleek harp"
       ],
       "era_markers": [
         "Belleek harp / tower mark on bottom (mark identifies era 1857-present)",
@@ -661,11 +1162,26 @@
         "Gold mark (1980+) = standard production"
       ],
       "comp_ranges_usd": [
-        {"item": "Black-mark Belleek (pre-1955) basket", "low": 280, "high": 900},
-        {"item": "Green-mark Belleek (1955-80)", "low": 130, "high": 400},
-        {"item": "Gold-mark Belleek standard", "low": 60, "high": 180}
+        {
+          "item": "Black-mark Belleek (pre-1955) basket",
+          "low": 280,
+          "high": 900
+        },
+        {
+          "item": "Green-mark Belleek (1955-80)",
+          "low": 130,
+          "high": 400
+        },
+        {
+          "item": "Gold-mark Belleek standard",
+          "low": 60,
+          "high": 180
+        }
       ],
-      "target_buy_usd": {"low": 5, "high": 80},
+      "target_buy_usd": {
+        "low": 5,
+        "high": 80
+      },
       "platform_primary": "eBay",
       "platform_secondary": null,
       "comp_query_template": "belleek {item}",
@@ -678,13 +1194,20 @@
       "category": "vintage_toys",
       "tier": 2,
       "models": [
-        "Lionel train", "Lionel postwar", "Lionel prewar",
-        "Lionel O scale", "Lionel O gauge",
-        "Lionel locomotive", "Lionel set",
-        "Lionel Hudson", "Lionel Berkshire",
-        "Marx train", "Marx tin litho",
+        "Lionel train",
+        "Lionel postwar",
+        "Lionel prewar",
+        "Lionel O scale",
+        "Lionel O gauge",
+        "Lionel locomotive",
+        "Lionel set",
+        "Lionel Hudson",
+        "Lionel Berkshire",
+        "Marx train",
+        "Marx tin litho",
         "American Flyer train",
-        "Lionel No.", "Lionel boxcar"
+        "Lionel No.",
+        "Lionel boxcar"
       ],
       "era_markers": [
         "Lionel branding stamped on engine / boxcar",
@@ -694,17 +1217,278 @@
         "Standard Gauge (large) vs O Gauge (medium) vs HO (small)"
       ],
       "comp_ranges_usd": [
-        {"item": "Lionel postwar set complete with box", "low": 280, "high": 900},
-        {"item": "Prewar Lionel locomotive", "low": 200, "high": 1500},
-        {"item": "Individual Lionel boxcar postwar", "low": 25, "high": 100},
-        {"item": "Marx tin litho train pieces", "low": 30, "high": 130}
+        {
+          "item": "Lionel postwar set complete with box",
+          "low": 280,
+          "high": 900
+        },
+        {
+          "item": "Prewar Lionel locomotive",
+          "low": 200,
+          "high": 1500
+        },
+        {
+          "item": "Individual Lionel boxcar postwar",
+          "low": 25,
+          "high": 100
+        },
+        {
+          "item": "Marx tin litho train pieces",
+          "low": 30,
+          "high": 130
+        }
       ],
-      "target_buy_usd": {"low": 3, "high": 80},
+      "target_buy_usd": {
+        "low": 3,
+        "high": 80
+      },
       "platform_primary": "eBay",
       "platform_secondary": null,
       "comp_query_template": "lionel {model}",
       "ship_class": "small_box",
       "notes": "Lionel postwar (1945-69) is the dominant collector market. Iconic locomotives like the Hudson + Berkshire steam engines have huge premium. Marx is mid-tier vs Lionel. American Flyer is third-tier. Watch for repainted / refurbished pieces — collectors want original paint."
+    },
+    {
+      "brand": "Jim Shore Disney Traditions",
+      "category": "disney_figurine",
+      "tier": 2,
+      "models": [
+        "Jim Shore",
+        "Jim Shore Disney",
+        "Jim Shore Disney Traditions",
+        "Disney Traditions",
+        "Disney Traditions figurine",
+        "Enesco Jim Shore",
+        "Jim Shore Mickey",
+        "Jim Shore Minnie",
+        "Jim Shore Ariel",
+        "Jim Shore Belle",
+        "Jim Shore Cinderella",
+        "Jim Shore Tinker Bell",
+        "Jim Shore Stitch",
+        "Jim Shore Winnie the Pooh",
+        "Jim Shore Eeyore",
+        "Jim Shore Nightmare Before Christmas",
+        "Jim Shore Maleficent",
+        "Jim Shore Snow White",
+        "Jim Shore Elsa",
+        "Jim Shore Moana",
+        "Jim Shore Alice in Wonderland",
+        "Jim Shore Lion King",
+        "Jim Shore Beauty and the Beast",
+        "Jim Shore Toy Story",
+        "Jim Shore Peter Pan",
+        "Jim Shore Pinocchio",
+        "Jim Shore Dumbo",
+        "Jim Shore Bambi",
+        "Jim Shore Lady and the Tramp",
+        "Jim Shore Heartwood Creek",
+        "Heartwood Creek",
+        "Jim Shore Peanuts",
+        "Jim Shore Grinch"
+      ],
+      "era_markers": [
+        "Jim Shore signature + quilted / rosemaling folk-art pattern",
+        "Enesco 'Disney Traditions' foil sticker or backstamp on the base",
+        "Original box + hangtag adds ~30% to resale",
+        "Retired / anniversary / large-format pieces command 2-4x the common ones"
+      ],
+      "comp_ranges_usd": [
+        {
+          "item": "Common Disney Traditions figurine (boxed)",
+          "low": 30,
+          "high": 70
+        },
+        {
+          "item": "Large / retired / anniversary piece",
+          "low": 70,
+          "high": 200
+        },
+        {
+          "item": "Rare LE / grail (Hollow Log Nativity, big castles)",
+          "low": 150,
+          "high": 400
+        }
+      ],
+      "target_buy_usd": {
+        "low": 3,
+        "high": 30
+      },
+      "platform_primary": "eBay",
+      "platform_secondary": "Facebook Marketplace",
+      "comp_query_template": "jim shore disney {character} {title}",
+      "ship_class": "small_box",
+      "notes": "The most LIQUID collectible-figurine lane — huge active buyer base. Disney Traditions is the flagship, but ALL Jim Shore lines (Heartwood Creek folk art, Peanuts, Grinch) resell. Box + hangtag matters; comp by the specific character + piece title.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Disney Showcase / Couture de Force",
+      "category": "disney_figurine",
+      "tier": 2,
+      "models": [
+        "Disney Showcase",
+        "Couture de Force",
+        "Disney Couture de Force",
+        "Disney Showcase Collection",
+        "Disney Showcase Couture",
+        "Enesco Disney Showcase",
+        "Couture de Force Ariel",
+        "Couture de Force Belle",
+        "Couture de Force Cinderella",
+        "Couture de Force Elsa",
+        "Couture de Force Jasmine",
+        "Couture de Force Rapunzel",
+        "Couture de Force Tiana",
+        "Couture de Force Snow White",
+        "Couture de Force Aurora",
+        "Couture de Force Mulan",
+        "Couture de Force Maleficent",
+        "Couture de Force Tinker Bell",
+        "Disney Showcase Ariel",
+        "Disney Showcase Belle",
+        "Disney Showcase princess",
+        "Disney Masquerade figurine",
+        "Disney Botanical figurine"
+      ],
+      "era_markers": [
+        "Glossy jewel-toned finish with glitter / gem accents (NOT matte)",
+        "Enesco 7-digit item number on the box (600xxxx / 4xxxxxx)",
+        "'Couture de Force' or 'Disney Showcase' on the box / COA",
+        "Retired sculpts (Masquerade, Botanical) trade at a premium"
+      ],
+      "comp_ranges_usd": [
+        {
+          "item": "Standard Couture de Force / Disney Showcase (boxed)",
+          "low": 45,
+          "high": 100
+        },
+        {
+          "item": "Retired / Masquerade / large piece",
+          "low": 90,
+          "high": 200
+        }
+      ],
+      "target_buy_usd": {
+        "low": 3,
+        "high": 35
+      },
+      "platform_primary": "eBay",
+      "platform_secondary": "Mercari",
+      "comp_query_template": "disney showcase couture de force {character} {number}",
+      "ship_class": "small_box",
+      "notes": "The elegant, glittered Enesco line — OFTEN mislabeled 'WDCC' by auctioneers because it looks premium. Identify by the GLOSSY jewel-tone finish + Enesco item number, and comp as 'Disney Showcase / Couture de Force <character>', NOT WDCC, or the comps go wide-spread. Box + COA matters.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Walt Disney Classics Collection (WDCC)",
+      "category": "disney_figurine",
+      "tier": 2,
+      "models": [
+        "WDCC",
+        "Walt Disney Classics Collection",
+        "Walt Disney Classics",
+        "Disney Classics Collection figurine",
+        "WDCC figurine",
+        "WDCC Ariel",
+        "WDCC Belle",
+        "WDCC Cinderella",
+        "WDCC Snow White",
+        "WDCC Tinker Bell",
+        "WDCC Mickey",
+        "WDCC Pinocchio",
+        "WDCC Alice in Wonderland",
+        "WDCC Peter Pan",
+        "WDCC Bambi",
+        "WDCC Lady and the Tramp",
+        "WDCC 101 Dalmatians",
+        "WDCC Fantasia",
+        "WDCC Sleeping Beauty",
+        "WDCC Lion King",
+        "WDCC Jungle Book"
+      ],
+      "_disqualifiers": [
+        "vhs",
+        "dvd",
+        "blu-ray",
+        "bluray",
+        "laserdisc",
+        "video cassette",
+        "movie collection dvd",
+        "dvd box set",
+        "book collection"
+      ],
+      "era_markers": [
+        "Matte fine-porcelain look (NOT glossy) — understated, museum-quality",
+        "WDCC backstamp + numbered on the base",
+        "COA / title plaque + original box critical to value",
+        "Value swings HUGELY by sculpt — ~$40 common to $300+ rare LE"
+      ],
+      "comp_ranges_usd": [
+        {
+          "item": "Common WDCC (boxed w/ COA)",
+          "low": 40,
+          "high": 100
+        },
+        {
+          "item": "Sought-after / LE / large sculpt",
+          "low": 120,
+          "high": 400
+        }
+      ],
+      "target_buy_usd": {
+        "low": 3,
+        "high": 35
+      },
+      "platform_primary": "eBay",
+      "platform_secondary": "Facebook Marketplace",
+      "comp_query_template": "WDCC {character} {title}",
+      "ship_class": "small_box",
+      "notes": "TRUE WDCC (matte porcelain, museum-style) — value depends ENTIRELY on the specific sculpt, so comps run wide-spread and it flags manual-check by design; always ID the exact piece before bidding high. Auctioneers routinely mislabel glossy Enesco Disney Showcase pieces as 'WDCC' — matte = real WDCC, glossy = Enesco. Media (VHS/DVD) disqualified.",
+      "condition_critical": true
+    },
+    {
+      "brand": "Grand Jester Studios Disney",
+      "category": "disney_figurine",
+      "tier": 2,
+      "models": [
+        "Grand Jester Studios",
+        "Grand Jester Disney",
+        "Disney Grand Jester",
+        "Grand Jester bust",
+        "Grand Jester Mickey",
+        "Grand Jester Stitch",
+        "Grand Jester Maleficent",
+        "Grand Jester villains",
+        "Grand Jester Nightmare Before Christmas",
+        "Grand Jester Jack Skellington"
+      ],
+      "era_markers": [
+        "Sleek vinyl / resin busts + statues, numbered LE",
+        "Enesco Grand Jester Studios backstamp",
+        "Limited-edition numbering drives the premium"
+      ],
+      "comp_ranges_usd": [
+        {
+          "item": "Grand Jester bust / figure (boxed)",
+          "low": 30,
+          "high": 90
+        },
+        {
+          "item": "Low-numbered LE / retired",
+          "low": 80,
+          "high": 200
+        }
+      ],
+      "target_buy_usd": {
+        "low": 3,
+        "high": 30
+      },
+      "platform_primary": "eBay",
+      "platform_secondary": "Mercari",
+      "comp_query_template": "grand jester studios disney {character}",
+      "ship_class": "small_box",
+      "notes": "Enesco's Grand Jester Studios — sleek Disney busts / statues, often LE-numbered. Villains + Nightmare Before Christmas pieces are the strongest sellers.",
+      "condition_critical": true
     }
   ],
   "platform_notes": {
