@@ -313,6 +313,56 @@ def detect_fashion_jewelry(title: Optional[str],
 
 
 # ---------------------------------------------------------------------
+# Fake / counterfeit Pokémon-card detector (TEXT tier).
+#
+# Bootleg Pokémon cards flood auction liquidation lots. They usually carry
+# an HONEST title ("Pokemon Charizard Holo") — so they classify as a
+# collectible, skip the audit, and comp against REAL card prices, inflating
+# resale until a $2 bootleg looks like a $300 buy. This text tier catches
+# the ones that DO name themselves (proxy / custom / orica / fan-made) plus
+# the gold-plated "metal card" novelties. The photo-only fakes (wrong holo,
+# off-center, bootleg back) are caught by the Gemini vision tier — see
+# vision_enrich.assess_pokemon_authenticity. Gated on Pokémon context so
+# "custom" / "gold plated" on unrelated lots can't false-positive.
+# ---------------------------------------------------------------------
+_POKEMON_CONTEXT_RE = re.compile(
+    r"\b(?:pok[eé]mon|pikachu|charizard|booster\s*box|booster\s*pack|"
+    r"\btcg\b|trading\s*card\s*game)\b",
+    re.IGNORECASE,
+)
+_FAKE_POKEMON_PATTERNS = [
+    ("proxy / custom / fan-made card", re.compile(
+        r"\b(?:proxy|orica|custom\s*(?:made\s*)?card|custom\s*pok[eé]mon|"
+        r"fan[\s-]?made|fanmade|not\s*(?:an?\s*)?official|unofficial|"
+        r"bootleg|reproduction|novelty\s*card|replica\s*card)\b",
+        re.IGNORECASE)),
+    ("gold-plated / metal novelty (not a real card)", re.compile(
+        r"\b(?:gold[\s-]*plated|gold[\s-]*metal|metal[\s-]*plated|"
+        r"stainless[\s-]*steel\s*(?:pok[eé]mon|card))\b",
+        re.IGNORECASE)),
+]
+
+
+def detect_fake_pokemon(title: Optional[str],
+                        description: Optional[str] = None
+                        ) -> Optional[str]:
+    """Return a fake-Pokémon-card label, or None.
+
+    TEXT tier only — the explicit self-identifying fakes and the gold-metal
+    novelties. Returns the FIRST matched label so the UI can surface what
+    tripped the flag. Only fires when the lot reads as Pokémon-related, so
+    a "custom" or "gold plated" on some other lot can't false-positive.
+    """
+    haystack = " ".join(filter(None, [title or "", description or ""]))
+    if not haystack or not _POKEMON_CONTEXT_RE.search(haystack):
+        return None
+    for label, pattern in _FAKE_POKEMON_PATTERNS:
+        if pattern.search(haystack):
+            return label
+    return None
+
+
+# ---------------------------------------------------------------------
 # Drop-ship-channel signature — broader than fashion-jewelry detection.
 # Used at the AUCTION level to flag whole auctions whose lots are
 # overwhelmingly Chinese SEO-spam product (DOTEFFIL silver-plated

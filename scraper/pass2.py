@@ -9,7 +9,7 @@ import pandas as pd
 
 from .config_loader import load_config
 from .pricecharting import classify_for_pricecharting
-from .auth_check import detect_fashion_jewelry
+from .auth_check import detect_fashion_jewelry, detect_fake_pokemon
 
 # Re-check pickup-only language at audit time in case the auction was loaded
 # from cache (where logistics_ease was computed with an older, narrower regex).
@@ -211,6 +211,60 @@ _GEMINI_OUTPUT_SCHEMA = {
     "required": ["verdict", "confidence", "reason"],
     "propertyOrdering": ["verdict", "confidence", "reason"],
 }
+
+
+# --- Pokémon card authenticity (vision tier) ---
+# Bootleg cards carry honest titles, classify as collectibles, skip the
+# audit, and would comp against real-card prices. This vision pass reads
+# the photo for fake tells and red-flags confident fakes so they never
+# comp. Deliberately conservative — a too-small/blurry photo returns
+# authentic=true (never flags a fake on uncertainty), so legit cards
+# aren't punished.
+_CARD_AUTH_SYSTEM_PROMPT = """You authenticate Pokémon trading cards from a single auction photo. Decide whether the card(s) shown are AUTHENTIC official Pokémon TCG cards or FAKE (proxy / bootleg / counterfeit / custom / gold-metal novelty).
+
+Fake tells: wrong or blurry card back, off-center or crooked printing, pixelated / low-res text or art, non-standard holo or foil pattern, wrong fonts, missing or incorrect copyright line, gold-metal or plastic novelty cards, 'GX' / 'V' / 'VMAX' branding on cards from eras that never had it, energy-symbol errors, or a bulk lot of obviously reprinted commons.
+
+Rules:
+- Only call a card FAKE when you can SEE a concrete tell on an actual card.
+- If the photo shows Pokémon MERCHANDISE that is not a trading card (plush, blanket, toy, figure, mug, clothing, sealed video game), it is NOT fake — return authentic=true. 'Fake' applies ONLY to counterfeit trading cards.
+- If the photo is too small, blurry, or angled to judge, return authentic=true with LOW confidence — never flag a fake on uncertainty.
+- Graded slabs (PSA / BGS / CGC) are authentic.
+
+Return JSON: authentic (boolean = false ONLY for a counterfeit CARD), confidence (0-100), reason (<=90 chars — name the tell, or why it looks genuine / not-a-card)."""
+
+_CARD_AUTH_OUTPUT_SCHEMA = {  # Claude flavor
+    "type": "object",
+    "properties": {
+        "authentic": {"type": "boolean",
+                      "description": "true if a genuine official Pokémon card."},
+        "confidence": {"type": "number", "description": "0-100."},
+        "reason": {"type": "string", "description": "Under 90 chars."},
+    },
+    "required": ["authentic", "confidence", "reason"],
+    "additionalProperties": False,
+}
+_CARD_AUTH_GEMINI_SCHEMA = {  # Gemini flavor (no additionalProperties)
+    "type": "object",
+    "properties": {
+        "authentic": {"type": "boolean",
+                      "description": "true if a genuine official Pokémon card."},
+        "confidence": {"type": "number", "description": "0-100."},
+        "reason": {"type": "string", "description": "Under 90 chars."},
+    },
+    "required": ["authentic", "confidence", "reason"],
+    "propertyOrdering": ["authentic", "confidence", "reason"],
+}
+
+# Routes a collectible lot to the card-authenticity vision check: needs
+# BOTH a Pokémon reference AND card context, so Pokémon plush / blankets /
+# toys (which classify_for_pricecharting over-claims as 'tcg') don't get
+# sent to the card check and mislabeled.
+_POKEMON_LOT_RE = re.compile(r"\b(?:pok[eé]mon|pikachu|charizard)\b", re.IGNORECASE)
+_CARD_CONTEXT_RE = re.compile(
+    r"\b(?:cards?|holo(?:graphic)?|tcg|psa|bgs|cgc|graded|booster|promo|"
+    r"blister|1st\s*edition|first\s*edition|reverse\s*holo|base\s*set|"
+    r"full\s*art|secret\s*rare|ex|gx|vmax|vstar|\bv\b)\b",
+    re.IGNORECASE)
 
 
 _SYSTEM_PROMPT = """You evaluate auction lot descriptions and photos and classify each item's condition. You will be given either a text description or an image of a single auction lot, and must return a JSON object with the verdict, a confidence score, and a brief reason.
@@ -663,6 +717,63 @@ class Phase2Scraper:
         except Exception:
             return None
 
+    def _assess_card_authenticity(self, thumbnail_url: str):
+        """Vision check: is this Pokémon card authentic or a fake/bootleg?
+
+        Routes to the same provider as the audit (Gemini or Claude).
+        Returns {authentic: bool, confidence: float, reason: str} or None
+        on any failure (no provider, download fail, parse error). Callers
+        treat None as 'couldn't check — leave the lot alone'.
+        """
+        provider = self._image_provider()
+        if not provider or not thumbnail_url:
+            return None
+        img_bytes, media_type = self._download_thumbnail(thumbnail_url)
+        if img_bytes is None:
+            return None
+        _user = ("Is this an authentic Pokémon card or a fake / bootleg? "
+                 "Return JSON per the schema.")
+        data = None
+        try:
+            if provider == "gemini":
+                from scraper.vision_provider import gemini_vision_json
+                data = gemini_vision_json(
+                    api_key=self.gemini_api_key, model=self.gemini_model,
+                    system_prompt=_CARD_AUTH_SYSTEM_PROMPT,
+                    image_bytes=img_bytes, media_type=media_type,
+                    user_text=_user, response_schema=_CARD_AUTH_GEMINI_SCHEMA)
+            elif self.client is not None:
+                import base64 as _b64
+                b64 = _b64.standard_b64encode(img_bytes).decode("ascii")
+                resp = self.client.messages.create(
+                    model=self.model_name, max_tokens=200,
+                    system=_CARD_AUTH_SYSTEM_PROMPT,
+                    messages=[{"role": "user", "content": [
+                        {"type": "image", "source": {
+                            "type": "base64", "media_type": media_type,
+                            "data": b64}},
+                        {"type": "text", "text": _user},
+                    ]}],
+                    output_config={"format": {
+                        "type": "json_schema",
+                        "schema": _CARD_AUTH_OUTPUT_SCHEMA}})
+                text = next(
+                    (b.text for b in resp.content if b.type == "text"), "")
+                data = json.loads(text) if text else None
+        except Exception:
+            return None
+        if not data or "authentic" not in data:
+            return None
+        try:
+            conf = float(data.get("confidence", 60) or 60)
+        except (TypeError, ValueError):
+            conf = 60.0
+        return {
+            "authentic": bool(data.get("authentic")),
+            "confidence": conf,
+            "reason": str(data.get("reason") or "")[:90],
+        }
+
     def analyze_condition(self, description_text: str) -> dict:
         """Single-description classification — keyword pass, then text API.
 
@@ -746,6 +857,8 @@ class Phase2Scraper:
         collectible_count = 0
         empty_count = 0
         fashion_jewelry_count = 0
+        fake_pokemon_count = 0
+        card_auth_pending = []   # [(i, thumbnail_url), ...] pokemon cards
 
         for i, (t, d, thumb, log) in enumerate(
             zip(titles, descs, thumbs, logistics)
@@ -768,6 +881,11 @@ class Phase2Scraper:
                 None if (is_hard or is_collectible)
                 else detect_fashion_jewelry(t, d)
             )
+            # Fake-Pokémon check runs BEFORE the collectible skip — a
+            # bootleg card classifies as a collectible (tcg) and would
+            # otherwise sail straight to comps against real-card prices.
+            # Text tier here; the vision tier flags photo-only fakes.
+            fake_pokemon = (None if is_hard else detect_fake_pokemon(t, d))
             if is_hard:
                 verdicts[i] = "Unshippable (HARD logistics)"
                 confidences[i] = 100.0
@@ -775,6 +893,13 @@ class Phase2Scraper:
                 sources[i] = "skip_hard"
                 skip_indices.add(i)
                 hard_count += 1
+            elif fake_pokemon is not None:
+                verdicts[i] = f"Likely fake Pokémon: {fake_pokemon}"
+                confidences[i] = 100.0
+                red_flags[i] = True
+                sources[i] = "fake_pokemon"
+                skip_indices.add(i)
+                fake_pokemon_count += 1
             elif is_collectible:
                 # Collectibles pass straight through to comps; the AI's
                 # risk labels don't apply when condition is encoded as a
@@ -785,6 +910,13 @@ class Phase2Scraper:
                 sources[i] = "skip_collectible"
                 skip_indices.add(i)
                 collectible_count += 1
+                # Pokémon cards get a photo authenticity check (Step 4b)
+                # before they comp — bootlegs have honest titles and would
+                # otherwise comp against real-card prices. Require card
+                # context so plush / blankets / toys aren't sent here.
+                if (thumbs[i] and _POKEMON_LOT_RE.search(t)
+                        and _CARD_CONTEXT_RE.search(t)):
+                    card_auth_pending.append((i, thumbs[i]))
             elif jewelry_match is not None:
                 verdicts[i] = (
                     f"Fashion jewelry: {jewelry_match}"
@@ -937,6 +1069,36 @@ class Phase2Scraper:
             _emit_progress()
             _emit_live()
 
+        # --- Step 4b: Pokémon card authenticity (vision) ---
+        # Bootleg cards classify as collectibles and skip the audit → they'd
+        # comp against real-card prices. Vision-check the pokemon ones; a
+        # CONFIDENT fake gets red-flagged so it never comps. A None/uncertain
+        # result leaves the lot as-is (skip_collectible → comps), so a blurry
+        # photo never punishes a genuine card.
+        if card_auth_pending and self._image_provider() is not None:
+            _ca_workers = max(1, int(batch_size or 8))
+            with ThreadPoolExecutor(max_workers=_ca_workers) as _cx:
+                _cfuts = {
+                    _cx.submit(self._assess_card_authenticity, _thumb): _i
+                    for _i, _thumb in card_auth_pending
+                }
+                for _cf in as_completed(_cfuts):
+                    _i = _cfuts[_cf]
+                    try:
+                        _res = _cf.result()
+                    except Exception:
+                        _res = None
+                    if (_res and not _res.get("authentic", True)
+                            and _res.get("confidence", 0) >= 55):
+                        verdicts[_i] = (
+                            f"Likely fake Pokémon (photo): "
+                            f"{_res.get('reason', '')}"
+                        )
+                        confidences[_i] = float(_res.get("confidence", 60))
+                        red_flags[_i] = True
+                        sources[_i] = "fake_pokemon_vision"
+                        fake_pokemon_count += 1
+
         if progress_callback:
             progress_callback(total, total)
 
@@ -964,6 +1126,7 @@ class Phase2Scraper:
         out.attrs['audit_skipped_collectible'] = collectible_count
         out.attrs['audit_skipped_empty'] = empty_count
         out.attrs['audit_fashion_jewelry'] = fashion_jewelry_count
+        out.attrs['audit_fake_pokemon'] = fake_pokemon_count
         out.attrs['audit_keyword_hits'] = keyword_hits
         out.attrs['audit_text_api_calls'] = text_api_count
         out.attrs['audit_image_api_calls'] = image_api_count

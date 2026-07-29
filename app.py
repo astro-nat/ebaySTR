@@ -225,6 +225,8 @@ from scraper.auth_check import (
     merge_results as _auth_merge_results,
     detect_stylized_replica as _detect_stylized_replica,
     is_dropship_lot as _is_dropship_lot,
+    detect_fashion_jewelry as _detect_fashion_jewelry,
+    detect_fake_pokemon as _detect_fake_pokemon,
 )
 
 
@@ -4769,6 +4771,17 @@ def _qualifies_for_audit_skip(row) -> bool:
     desc = str(row.get('description') or '')
     haystack = f"{title} {desc}"
     if _AUDIT_SKIP_RED_FLAG_PATTERN.search(haystack):
+        return False
+    # Fraud/synthetic detectors must NOT be bypassed by the BOLO fast path.
+    # A tier-1 BOLO match (e.g. "Sterling silver") can still be a synthetic-
+    # gemstone piece ("76.80 CTW Yellow Sapphire" — 76 ct natural is
+    # impossible) or a fake — those need the audit red-flag, not a free
+    # "Looks good" pass to comps. detect_fashion_jewelry carries the
+    # synthetic-stone + carat heuristics; detect_fake_pokemon the bootleg
+    # signals. Either hit → fall through to the real audit, which flags it.
+    if _detect_fashion_jewelry(title, desc) is not None:
+        return False
+    if _detect_fake_pokemon(title, desc) is not None:
         return False
     return True
 
