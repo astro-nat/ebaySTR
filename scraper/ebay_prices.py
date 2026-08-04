@@ -11,6 +11,39 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
 
 
+def _nan_safe_str(v) -> str:
+    """str(v) with NaN/None/pd.NA collapsed to ''.
+
+    DataFrame-sourced values are NaN-capable, and NaN is TRUTHY — so
+    `row.get('enriched_title') or row.get('title')` returns NaN
+    instead of falling through, and str(NaN) == 'nan' silently
+    poisons queries/URLs. Confirmed crash path 7/11: cache-merged
+    frames carry NaN enriched_title for uncached lots → NaN reached
+    title.lower() in the PC classifier → AttributeError aborted the
+    whole comps batch.
+    """
+    if v is None:
+        return ''
+    try:
+        if pd.isna(v):
+            return ''
+    except (TypeError, ValueError):
+        pass
+    return str(v)
+
+
+class _CompPriceList(list):
+    """A list of comp prices that also reports relevance-filter stats.
+
+    Behaves exactly like list[float] for existing callers; the lookup
+    flow reads `.relevance_dropped` to annotate price_source when
+    off-topic comps were discarded. Per-call instance → thread-safe
+    under the comp ThreadPoolExecutor (unlike an attribute on the
+    shared EbayPriceLookup instance).
+    """
+    relevance_dropped = 0
+
+
 # Title-specificity markers — when present in a lot title, single-comp
 # catalog matches (PriceCharting / GoCollect, count=1) are usually
 # trustworthy because the title carries enough info to disambiguate the
@@ -43,6 +76,39 @@ def _has_title_specificity(title: str) -> bool:
     return any(p.search(title) for p in _TITLE_SPECIFICITY_MARKERS)
 
 
+# Title markers signaling new-in-box / sealed / never-used condition.
+# These lots sit at the HIGH end of comp distributions — applying the
+# Q1-anchored variance cap drags resale down to used-comp territory,
+# under-pricing NOS items by 50-80%. Hill Country 5/21: Henckels Zwilling
+# 8pc Steak Knife Set NOS scored profit -$5 with $45 capped resale; real
+# NOS Zwilling steak sets clear $80-180.
+_NOS_PATTERNS = (
+    re.compile(r"\bN\.?O\.?S\.?\b", re.IGNORECASE),
+    re.compile(r"\bnew\s+old\s+stock\b", re.IGNORECASE),
+    re.compile(r"\bMIB\b", re.IGNORECASE),
+    re.compile(r"\bNIB\b", re.IGNORECASE),
+    re.compile(r"\bM\.?I\.?S\.?B\.?\b", re.IGNORECASE),  # MISB: mint in sealed box
+    re.compile(r"\bsealed\b", re.IGNORECASE),
+    re.compile(r"\bunopened\b", re.IGNORECASE),
+    re.compile(r"\bnew\s+in\s+(?:box|package|pkg)\b", re.IGNORECASE),
+    re.compile(r"\bfactory[\s-]?sealed\b", re.IGNORECASE),
+    re.compile(r"\bbrand[\s-]?new\b", re.IGNORECASE),
+    re.compile(r"\bdeadstock\b", re.IGNORECASE),
+)
+
+
+def _has_nos_marker(title: str) -> bool:
+    """True when the title signals new-in-box / sealed / NOS condition.
+
+    Used to short-circuit the wide-spread variance cap — NOS lots
+    belong in the high-end of the comp distribution, so anchoring to
+    Q1 mis-prices them by a factor of 2-3×.
+    """
+    if not title:
+        return False
+    return any(p.search(title) for p in _NOS_PATTERNS)
+
+
 class EbayPriceLookup:
     # Class-level scrape stats. Updated by _scrape_ebay_sold_prices on
     # every call. Read by the UI after a comp run finishes so the user
@@ -51,21 +117,21 @@ class EbayPriceLookup:
     # this, the silent fall-through to the eBay-Browse-API "active
     # listings" path looks like normal data when in fact the entire
     # sold-history pipeline is dead.
-    # NOTE: Mercari integration was removed; counters retained only
-    # for eBay/ScrapingBee.
+    # NOTE: Mercari + ScrapingBee integrations removed; counters trimmed.
     _scrape_stats = {
         'ebay_sold_attempts': 0,
         'ebay_sold_blocked': 0,
         'ebay_sold_success': 0,
-        # ScrapingBee usage tracking — surface in the UI so the user
-        # knows how many credits a comp run burned.
-        'scrapingbee_calls': 0,
-        'scrapingbee_credits': 0,
-        # Quota / auth failures — counted separately so the UI can
-        # show a specific "your ScrapingBee plan is exhausted"
-        # message instead of the generic "scraper blocked" warning.
-        'scrapingbee_auth_fail': 0,
-        'scrapingbee_quota_fail': 0,
+        # Off-topic comps discarded by the relevance filter (comp
+        # title doesn't contain the query's terms). High counts mean
+        # eBay's keyword match is drifting away from the lot titles.
+        'relevance_dropped': 0,
+        # SoldComps API (paid eBay sold-data provider) — the primary
+        # sold-comp source now that eBay captcha-blocks the direct scrape.
+        'soldcomps_calls': 0,
+        'soldcomps_hits': 0,        # calls that returned >= 1 sold item
+        'soldcomps_auth_fail': 0,   # 401/403 — bad key
+        'soldcomps_quota_fail': 0,  # 429 — monthly request cap hit
     }
 
     @classmethod
@@ -81,9 +147,10 @@ class EbayPriceLookup:
         return dict(cls._scrape_stats)
 
     def __init__(self, app_id: str, cert_id: str, pricecharting=None,
-                 scrapingbee_key: Optional[str] = None,
-                 gocollect=None,
-                 mercari_enabled: bool = False):
+                 soldcomps_key: Optional[str] = None,
+                 gocollect=None,   # deprecated no-op — account never approved
+                 mercari_enabled: bool = False,
+                 **_ignored):      # swallows a legacy scrapingbee_key= call
         """eBay-only price lookup, optionally augmented with PriceCharting.
 
         Args:
@@ -93,33 +160,34 @@ class EbayPriceLookup:
                 PriceCharting lookup BEFORE the eBay scrape. PC's
                 aggregated sold data is materially better for these niches.
                 Pass None (or omit) to disable.
-            scrapingbee_key: Optional ScrapingBee API key. When set, the
-                eBay-sold scrape routes through their rotating-
-                residential-proxy API (~10 credits each) instead of
-                direct httpx.get. Direct requests get 403'd from most
-                non-residential IPs, so without this key the sold-history
-                pipeline is effectively dead and prices fall through to
-                eBay's Browse-API active listings. None disables proxying
-                — direct request, current behavior preserved.
+            soldcomps_key: SoldComps API key — the primary sold-comp source.
             mercari_enabled: Deprecated/no-op. Mercari integration has
                 been removed; this parameter is retained only for
                 signature compatibility with existing call sites.
+
+        NOTE: ScrapingBee was removed 7/2026 (subscription cancelled). A
+        legacy `scrapingbee_key=` kwarg is accepted and ignored via
+        **_ignored so existing call sites don't break.
         """
         self.app_id = app_id
         self.cert_id = cert_id
         self.pricecharting = pricecharting
-        self.scrapingbee_key = scrapingbee_key
+        # SoldComps API key — primary sold-comp source (real eBay sold
+        # data via https://sold-comps.com). eBay now captcha-blocks the
+        # direct sold-listings scrape, so this is how we get true sold
+        # prices; the old scrape is kept only as a fallback. Per-instance
+        # cache so repeated identical queries in one run cost one request.
+        self.soldcomps_key = soldcomps_key or None
+        self._soldcomps_cache: dict = {}
         # Mercari integration removed; flag retained as no-op for
         # backward compatibility with existing call sites.
         self.mercari_enabled = False
-        # GoCollect: curated CGC/BGS-graded comic prices. Tried FIRST
-        # for graded comic lots — its grade-specific data outperforms
-        # both PriceCharting (which matches at the series level, not
-        # the grade level) and the eBay-sold scrape (which contaminates
-        # results with modern reprints for rare keys). Pass None to
-        # disable; module-level enabled flag also short-circuits when
-        # the daily quota is exhausted.
-        self.gocollect = gocollect
+        # GoCollect integration removed 7/6 — the API-access
+        # application was rejected, so the lookup tier never had a
+        # working key. The constructor arg is retained as a no-op for
+        # signature compat; graded comics now route through
+        # PriceCharting + the eBay-sold scrape like everything else.
+        self.gocollect = None
         self._token: Optional[str] = None
         # Guard token fetch under parallel workers — avoids redundant OAuth calls
         self._token_lock = threading.Lock()
@@ -242,62 +310,96 @@ class EbayPriceLookup:
         return [p for p in prices if lo <= p <= hi]
 
     def _proxied_get(self, target_url: str, params: dict, timeout: float = 30):
-        """Route a GET through ScrapingBee when configured, else direct.
+        """Direct HTTP GET (ScrapingBee removed 7/2026).
 
-        Returns the response object (or None on transport failure).
-        ScrapingBee charges ~10 credits per request with premium proxy
-        (which is what eBay requires) — that's ~10,000 lookups per
-        100k-credit Freelance plan. Without a key this falls back
-        to the direct httpx.get path that eBay tends to 403.
+        Returns the response object (or None on transport failure). eBay
+        tends to 403 direct requests, but sold comps now come from the
+        SoldComps API and STR falls back to the free Browse-API demand
+        score — so this direct path is only a last-ditch attempt, not the
+        primary comp source it once was.
         """
-        if self.scrapingbee_key:
-            # Build the full target URL with its params, then hand it to
-            # ScrapingBee. block_resources=true skips images/css/fonts
-            # — speeds up the response and saves bandwidth on their end.
-            target_with_params = str(httpx.URL(target_url, params=params))
-            sb_params = {
-                "api_key": self.scrapingbee_key,
-                "url": target_with_params,
-                "premium_proxy": "true",   # eBay needs residential IPs
-                "country_code": "us",
-                "block_resources": "true",
-            }
-            try:
-                resp = httpx.get(
-                    "https://app.scrapingbee.com/api/v1/",
-                    params=sb_params,
-                    timeout=timeout,
-                )
-                # Track usage so the UI can show "you spent N credits".
-                # The Spb-cost header reports per-request credit cost.
-                cost = int(resp.headers.get('Spb-cost', 0) or 0)
-                type(self)._scrape_stats['scrapingbee_calls'] += 1
-                type(self)._scrape_stats['scrapingbee_credits'] += cost
-                # Detect ScrapingBee-side failures separately from
-                # downstream eBay blocks so the UI can show a targeted
-                # error: 401 = bad key OR plan exhausted; 402 is
-                # sometimes used for billing failures.
-                if resp.status_code in (401, 402):
-                    body_lower = (resp.text or '').lower()[:200]
-                    if 'limit reached' in body_lower or 'quota' in body_lower:
-                        type(self)._scrape_stats['scrapingbee_quota_fail'] += 1
-                    else:
-                        type(self)._scrape_stats['scrapingbee_auth_fail'] += 1
-                return resp
-            except Exception:
-                return None
-
-        # No key configured — direct request (gets 403'd on eBay).
         try:
             session = self._get_scrape_session()
             return session.get(target_url, params=params, timeout=timeout)
         except Exception:
             return None
 
-    def _scrape_ebay_sold_prices(self, query: str, max_prices: int = 30) -> list:
-        """Scrape actual sold prices from eBay's sold listings page.
+    # --- Comp-relevance filtering ------------------------------------
+    # eBay's keyword search is permissive: "Notebook Paper & Cards"
+    # (a real Longview lot) returned 21 trading-card listings in a
+    # tight $136-147 band — consistently priced, consistently the
+    # WRONG product, and invisible to the variance detector. The fix
+    # is to keep the comp TITLES during scraping and require each comp
+    # to actually contain the query's terms.
+    _RELEVANCE_STOPWORDS = frozenset({
+        'the', 'and', 'for', 'with', 'of', 'to', 'in', 'on', 'a', 'an',
+        'by', 'or', 'new', 'used', 'set', 'size',
+    })
 
-        Returns a list of sold prices (float). Empty list if scraping fails.
+    @classmethod
+    def _relevance_tokens(cls, text: str) -> list:
+        """Lowercased alnum tokens (len >= 3) minus stopwords."""
+        return [
+            t for t in re.findall(r'[a-z0-9]{3,}', (text or '').lower())
+            if t not in cls._RELEVANCE_STOPWORDS
+        ]
+
+    # Bulk-listing indicators. When the COMP title screams "big
+    # collection" but the QUERY doesn't, the comp is a quantity
+    # mismatch: a 3-car diecast lot comping against 50-car crate
+    # listings (7/12: "MAISTO EXPLORER, MAJORETTE COBRA, TC NASCAR"
+    # — three ~$10 cars — drew 3 collection comps at $125-150 and
+    # A-graded at $150 resale).
+    _BULK_TITLE_RE = re.compile(
+        r"\b(?:lot\s+of\s+\d+|\d{2,}\s*(?:pcs?|pieces?|cars?|count)\b|"
+        r"collection|bundle|huge\s+lot|large\s+lot|case\s+of|"
+        r"wholesale\s+lot|dealer\s+lot|estate\s+lot)\b",
+        re.IGNORECASE,
+    )
+
+    @classmethod
+    def _quantity_mismatch(cls, query: str, comp_title: str) -> bool:
+        """True when the comp is a bulk listing but the query isn't
+        (or vice versa) — those prices describe a different amount of
+        stuff and poison the median in either direction."""
+        if not comp_title:
+            return False
+        q_bulk = bool(cls._BULK_TITLE_RE.search(query or ''))
+        c_bulk = bool(cls._BULK_TITLE_RE.search(comp_title))
+        return q_bulk != c_bulk
+
+    @classmethod
+    def _comp_is_relevant(cls, query_tokens: list, comp_title: str) -> bool:
+        """True when the comp title contains >= 50% of the query's tokens.
+
+        Prefix matching per token ('lantern' hits 'lanterns'). Comps
+        with no title (price-only legacy markup) are treated as
+        relevant — no information is not negative information.
+        """
+        if not query_tokens:
+            return True
+        if not comp_title:
+            return True
+        comp_tokens = cls._relevance_tokens(comp_title)
+        if not comp_tokens:
+            return True
+        hits = 0
+        for q in query_tokens:
+            if any(c.startswith(q) or q.startswith(c) for c in comp_tokens):
+                hits += 1
+        need = max(1, -(-len(query_tokens) // 2))  # ceil(n/2)
+        return hits >= need
+
+    def _scrape_ebay_sold_listings(self, query: str,
+                                   max_prices: int = 30) -> list:
+        """Scrape (price, title) pairs from eBay's sold-listings page.
+
+        Handles three markup generations observed in production:
+          1. su-item-card (mid-2026)  — per-card title + price
+          2. s-card__price (early 2026) — price spans only (no title)
+          3. s-item__price (legacy)     — price spans only (no title)
+        Titles are None for generations 2-3; the relevance filter
+        passes those through unchecked.
         """
         type(self)._scrape_stats['ebay_sold_attempts'] += 1
         params = {
@@ -314,52 +416,100 @@ class EbayPriceLookup:
             )
             if resp is None:
                 return []
-            # 403 / very-short body = anti-bot block, not "no results".
-            # Tracking this separately so the UI can warn the user.
-            if resp.status_code in (403, 429) or len(resp.text) < 500:
+            _txt = resp.text or ''
+            _low = _txt.lower()
+            # Does the page actually contain listing markup? (any markup
+            # generation). If not, it's not a results page.
+            _has_listings = (
+                'su-item-card' in _txt
+                or 's-item__price' in _txt
+                or 's-card__price' in _txt
+            )
+            # 403 / very-short body = classic anti-bot block. NEW (7/2026):
+            # eBay now serves a FULL-SIZE captcha / "verify yourself" /
+            # sign-in interstitial (HTTP 200, 40KB+) on the sold-listings
+            # endpoint — it sails past the tiny-body check and looks like
+            # "0 results", silently poisoning every comp with the active-
+            # listing fallback. Detect the challenge page explicitly:
+            # listing markup ABSENT and a challenge marker PRESENT.
+            _is_challenge = not _has_listings and (
+                'pardon our interruption' in _low
+                or 'enter the characters you see' in _low
+                or 'please verify yourself' in _low
+                or 'checking your browser' in _low
+                or ('captcha' in _low and 'signin' in _low)
+            )
+            if (resp.status_code in (403, 429)
+                    or len(_txt) < 500
+                    or _is_challenge):
                 type(self)._scrape_stats['ebay_sold_blocked'] += 1
                 return []
-            if resp.status_code != 200 or len(resp.text) < 1000:
+            if resp.status_code != 200 or len(_txt) < 1000:
                 return []
 
             html = resp.text
+            pairs = []  # (price: float, title: str|None)
 
-            # Extract prices. eBay redesigned their search page in 2026
-            # — the price class became `s-card__price` (with various
-            # su-styled-text modifiers) instead of the older
-            # `s-item__price`. Try both patterns so the parser keeps
-            # working if eBay rolls back or different pages still use
-            # the old markup.
-            prices = []
+            def _parse_price(text):
+                m = re.search(r'\$([\d,]+(?:\.\d{2})?)', text)
+                if not m:
+                    return None
+                try:
+                    p = float(m.group(1).replace(",", ""))
+                except ValueError:
+                    return None
+                return p if 0.99 < p < 50000 else None
 
-            # NEW (2026) markup. Example block:
-            #   <span class="su-styled-text positive bold large-1
-            #                s-card__price">$20.00</span>
-            # 'strikethrough' variants are crossed-out original prices
-            # — the actual sold price is the non-strikethrough sibling.
-            new_blocks = re.findall(
-                r'class="([^"]*s-card__price[^"]*)"[^>]*>([^<]+)</span>',
-                html,
-            )
-            for class_str, content in new_blocks:
-                if 'strikethrough' in class_str:
-                    continue
-                if ' to ' in content.lower():
-                    continue
-                m = re.search(r'\$([\d,]+(?:\.\d{2})?)', content)
-                if m:
-                    try:
-                        p = float(m.group(1).replace(",", ""))
-                        if 0.99 < p < 50000:
-                            prices.append(p)
-                    except ValueError:
-                        pass
-                if len(prices) >= max_prices:
-                    break
+            # GEN 1 (mid-2026): one <div class="su-item-card s-item-card">
+            # per listing; title in a nested span under the
+            # su-item-card__title link, price in su-item-card__price.
+            # eBay pads the top of results with fake "Shop on eBay"
+            # placeholder cards ($20.00) — skipped by title match.
+            cards = re.split(r'<div class="su-item-card s-item-card"', html)
+            if len(cards) > 1:
+                title_re = re.compile(
+                    r'su-item-card__title.*?<span[^>]*>([^<]{5,250})</span>',
+                    re.DOTALL,
+                )
+                price_re = re.compile(
+                    r'su-item-card__price[^>]*>([^<]+)<'
+                )
+                for card in cards[1:]:
+                    chunk = card[:6000]
+                    tm = title_re.search(chunk)
+                    title = tm.group(1).strip() if tm else None
+                    if title and title.lower() == 'shop on ebay':
+                        continue
+                    pm = price_re.search(chunk)
+                    if not pm or ' to ' in pm.group(1).lower():
+                        continue
+                    p = _parse_price(pm.group(1))
+                    if p is not None:
+                        pairs.append((p, title))
+                    if len(pairs) >= max_prices:
+                        break
 
-            # LEGACY (pre-2026) markup. Only run if the new pattern
-            # found nothing — some result pages might lag.
-            if not prices:
+            # GEN 2 (early 2026): s-card__price spans. Price-only —
+            # titles aren't reliably adjacent in this markup.
+            # 'strikethrough' variants are crossed-out original prices.
+            if not pairs:
+                new_blocks = re.findall(
+                    r'class="([^"]*s-card__price[^"]*)"[^>]*>([^<]+)</span>',
+                    html,
+                )
+                for class_str, content in new_blocks:
+                    if 'strikethrough' in class_str:
+                        continue
+                    if ' to ' in content.lower():
+                        continue
+                    p = _parse_price(content)
+                    if p is not None:
+                        pairs.append((p, None))
+                    if len(pairs) >= max_prices:
+                        break
+
+            # GEN 3 (legacy): s-item__price spans, price-only.
+            if not pairs:
                 blocks = re.findall(
                     r'class="s-item__price"[^>]*>(.*?)</span>\s*</div>',
                     html,
@@ -373,27 +523,138 @@ class EbayPriceLookup:
                 for block in blocks:
                     if ' to ' in block.lower():
                         continue
-                    m = re.search(r'\$([\d,]+(?:\.\d{2})?)', block)
-                    if m:
-                        try:
-                            p = float(m.group(1).replace(",", ""))
-                            if 0.99 < p < 50000:
-                                prices.append(p)
-                        except ValueError:
-                            pass
-                    if len(prices) >= max_prices:
+                    p = _parse_price(block)
+                    if p is not None:
+                        pairs.append((p, None))
+                    if len(pairs) >= max_prices:
                         break
 
-            if prices:
+            if pairs:
                 type(self)._scrape_stats['ebay_sold_success'] += 1
-            return prices
+            return pairs
         except Exception:
             return []
+
+    def _fetch_soldcomps_pairs(self, query: str, count: int = 120):
+        """Fetch (price, title) sold pairs from the SoldComps API.
+
+        The paid drop-in replacement for the eBay sold-listings scrape
+        (which eBay now captcha-blocks). Returns a list of (float, str)
+        pairs, or None on any failure (no key, HTTP error, quota, parse).
+        Cached per query on the instance so repeated identical lookups in
+        one run cost a single API request.
+        """
+        if not self.soldcomps_key or not query:
+            return None
+        if query in self._soldcomps_cache:
+            return self._soldcomps_cache[query]
+        pairs = None
+        try:
+            # Explicit truststore SSL context — raw httpx.get trusts only
+            # certifi, which dies under Norton/corp TLS inspection. Build
+            # the client once per instance (same pattern as pass2/vision).
+            if getattr(self, '_sc_client', None) is None:
+                from scraper._ssl_compat import make_ssl_context
+                self._sc_client = httpx.Client(
+                    verify=make_ssl_context(), timeout=40,
+                )
+            type(self)._scrape_stats['soldcomps_calls'] += 1
+            resp = self._sc_client.get(
+                "https://api.sold-comps.com/v1/scrape",
+                headers={"Authorization": f"Bearer {self.soldcomps_key}"},
+                params={
+                    "keyword": query,
+                    "count": min(max(int(count), 1), 240),
+                    "daysToScrape": 90,
+                },
+            )
+            if resp.status_code == 200:
+                items = (resp.json() or {}).get("items") or []
+                out = []
+                for it in items:
+                    raw = it.get("soldPrice")
+                    try:
+                        p = float(str(raw).replace(",", "").replace("$", "").strip())
+                    except (TypeError, ValueError):
+                        continue
+                    if 0.99 < p < 50000:
+                        out.append((p, it.get("title") or ""))
+                pairs = out
+                if out:
+                    type(self)._scrape_stats['soldcomps_hits'] += 1
+            elif resp.status_code in (401, 403):
+                type(self)._scrape_stats['soldcomps_auth_fail'] += 1
+            elif resp.status_code == 429:
+                type(self)._scrape_stats['soldcomps_quota_fail'] += 1
+        except Exception:
+            pairs = None
+        self._soldcomps_cache[query] = pairs
+        return pairs
+
+    def _scrape_ebay_sold_prices(self, query: str, max_prices: int = 30) -> list:
+        """Get relevance-filtered sold prices for `query`.
+
+        Source priority: SoldComps API (real sold data — primary now that
+        eBay captcha-blocks the direct scrape) → the legacy eBay scrape as
+        fallback. Returns a _CompPriceList (a list subclass) of floats
+        whose `.relevance_dropped` reports how many comps were discarded
+        for not containing the query's terms, and whose `.sold_via`
+        records which source produced the data ('SoldComps' or 'eBay').
+        Callers that treat it as a plain list are unaffected.
+        """
+        sold_via = 'eBay'
+        pairs = None
+        if self.soldcomps_key:
+            # SoldComps is the authoritative sold-data source. If it returns
+            # nothing (quota hit or genuine no-match), do NOT fall back to
+            # the legacy eBay sold scrape — eBay captcha-blocks it, so it
+            # never returns data and only burns latency + ScrapingBee
+            # credits on a dead page. Let lookup_price_range drop straight
+            # to the free active-listing Browse API instead.
+            pairs = self._fetch_soldcomps_pairs(query, count=max(120, max_prices))
+            if pairs:
+                sold_via = 'SoldComps'
+        else:
+            # No SoldComps key configured — the (now usually blocked) scrape
+            # is the only sold path available; keep trying it.
+            pairs = self._scrape_ebay_sold_listings(query, max_prices=max_prices)
+        if pairs is None:
+            pairs = []
+        q_tokens = self._relevance_tokens(query)
+        kept = _CompPriceList()
+        dropped = 0
+        for price, title in pairs:
+            if (self._comp_is_relevant(q_tokens, title)
+                    and not self._quantity_mismatch(query, title)):
+                kept.append(price)
+            else:
+                dropped += 1
+        kept.relevance_dropped = dropped
+        kept.sold_via = sold_via
+        if dropped:
+            type(self)._scrape_stats['relevance_dropped'] = (
+                type(self)._scrape_stats.get('relevance_dropped', 0) + dropped
+            )
+        return kept
 
     # NOTE: Mercari sold-listings integration was removed. The previous
     # _scrape_mercari_sold_prices and _extract_mercari_prices helpers
     # have been deleted; the comp pipeline is now eBay-only (with
     # PriceCharting / GoCollect tiers preserved).
+
+    def fetch_amazon_price(self, url: str) -> Optional[float]:
+        """Disabled 7/2026 — always returns None.
+
+        This used to fetch Amazon's live buy-box price for liquidation
+        lots carrying a 'Retailer Product URL: amazon.com/dp/ASIN'. The
+        fetch only ever succeeded through ScrapingBee's residential
+        proxy (direct requests get 403'd from datacenter IPs). With the
+        ScrapingBee subscription cancelled there's no working transport,
+        so this is a no-op; the pipeline falls back to the auctioneer's
+        stated retail (soft-capped elsewhere). Retained so existing call
+        sites keep working without a signature change.
+        """
+        return None
 
     def _price_stats(self, prices: list) -> Optional[dict]:
         """Compute median, low (Q1), high (Q3) from a list of prices."""
@@ -427,8 +688,8 @@ class EbayPriceLookup:
         7-word query commonly returns zero, while the same first 3 words
         return hundreds. We stop as soon as we clear the ≥3 sold-comp bar.
 
-        ``pc_only=True`` restricts the lookup to GoCollect + PriceCharting
-        (curated catalogs only) and skips the eBay sold-listings scrape
+        ``pc_only=True`` restricts the lookup to PriceCharting
+        (curated catalog only) and skips the eBay sold-listings scrape
         entirely. Used for stylized/replica lots where eBay scraped
         comps would return authentic-brand contamination, but PC's
         catalog-keyed matching is safe — PC simply returns None for
@@ -449,25 +710,12 @@ class EbayPriceLookup:
             }
             or None if no data available.
         """
-        # Tier 1: GoCollect for professionally-graded comics. Their
-        # data is keyed by issue + specific grade so a 'Phantom Lady
-        # 17 CGC 4.0' lookup returns the actual graded fair-market
-        # value, not modern-reprint contamination from eBay or
-        # series-level averages from PriceCharting. Fires only when
-        # the title carries an explicit grading callout (CGC/BGS/SGC/
-        # CBCS/PSA + grade number).
-        if self.gocollect is not None and self.gocollect.enabled:
-            try:
-                gc_result = self.gocollect.lookup(title)
-                if gc_result is not None:
-                    return gc_result
-            except Exception:
-                pass  # Best-effort — never let GoCollect break the run
-
-        # Tier 2: PriceCharting for games / TCG / comics. Aggregated
+        # Tier 1: PriceCharting for games / TCG / comics. Aggregated
         # sold data, condition-normalized, canonical product ID.
-        # Strong on Pokemon/MTG/video games; weaker than GoCollect on
-        # graded comics specifically, hence the order.
+        # Strong on Pokemon/MTG/video games. (A GoCollect tier for
+        # graded comics used to sit above this — removed 7/6 when the
+        # API application was rejected; graded comics now comp via PC
+        # + the eBay-sold scrape.)
         if self.pricecharting is not None and self.pricecharting.enabled:
             try:
                 pc_result = self.pricecharting.lookup(title)
@@ -494,9 +742,19 @@ class EbayPriceLookup:
 
         for idx, query in enumerate(variants):
             ebay_prices = []
+            rel_dropped = 0
+            sold_via = 'eBay'
             try:
-                time.sleep(0.3)
+                # No inter-request sleep needed on the SoldComps path (it's
+                # an API, not a scrape); keep the polite delay only when
+                # falling back to the direct scrape.
+                if not self.soldcomps_key:
+                    time.sleep(0.3)
                 ebay_prices = self._scrape_ebay_sold_prices(query)
+                # Capture attrs BEFORE outlier filtering (which returns a
+                # plain list, losing them).
+                rel_dropped = getattr(ebay_prices, 'relevance_dropped', 0)
+                sold_via = getattr(ebay_prices, 'sold_via', 'eBay')
                 ebay_prices = self._filter_outliers(ebay_prices)
             except Exception:
                 ebay_prices = []
@@ -507,12 +765,18 @@ class EbayPriceLookup:
                 combined = self._filter_outliers(combined)
                 stats = self._price_stats(combined)
                 if stats:
-                    source = "sold (eBay)"
+                    source = f"sold ({sold_via})"
                     # Annotate source with the fallback level if we had to
                     # drop down — helps the user eyeball whether the comps
                     # were for the specific product vs a generic keyword.
                     if idx > 0:
                         source = f"{source} [short query]"
+                    # Surface how many off-topic comps the relevance
+                    # filter discarded — a high count means eBay's
+                    # keyword match drifted and the survivors deserve
+                    # a skeptical eye.
+                    if rel_dropped:
+                        source = f"{source} [{rel_dropped} off-topic dropped]"
                     return {
                         **stats,
                         "count": len(combined),
@@ -526,18 +790,24 @@ class EbayPriceLookup:
             # Remember the first variant that produced ANY comps so we can
             # surface at least a rough number if none hit the ≥3 bar.
             if combined and best_partial is None:
-                best_partial = (list(combined), list(ebay_prices), query)
+                best_partial = (
+                    list(combined), list(ebay_prices), query, rel_dropped,
+                    sold_via,
+                )
 
         # All sold-comp variants failed to clear ≥3. Use the best partial
         # if we have one (1-2 comps) before falling back to active listings.
         if best_partial is not None:
-            combined, ebay_prices, matched_q = best_partial
+            combined, ebay_prices, matched_q, rel_dropped, sold_via = best_partial
             stats = self._price_stats(combined)
             if stats:
+                source = f"sold (thin comps · {sold_via})"
+                if rel_dropped:
+                    source = f"{source} [{rel_dropped} off-topic dropped]"
                 return {
                     **stats,
                     "count": len(combined),
-                    "source": "sold (thin comps)",
+                    "source": source,
                     "ebay_count": len(ebay_prices),
                     # Mercari integration removed; zero-out for app.py compat.
                     "mercari_count": 0,
@@ -815,7 +1085,8 @@ class EbayPriceLookup:
             str_results = []
             source_counts: dict = {}
             for _, row in sample.iterrows():
-                title = row.get(title_col) or row.get('title', '')
+                title = (_nan_safe_str(row.get(title_col))
+                 or _nan_safe_str(row.get('title')))
                 res, src = self.lookup_str(title)
                 if res is not None:
                     str_results.append(res)
@@ -881,7 +1152,8 @@ class EbayPriceLookup:
         # Pre-extract titles + auction names so worker threads don't touch
         # pandas (which isn't thread-safe for concurrent .at assignments).
         titles = [
-            (row.get('enriched_title') or row.get('title', '') or '')
+            (_nan_safe_str(row.get('enriched_title'))
+                 or _nan_safe_str(row.get('title')))
             for _, row in df.iterrows()
         ]
         auctions = (
@@ -1087,18 +1359,29 @@ class EbayPriceLookup:
                     # eBay value $7-14, our prior 2.5×-low cap of $59
                     # was still 5× too high.
                     spread = high / low
-                    if spread > 10.0:
-                        cap_mult = 1.0
-                    elif spread > 5.0:
-                        cap_mult = 1.5
+                    # NOS / sealed / MIB exception: these lots belong
+                    # in the upper half of the comp distribution, not
+                    # anchored to Q1. Use the unmodified median (no
+                    # cap) since the wide-spread comes from mixing
+                    # used + new comps and the user's lot IS new.
+                    # Hill Country 5/21 Henckels Zwilling 8pc NOS:
+                    # capped to $45 → profit -$5; uncapped median ~$120
+                    # → profit ~$60.
+                    if _has_nos_marker(title):
+                        source = f"{source} ⚠ wide-spread (NOS floor)"
                     else:
-                        cap_mult = 2.5
-                    cap = round(cap_mult * low, 2)
-                    if median is not None and median > cap:
-                        median = cap
-                        source = f"{source} ⚠ wide-spread (capped)"
-                    else:
-                        source = f"{source} ⚠ wide-spread"
+                        if spread > 10.0:
+                            cap_mult = 1.0
+                        elif spread > 5.0:
+                            cap_mult = 1.5
+                        else:
+                            cap_mult = 2.5
+                        cap = round(cap_mult * low, 2)
+                        if median is not None and median > cap:
+                            median = cap
+                            source = f"{source} ⚠ wide-spread (capped)"
+                        else:
+                            source = f"{source} ⚠ wide-spread"
 
                 # ---- Single-comp catalog match ceiling ----
                 # PriceCharting / GoCollect catalog matches return count=1

@@ -33,6 +33,11 @@ from typing import Callable, Dict, List, Optional, Tuple
 import httpx
 import pandas as pd
 
+from scraper._ssl_compat import make_ssl_context
+
+# OS-native cert store bridge for Windows/AV-MITM environments.
+_HTTPX_VERIFY = make_ssl_context()
+
 
 # Words that add no signal to a product title — dropped when picking the
 # "most common terms" across image_search hits.
@@ -71,6 +76,73 @@ _CLAUDE_OUTPUT_SCHEMA = {
     },
     "required": ["title", "confident", "reason"],
     "additionalProperties": False,
+}
+
+# Same shape as _CLAUDE_OUTPUT_SCHEMA but Gemini-flavored: no
+# `additionalProperties` (Gemini rejects it) and an explicit
+# `propertyOrdering` so the JSON comes back in a stable order.
+_GEMINI_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "title": {
+            "type": "string",
+            "description": "eBay-searchable product title under 80 characters.",
+        },
+        "confident": {
+            "type": "boolean",
+            "description": (
+                "true only when brand AND model/specific product type are "
+                "identifiable. false for blurry, mixed-lot, or ambiguous photos."
+            ),
+        },
+        "reason": {
+            "type": "string",
+            "description": "Brief justification under 80 characters.",
+        },
+    },
+    "required": ["title", "confident", "reason"],
+    "propertyOrdering": ["title", "confident", "reason"],
+}
+
+# --- Targeted brand-confirmation tier (suspected-lane flow) ---
+# Used when the text gate flagged a lot as a SUSPECT for a proven lane
+# (e.g. "Disney backpack" → maybe a Loungefly). We don't want a generic
+# identify — we want a yes/no on the specific valuable brand, read from
+# the photo's tell (the Loungefly tag, the Ray-Ban etch). Empty brand ==
+# generic/unbranded == not a hit.
+_CONFIRM_SYSTEM_PROMPT = """You authenticate auction photos for a reseller. You are shown ONE photo of an item that MIGHT be a valuable brand-name piece. Identify the actual brand ONLY from what is VISIBLE in the photo — a logo, a sewn tag, an etched/printed mark, a model name, or an unmistakable branded design.
+
+Rules:
+- Do NOT infer a brand from the item type or the licensed character alone. A Disney backpack is only a Loungefly if you can see a Loungefly tag — otherwise it is a generic licensed bag.
+- If the specific brand mark is not visible, or you are unsure, the item is generic: return brand "".
+- "confident" is true ONLY when you can actually see the brand's mark in the photo.
+
+Return JSON: brand (the exact brand name, or "" if generic/unbranded/uncertain), confident (boolean), reason (under 80 chars — name what you saw)."""
+
+_CONFIRM_OUTPUT_SCHEMA = {  # Claude flavor (additionalProperties)
+    "type": "object",
+    "properties": {
+        "brand": {"type": "string",
+                  "description": "Exact brand name, or empty string if generic."},
+        "confident": {"type": "boolean",
+                      "description": "true only if the brand mark is visible."},
+        "reason": {"type": "string", "description": "Under 80 chars."},
+    },
+    "required": ["brand", "confident", "reason"],
+    "additionalProperties": False,
+}
+
+_CONFIRM_GEMINI_SCHEMA = {  # Gemini flavor (propertyOrdering, no additionalProperties)
+    "type": "object",
+    "properties": {
+        "brand": {"type": "string",
+                  "description": "Exact brand name, or empty string if generic."},
+        "confident": {"type": "boolean",
+                      "description": "true only if the brand mark is visible."},
+        "reason": {"type": "string", "description": "Under 80 chars."},
+    },
+    "required": ["brand", "confident", "reason"],
+    "propertyOrdering": ["brand", "confident", "reason"],
 }
 
 _CLAUDE_SYSTEM_PROMPT = """You identify products from auction-listing photos so they can be searched on eBay's marketplace. Given an image, produce the most specific eBay-searchable title you can.
@@ -136,16 +208,28 @@ class EbayImageEnricher:
     def __init__(self, app_id: str, cert_id: str,
                  hibid_user_agent: str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
                  anthropic_api_key: Optional[str] = None,
-                 anthropic_model: str = "claude-haiku-4-5"):
+                 anthropic_model: str = "claude-haiku-4-5",
+                 gemini_api_key: Optional[str] = None,
+                 gemini_model: str = "gemini-flash-lite-latest",
+                 vision_provider: str = "auto"):
         self.app_id = app_id
         self.cert_id = cert_id
         self.hibid_user_agent = hibid_user_agent
         self._token: Optional[str] = None
-        self._client = httpx.Client(timeout=30.0)
+        self._client = httpx.Client(timeout=30.0, verify=_HTTPX_VERIFY)
         # Claude vision config — fallback tier. None disables the fallback.
         self.anthropic_api_key = anthropic_api_key or None
         self.anthropic_model = anthropic_model
         self._anthropic_client = None  # lazy
+        # Gemini vision config — free-tier alternative to the Claude
+        # fallback. `vision_provider` picks which engine the fallback uses:
+        #   'claude'    → Claude only  (None if no Anthropic key)
+        #   'gemini'    → Gemini only  (None if no Google key)
+        #   'ebay_only' → skip the LLM fallback entirely
+        #   'auto'      → free first: Gemini if keyed, else Claude
+        self.gemini_api_key = gemini_api_key or None
+        self.gemini_model = gemini_model
+        self.vision_provider = (vision_provider or "auto").lower()
 
     # ------------------------------------------------------------------ auth
     def _get_token(self) -> str:
@@ -306,8 +390,13 @@ class EbayImageEnricher:
         if self._anthropic_client is None and self.anthropic_api_key:
             try:
                 import anthropic
+                import httpx
+                # Explicit truststore-backed SSL context — the SDK's
+                # default httpx client trusts only certifi, which dies
+                # under Norton/corp TLS inspection. Same fix as pass2.
                 self._anthropic_client = anthropic.Anthropic(
-                    api_key=self.anthropic_api_key
+                    api_key=self.anthropic_api_key,
+                    http_client=httpx.Client(verify=make_ssl_context()),
                 )
             except ImportError:
                 return None
@@ -392,6 +481,137 @@ class EbayImageEnricher:
         except Exception:
             return None
 
+    # ----------------------------------------------------- gemini vision tier
+    def _resolve_provider(self) -> Optional[str]:
+        """Pick the LLM fallback engine per `vision_provider`.
+
+        Explicit choices are strict: 'gemini' with no Google key returns
+        None (no silent, cost-incurring Claude fallback), and vice-versa.
+        'auto' prefers the free tier (Gemini) when a key is present.
+        Returns 'gemini', 'claude', or None (skip the LLM fallback).
+        """
+        p = self.vision_provider
+        if p == "ebay_only":
+            return None
+        if p == "gemini":
+            return "gemini" if self.gemini_api_key else None
+        if p == "claude":
+            return "claude" if self.anthropic_api_key else None
+        # auto
+        if self.gemini_api_key:
+            return "gemini"
+        if self.anthropic_api_key:
+            return "claude"
+        return None
+
+    def _gemini_identify(self, image_bytes: bytes,
+                         thumbnail_url: str = "") -> Optional[Dict]:
+        """Gemini twin of `_claude_identify` — same prompt, same output.
+
+        Returns {title, confidence (0.0-1.0), reason} or None on any
+        failure. Uses the shared, SSL-safe REST helper.
+        """
+        if not self.gemini_api_key or not image_bytes:
+            return None
+        from scraper.vision_provider import gemini_vision_json
+        data = gemini_vision_json(
+            api_key=self.gemini_api_key,
+            model=self.gemini_model,
+            system_prompt=_CLAUDE_SYSTEM_PROMPT,
+            image_bytes=image_bytes,
+            media_type=self._detect_media_type(thumbnail_url),
+            user_text=(
+                "Identify this product for an eBay search. "
+                "Return JSON per the schema."
+            ),
+            response_schema=_GEMINI_OUTPUT_SCHEMA,
+        )
+        if not data:
+            return None
+        title = (data.get("title") or "").strip()
+        if not title:
+            return None
+        if len(title) > 80:
+            title = title[:80].rsplit(" ", 1)[0]
+        return {
+            "title": title,
+            "confidence": 0.85 if data.get("confident") else 0.3,
+            "reason": (data.get("reason") or "")[:120],
+        }
+
+    def _claude_confirm(self, image_bytes: bytes, media_type: str,
+                        user_text: str) -> Optional[Dict]:
+        """Claude twin of the Gemini confirm call. Returns raw {brand,
+        confident, reason} dict or None."""
+        if not self.anthropic_client or not image_bytes:
+            return None
+        try:
+            b64 = base64.standard_b64encode(image_bytes).decode("ascii")
+            response = self.anthropic_client.messages.create(
+                model=self.anthropic_model,
+                max_tokens=200,
+                system=_CONFIRM_SYSTEM_PROMPT,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "source": {
+                            "type": "base64", "media_type": media_type,
+                            "data": b64}},
+                        {"type": "text", "text": user_text},
+                    ],
+                }],
+                output_config={"format": {
+                    "type": "json_schema", "schema": _CONFIRM_OUTPUT_SCHEMA}},
+            )
+            text = next(
+                (b.text for b in response.content if b.type == "text"), "")
+            return json.loads(text) if text else None
+        except Exception:
+            return None
+
+    def confirm_lane(self, thumbnail_url: str, label: str,
+                     brands: str, tell: str) -> Optional[Dict]:
+        """Confirm the brand of a suspected-lane lot from its photo.
+
+        Targeted yes/no on a specific valuable brand (vs the generic
+        identify in enrich_one). Returns:
+          {brand: str, confident: bool, reason: str, source: 'gemini'|'claude'}
+        with brand='' meaning generic/unbranded/uncertain, or None on any
+        failure (no provider, download fail, parse error). eBay's image
+        tier isn't used here — brand tells (a sewn Loungefly tag) don't
+        survive catalog matching; we go straight to the vision model.
+        """
+        provider = self._resolve_provider()
+        if provider is None:
+            return None
+        img = self._download_image(thumbnail_url)
+        if not img:
+            return None
+        media_type = self._detect_media_type(thumbnail_url)
+        user_text = (
+            f"This auction photo may be a {label}. Valuable brands to look "
+            f"for: {brands}. Only name a brand if you can actually SEE its "
+            f"mark in the photo — the tell is: {tell} Return JSON per the "
+            f"schema; brand \"\" if generic/unbranded/uncertain."
+        )
+        if provider == "gemini":
+            from scraper.vision_provider import gemini_vision_json
+            data = gemini_vision_json(
+                api_key=self.gemini_api_key, model=self.gemini_model,
+                system_prompt=_CONFIRM_SYSTEM_PROMPT, image_bytes=img,
+                media_type=media_type, user_text=user_text,
+                response_schema=_CONFIRM_GEMINI_SCHEMA)
+        else:  # claude
+            data = self._claude_confirm(img, media_type, user_text)
+        if not data:
+            return None
+        return {
+            "brand": (data.get("brand") or "").strip(),
+            "confident": bool(data.get("confident")),
+            "reason": (data.get("reason") or "")[:140],
+            "source": provider,
+        }
+
     # ------------------------------------------------------------ public API
     def enrich_one(self, thumbnail_url: str,
                    original_title: str = "") -> Dict:
@@ -455,30 +675,36 @@ class EbayImageEnricher:
         except Exception as e:
             ebay_failed_reason = f"{type(e).__name__}: {e}"
 
-        # --- Claude vision fallback ---
+        # --- LLM vision fallback (Gemini or Claude) ---
         # Triggers only when eBay didn't produce a confident match AND we
         # successfully downloaded the image. We pass the bytes (not the
-        # URL) because Anthropic's server-side fetcher can't reach
+        # URL) because neither provider's server-side fetcher can reach
         # HiBid's CDN — HiBid requires a Referer header.
+        _provider = self._resolve_provider()
         if (
             result["img_enriched_title"] is None
-            and self.anthropic_client is not None
+            and _provider is not None
             and img is not None
         ):
-            claude = self._claude_identify(img, thumbnail_url=thumbnail_url)
-            if claude is not None:
-                result["img_enriched_title"] = claude["title"]
-                result["img_confidence"] = claude["confidence"]
-                # Sentinel: 99 hits flags this as a Claude match for the
+            if _provider == "gemini":
+                ident = self._gemini_identify(img, thumbnail_url=thumbnail_url)
+            else:
+                # Touch the property so a missing SDK still lazy-warns once.
+                ident = (self._claude_identify(img, thumbnail_url=thumbnail_url)
+                         if self.anthropic_client is not None else None)
+            if ident is not None:
+                result["img_enriched_title"] = ident["title"]
+                result["img_confidence"] = ident["confidence"]
+                # Sentinel: 99 hits flags this as an LLM match for the
                 # promotion logic. Real eBay match counts top out around 8.
                 result["img_comp_count"] = 99
-                result["img_source"] = "claude"
-                # Surface Claude's reason in img_top_match when eBay had
+                result["img_source"] = _provider
+                # Surface the model's reason in img_top_match when eBay had
                 # no top match at all — gives the user a debug breadcrumb.
                 if not result["img_top_match"]:
-                    result["img_top_match"] = f"[Claude] {claude['reason']}"
+                    result["img_top_match"] = f"[{_provider}] {ident['reason']}"
             elif ebay_failed_reason:
-                result["img_error"] = f"{ebay_failed_reason}+claude_failed"
+                result["img_error"] = f"{ebay_failed_reason}+{_provider}_failed"
 
         if result["img_enriched_title"] is None and not result["img_error"]:
             result["img_error"] = ebay_failed_reason or "no_match"
@@ -551,8 +777,8 @@ def promote_image_titles(df: pd.DataFrame,
     Two acceptance paths:
       - eBay match: `img_source == 'ebay'` AND img_confidence ≥ min_confidence
         AND img_comp_count ≥ min_hits (need multiple coherent eBay hits).
-      - Claude match: `img_source == 'claude'` AND img_confidence ≥
-        min_confidence (Claude already self-reports confident=true/false,
+      - LLM match: `img_source` in {'claude', 'gemini'} AND img_confidence ≥
+        min_confidence (the model already self-reports confident=true/false,
         so the hit-count check doesn't apply).
     """
     df = df.copy()
@@ -571,8 +797,8 @@ def promote_image_titles(df: pd.DataFrame,
             & confidence
             & (df["img_comp_count"].fillna(0) >= min_hits)
         )
-        is_claude = (source == "claude") & confidence
-        accept = is_ebay | is_claude
+        is_llm = source.isin(["claude", "gemini"]) & confidence
+        accept = is_ebay | is_llm
     else:
         # Older DataFrames pre-Claude tier — fall back to old check.
         accept = confidence & (df["img_comp_count"].fillna(0) >= min_hits)

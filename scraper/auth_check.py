@@ -185,6 +185,23 @@ _FASHION_JEWELRY_PATTERNS: List[Tuple[str, re.Pattern]] = [
     # Chinese fashion-jewelry drop-shippers.
     ("'diamond moissanite'", re.compile(
         r"\bdiamond\s+moissanite\b", re.IGNORECASE)),
+    # Created / SIMULATED stones — jeweler boilerplate for FAKE stones
+    # in otherwise-precious-looking listings. Reads the DESCRIPTION,
+    # where the tell usually hides: the 7/23 scan had five "A/B"
+    # gemstone lots whose titles said only "3.70 Ct Marquise
+    # Engagement Ring" but whose descriptions said "Gemstones: created
+    # simulated" — comps then priced them against REAL diamonds ($810
+    # phantom profit). "created simulated" / "simulated <gem>" /
+    # "cubic zirconia" / "diamonique" are unambiguous simulants.
+    # DELIBERATELY EXCLUDES bare "lab grown/created diamond" — lab-grown
+    # diamonds are chemically real and hold genuine (lower) resale
+    # value; only simulants (glass/CZ) are the costume junk we skip.
+    ("created/simulated stone", re.compile(
+        r"\b(?:created\s+simulated|simulated\s+created)\b"
+        r"|\bsimulated\s+(?:diamond|sapphire|emerald|ruby|gemstone|stone)\b"
+        r"|\b(?:diamond|sapphire|emerald|ruby)\s+simulant\b"
+        r"|\bcubic\s+zirconia\b|\bdiamonique\b",
+        re.IGNORECASE)),
     # "[Color] gold over 925 / sterling / silver" — silver plated.
     ("gold-over-silver (plated)", re.compile(
         r"\b(?:white|yellow|rose)\s+gold\s+over\s+"
@@ -241,6 +258,22 @@ _FASHION_JEWELRY_PATTERNS: List[Tuple[str, re.Pattern]] = [
         re.IGNORECASE)),
 ]
 
+# Carat-weight-vs-stone extractor for the synthetic heuristic below.
+# Matches a weight adjacent (within ~40 chars) to an expensive-if-
+# natural stone, in either order. "emerald" is guarded against
+# "emerald cut" (a shape, not the stone). Groups: (1)=wt / (2)=stone
+# for weight-first; (3)=stone / (4)=wt for stone-first.
+_CARAT_STONE_RE = re.compile(
+    r"(\d{1,3}(?:\.\d{1,2})?)\s*(?:ct|ctw|tcw|cttw|carats?)\b"
+    r"[^.]{0,40}?\b(diamond|sapphire|emerald(?!\s*cut)|ruby)\b"
+    r"|\b(diamond|sapphire|emerald(?!\s*cut)|ruby)\b[^.]{0,40}?"
+    r"(\d{1,3}(?:\.\d{1,2})?)\s*(?:ct|ctw|tcw|cttw|carats?)\b",
+    re.IGNORECASE,
+)
+# Above this total carat weight, a natural diamond/sapphire/emerald/
+# ruby piece would be worth five figures — never a cheap estate lot.
+_SYNTH_CARAT_THRESHOLD = 25.0
+
 
 def detect_fashion_jewelry(title: Optional[str],
                            description: Optional[str] = None
@@ -258,6 +291,72 @@ def detect_fashion_jewelry(title: Optional[str],
     if not haystack:
         return None
     for label, pattern in _FASHION_JEWELRY_PATTERNS:
+        if pattern.search(haystack):
+            return label
+    # Implausible natural carat weight → almost-certainly synthetic even
+    # when the listing discloses nothing (7/23 scan: "76.80 CTW Yellow
+    # Sapphire Tennis Bracelet" said nothing fake in title OR desc, but
+    # 76 ct of natural sapphire would be a five-figure piece, never a
+    # $600 estate lot). Only the expensive-if-natural stones (diamond /
+    # sapphire / emerald / ruby) trip this — large NATURAL amethyst /
+    # citrine / topaz / quartz are common and cheap, so they're excluded.
+    # Threshold 25 CTW stays well clear of legit diamond tennis
+    # bracelets (typ. 2-10 CTW).
+    for m in _CARAT_STONE_RE.finditer(haystack):
+        _wt = m.group(1) or m.group(4)
+        try:
+            if float(_wt) >= _SYNTH_CARAT_THRESHOLD:
+                return f"implausible {_wt}ct natural stone (synthetic)"
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+# ---------------------------------------------------------------------
+# Fake / counterfeit Pokémon-card detector (TEXT tier).
+#
+# Bootleg Pokémon cards flood auction liquidation lots. They usually carry
+# an HONEST title ("Pokemon Charizard Holo") — so they classify as a
+# collectible, skip the audit, and comp against REAL card prices, inflating
+# resale until a $2 bootleg looks like a $300 buy. This text tier catches
+# the ones that DO name themselves (proxy / custom / orica / fan-made) plus
+# the gold-plated "metal card" novelties. The photo-only fakes (wrong holo,
+# off-center, bootleg back) are caught by the Gemini vision tier — see
+# vision_enrich.assess_pokemon_authenticity. Gated on Pokémon context so
+# "custom" / "gold plated" on unrelated lots can't false-positive.
+# ---------------------------------------------------------------------
+_POKEMON_CONTEXT_RE = re.compile(
+    r"\b(?:pok[eé]mon|pikachu|charizard|booster\s*box|booster\s*pack|"
+    r"\btcg\b|trading\s*card\s*game)\b",
+    re.IGNORECASE,
+)
+_FAKE_POKEMON_PATTERNS = [
+    ("proxy / custom / fan-made card", re.compile(
+        r"\b(?:proxy|orica|custom\s*(?:made\s*)?card|custom\s*pok[eé]mon|"
+        r"fan[\s-]?made|fanmade|not\s*(?:an?\s*)?official|unofficial|"
+        r"bootleg|reproduction|novelty\s*card|replica\s*card)\b",
+        re.IGNORECASE)),
+    ("gold-plated / metal novelty (not a real card)", re.compile(
+        r"\b(?:gold[\s-]*plated|gold[\s-]*metal|metal[\s-]*plated|"
+        r"stainless[\s-]*steel\s*(?:pok[eé]mon|card))\b",
+        re.IGNORECASE)),
+]
+
+
+def detect_fake_pokemon(title: Optional[str],
+                        description: Optional[str] = None
+                        ) -> Optional[str]:
+    """Return a fake-Pokémon-card label, or None.
+
+    TEXT tier only — the explicit self-identifying fakes and the gold-metal
+    novelties. Returns the FIRST matched label so the UI can surface what
+    tripped the flag. Only fires when the lot reads as Pokémon-related, so
+    a "custom" or "gold plated" on some other lot can't false-positive.
+    """
+    haystack = " ".join(filter(None, [title or "", description or ""]))
+    if not haystack or not _POKEMON_CONTEXT_RE.search(haystack):
+        return None
+    for label, pattern in _FAKE_POKEMON_PATTERNS:
         if pattern.search(haystack):
             return label
     return None
@@ -310,20 +409,58 @@ _DROPSHIP_LOT_PATTERNS = [
     re.compile(
         r"\b(?:DOTEFFIL|JIAYIQI|VRIUA|QIHE|MOSTYLE|EUQEE|RUIYUNS)\b",
         re.IGNORECASE),
+    # LotPop 7/8 signatures — AliExpress listing titles pasted verbatim.
+    # Start-of-title marketing leads: "New Original 925...", "Fit
+    # Original 925 Sterling Silver Charms" (Pandora-clone compat),
+    # "Fine 925 Sterling Silver Luxury...", "Hot 925...".
+    re.compile(
+        r"^\s*(?:New\s+Original|Fit(?:s)?\s+Original|Original\s+925|"
+        r"Fine\s+925\s+Sterling\s+Silver\s+(?:Luxury|Fashion)|"
+        r"Hot\s+925|Luxury\s+Vintage\s+Titanium)\b",
+        re.IGNORECASE),
+    # Noun-soup gift endings: "...for Women Wedding Party Jewelry Fine
+    # Pretty Holiday Gifts", "...Birthday Jewelry Gift Wholesale
+    # Direct Sales". Real auctioneers never write like this; the
+    # phrasing is SEO keyword-stuffing from marketplace exports.
+    re.compile(
+        r"\bfor\s+wom[ea]n\b[^.]{0,60}\b(?:wedding|party|birthday|"
+        r"anniversary|holiday)\b[^.]{0,40}\bgifts?\b",
+        re.IGNORECASE),
+    re.compile(r"\bwholesale\s+direct\s+sales\b", re.IGNORECASE),
+    # Karat-marked "gold plated" fashion jewelry (A2Z 7/12: "14K Gold
+    # Plated" birth-flower ring comped $439 against real-gold solds;
+    # actual value ~$5). Genuine gold lots never say "plated".
+    re.compile(
+        r"\b1[048]k\s+gold[\s-]+plated\b|\b2[24]k\s+gold[\s-]+plated\b",
+        re.IGNORECASE),
+    # Plated-steel posing as gold: "18K Gold ... Titanium Steel" /
+    # "Titanium Steel ... 24k gold" in either order.
+    re.compile(
+        r"\b(?:titanium|stainless)\s+steel\b[^.]{0,40}\b(?:10|14|18|22|24)k\b"
+        r"|\b(?:10|14|18|22|24)k\s+gold\b[^.]{0,40}\b(?:titanium|stainless)\s+steel\b",
+        re.IGNORECASE),
 ]
 
 
-def is_dropship_lot(title: Optional[str]) -> bool:
-    """True when a lot's title carries any drop-ship-channel signature.
+def is_dropship_lot(title: Optional[str],
+                    description: Optional[str] = None) -> bool:
+    """True when a lot's title/description carries a drop-ship signature.
 
     Run this against every lot title; aggregate the True-rate per
     auction to get a `dropship_pct`. Above ~30% the auction is almost
-    certainly a Chinese SEO-spam dumping ground.
+    certainly a Chinese SEO-spam dumping ground. The optional
+    description (first ~250 chars) catches listings whose keyword-
+    stuffed marketing copy continues past the title (LotPop pattern:
+    title is the product half, description is the "...for Women
+    Wedding Party Jewelry Gifts" half).
     """
-    if not title:
+    if not title and not description:
         return False
+    haystack = " ".join(filter(None, [
+        title or "", (description or "")[:250],
+    ]))
     for pattern in _DROPSHIP_LOT_PATTERNS:
-        if pattern.search(title):
+        if pattern.search(haystack):
             return True
     return False
 

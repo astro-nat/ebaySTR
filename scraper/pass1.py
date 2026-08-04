@@ -7,6 +7,13 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Optional
 
+from scraper._ssl_compat import make_ssl_context
+
+# Built once at import — handed to every httpx client in this module.
+# On Windows boxes with Norton/Kaspersky/corp-proxy TLS inspection, this
+# is a truststore-backed OS-native context; otherwise it's True (certifi).
+_HTTPX_VERIFY = make_ssl_context()
+
 
 # HiBid lot.lotState.timeLeft strings look like:
 #   "2d 5h 30m"  /  "5h 30m"  /  "30m 12s"  /  "Bidding Closed"
@@ -91,9 +98,171 @@ query AuctionMap($zip: String, $miles: Int, $searchText: String, $categoryId: Ca
 }
 """
 
+# Per-auction commercial terms, fetched by eventIds at Phase-1 time for
+# just the selected auctions (cheap — one call per 50 auctions).
+#   buyerPremium          — free-text, e.g. "10% Buyers Premium with Cash
+#                           & Check", "No Buyer's Premium", "18%"
+#   buyerPremiumRate      — structured multiplier, but UNRELIABLE: most
+#                           auctioneers leave it at 1 even when the text
+#                           says 19-22%. Only trusted when > 1.
+#   shippingAndPickupInfo — the "Shipping / Pick Up" section from the
+#                           auction page. Source for conditional-shipping
+#                           detection + shipping-cost hints.
+AUCTION_META_QUERY = """
+query AuctionMeta($eventIds: [Int!]) {
+  auctionMap(input: {zip: "", miles: 0, searchText: "", category: -1, filter: ALL, status: ALL, eventIds: $eventIds}) {
+    mapMarkers {
+      auction {
+        id
+        buyerPremium
+        buyerPremiumRate
+        shippingAndPickupInfo
+        termsAndConditions
+      }
+    }
+  }
+}
+"""
+
+# --- Buyer-premium text parsing -------------------------------------
+_BP_PCT_RE = re.compile(r"(\d{1,2}(?:\.\d{1,2})?)\s*%")
+_NO_BP_RE = re.compile(r"\bno\s+buyer'?s?\s+premium\b", re.IGNORECASE)
+
+
+def parse_buyer_premium_pct(text, rate=None):
+    """Parse a buyer-premium multiplier (1.10 for '10%') from HiBid data.
+
+    Precedence:
+      1. "No Buyer's Premium" text → 1.0
+      2. First percentage in the text → 1 + pct/100. When the text
+         lists cash vs card tiers ("10% with Cash & Check"), the first
+         (lower/cash) number wins — matches a cash-paying buyer.
+      3. buyerPremiumRate when > 1 (rate == 1 means "field not filled"
+         for most auctioneers, NOT "no premium" — 19% and 22% auctions
+         ship with rate=1).
+      4. None — caller falls back to the config default.
+    """
+    t = (text or "").strip()
+    if t:
+        if _NO_BP_RE.search(t):
+            return 1.0
+        m = _BP_PCT_RE.search(t)
+        if m:
+            pct = float(m.group(1))
+            if 0 <= pct <= 50:
+                return 1.0 + pct / 100.0
+    try:
+        r = float(rate or 0)
+        if r > 1.0:
+            return r
+    except (TypeError, ValueError):
+        pass
+    return None
+
+
+# Premium-from-terms fallback. Some auctioneers put only boilerplate
+# in buyerPremium ("BUYERS PREMIUM APPLIES TO ALL PURCHASES") and bury
+# the actual number in termsAndConditions ("ALL ITEMS HAVE A 10% (TEN
+# PERCENT) BUYERS PREMIUM AND 6% PA SALES TAX" — Johnston 752316).
+# The % must be ADJACENT to the words "buyer's premium" in either
+# order, so the 6% sales tax two clauses over doesn't get grabbed.
+_BP_NEAR_TERMS_RES = (
+    # "10% ... buyers premium" — percent first
+    re.compile(
+        r"(\d{1,2}(?:\.\d{1,2})?)\s*%[^%]{0,45}?buyer'?s?\s+premium",
+        re.IGNORECASE,
+    ),
+    # "buyers premium of 15%" — premium first
+    re.compile(
+        r"buyer'?s?\s+premium[^.%\n]{0,35}?(\d{1,2}(?:\.\d{1,2})?)\s*%",
+        re.IGNORECASE,
+    ),
+)
+
+
+def parse_premium_from_terms(terms_text):
+    """Extract a buyer-premium multiplier from termsAndConditions text.
+
+    Returns 1 + pct/100 or None. Strips HTML first (terms are often
+    rich text). Only fires on a % within ~45 chars of the phrase
+    "buyer(')s premium" so unrelated percentages (sales tax, card
+    fees) don't false-match.
+    """
+    if not terms_text:
+        return None
+    clean = re.sub(r"<[^>]+>", " ", str(terms_text))
+    clean = re.sub(r"\s+", " ", clean)
+    for pat in _BP_NEAR_TERMS_RES:
+        m = pat.search(clean)
+        if m:
+            try:
+                pct = float(m.group(1))
+            except (TypeError, ValueError):
+                continue
+            if 0 <= pct <= 50:
+                return 1.0 + pct / 100.0
+    return None
+
+
+# --- shippingAndPickupInfo parsing -----------------------------------
+_FREE_SHIP_RE = re.compile(r"free\s+(?:domestic\s+)?shipping", re.IGNORECASE)
+_USPS_PRIORITY_RE = re.compile(r"usps\s+priority", re.IGNORECASE)
+# Estimated auctioneer-shipped cost when terms mention USPS Priority
+# boxes but no dollar figure — medium flat-rate box + modest handling.
+USPS_PRIORITY_SHIP_ESTIMATE = 17.0
+# "Shipping is NOT available on all lots" / "contact us prior to
+# bidding to confirm shipping" style language → shipping is per-lot
+# conditional; the Ship/Local Pickup source classification is soft.
+_COND_SHIP_RE = re.compile(
+    r"not\s+available\s+(?:on|for)\s+all\s+(?:lots|items)"
+    r"|contact\s+[^.\n]{0,80}?(?:prior\s+to|before)\s+bidding"
+    r"|shipping\s+(?:available\s+)?on\s+select(?:ed)?\s+(?:lots|items)"
+    r"|some\s+(?:lots|items)\s+(?:cannot|can\s*not|won'?t)\s+be\s+shipped"
+    # "PLEASE DO NOT ASSUME ALL ITEMS ARE SHIPPABLE" (Johnston 752316)
+    r"|do\s+not\s+assume\s+all\s+(?:items|lots)\s+are\s+shippable"
+    r"|not\s+all\s+(?:items|lots)\s+(?:are\s+)?shippable"
+    # "email auctioneer with any/all shipping related questions"
+    r"|email\s+[^.\n]{0,40}?shipping\s+related\s+questions",
+    re.IGNORECASE,
+)
+_SHIP_DOLLAR_RE = re.compile(
+    r"ship\w*[^$\n]{0,40}\$\s*(\d{1,3}(?:\.\d{2})?)"
+    r"|\$\s*(\d{1,3}(?:\.\d{2})?)[^.\n]{0,30}ship",
+    re.IGNORECASE,
+)
+
+
+def parse_shipping_info(ship_text):
+    """Extract (cond_ship: bool, ship_hint: float|None) from the
+    auction's shippingAndPickupInfo blurb.
+
+    ship_hint precedence: free-shipping language → 0.0; explicit
+    dollar figure near 'ship' → that amount; USPS-Priority mention
+    → USPS_PRIORITY_SHIP_ESTIMATE; otherwise None (caller uses the
+    config default).
+    """
+    t = ship_text or ""
+    cond = bool(_COND_SHIP_RE.search(t))
+    hint = None
+    if _FREE_SHIP_RE.search(t):
+        hint = 0.0
+    else:
+        m = _SHIP_DOLLAR_RE.search(t)
+        if m:
+            try:
+                v = float(m.group(1) or m.group(2))
+                if 0.5 <= v <= 200:
+                    hint = v
+            except (TypeError, ValueError):
+                pass
+        if hint is None and _USPS_PRIORITY_RE.search(t):
+            hint = USPS_PRIORITY_SHIP_ESTIMATE
+    return cond, hint
+
+
 LOT_SEARCH_QUERY = """
-query LotSearch($auctionId: Int!, $pageNumber: Int!) {
-  lotSearch(input: {auctionId: $auctionId, searchText: ""}, pageNumber: $pageNumber) {
+query LotSearch($auctionId: Int!, $pageNumber: Int!, $searchText: String!) {
+  lotSearch(input: {auctionId: $auctionId, searchText: $searchText}, pageNumber: $pageNumber) {
     pagedResults {
       totalCount
       pageNumber
@@ -106,6 +275,7 @@ query LotSearch($auctionId: Int!, $pageNumber: Int!) {
         category { categoryName }
         lotState { highBid minBid bidCount status timeLeft }
         pictures { thumbnailLocation hdThumbnailLocation fullSizeLocation }
+        shippingOffered
       }
     }
   }
@@ -218,10 +388,64 @@ class Phase1Scraper:
 
         return "NEUTRAL"
 
-    def estimate_total_cost(self, bid: float) -> float:
-        """Estimate acquisition cost per item: bid + buyer premium."""
+    def estimate_total_cost(self, bid: float, premium_mult: float = None) -> float:
+        """Estimate acquisition cost per item: bid + buyer premium.
+
+        ``premium_mult`` is the per-auction multiplier parsed from
+        HiBid's buyerPremium text (1.10 for a 10% auction). When None
+        (auction meta unavailable / unparseable), falls back to the
+        config-wide default percentage.
+        """
+        if premium_mult is not None and premium_mult > 0:
+            return bid * premium_mult
         premium = bid * (self.buyer_premium_pct / 100.0)
         return bid + premium
+
+    async def fetch_auction_meta(self, client: httpx.AsyncClient,
+                                 auction_ids) -> Dict[int, Dict]:
+        """Fetch per-auction commercial terms (premium, shipping blurb).
+
+        Returns ``{auction_id: {premium_mult, cond_ship, ship_hint}}``.
+        Chunked at 50 ids per GraphQL call. Failures degrade to an
+        empty dict for the affected chunk — callers treat missing
+        auctions as "use config defaults", never as an error.
+        """
+        meta: Dict[int, Dict] = {}
+        ids = [int(a) for a in dict.fromkeys(auction_ids) if a]
+        for i in range(0, len(ids), 50):
+            chunk = ids[i:i + 50]
+            try:
+                data = await self._graphql(
+                    client, "AuctionMeta", AUCTION_META_QUERY,
+                    {"eventIds": chunk},
+                )
+            except Exception:
+                continue
+            markers = (data.get("auctionMap") or {}).get("mapMarkers") or []
+            for mk in markers:
+                a = mk.get("auction") or {}
+                aid = a.get("id")
+                if aid is None:
+                    continue
+                cond, hint = parse_shipping_info(
+                    a.get("shippingAndPickupInfo") or ""
+                )
+                premium_mult = parse_buyer_premium_pct(
+                    a.get("buyerPremium"), a.get("buyerPremiumRate")
+                )
+                if premium_mult is None:
+                    # buyerPremium had no number ("BUYERS PREMIUM
+                    # APPLIES TO ALL PURCHASES") — the actual % is
+                    # often buried in the terms text instead.
+                    premium_mult = parse_premium_from_terms(
+                        a.get("termsAndConditions")
+                    )
+                meta[int(aid)] = {
+                    "premium_mult": premium_mult,
+                    "cond_ship": cond,
+                    "ship_hint": hint,
+                }
+        return meta
 
     @staticmethod
     def _parse_estimate(raw: str):
@@ -249,12 +473,33 @@ class Phase1Scraper:
             "query": query,
             "variables": variables,
         }
-        response = await client.post(
-            self.graphql_url,
-            headers=self.headers,
-            json=payload,
-            timeout=self.timeout,
-        )
+        # Retry ladder with escalating timeouts. A single 100-lot page
+        # with heavy descriptions can exceed the base timeout on a slow
+        # HiBid evening, and with no retry ONE timeout used to kill an
+        # entire 800-lot auction fetch (user hit exactly this 7/12).
+        # Three attempts at 1x / 2x / 3x the configured timeout with a
+        # short backoff; transient transport hiccups (connection reset,
+        # DNS blip) retry the same way. Non-timeout HTTP errors still
+        # raise immediately below.
+        last_exc: Exception = None
+        for _attempt in range(3):
+            try:
+                response = await client.post(
+                    self.graphql_url,
+                    headers=self.headers,
+                    json=payload,
+                    timeout=self.timeout * (_attempt + 1),
+                )
+                break
+            except (httpx.TimeoutException, httpx.TransportError) as e:
+                last_exc = e
+                if _attempt < 2:
+                    await asyncio.sleep(1.5 * (_attempt + 1))
+        else:
+            raise RuntimeError(
+                f"HiBid GraphQL {operation} timed out after 3 attempts "
+                f"(final timeout {self.timeout * 3:.0f}s): {last_exc}"
+            )
         # Capture the body on error — a bare raise_for_status() swallows the
         # response text, and HiBid's 400s explain exactly what they dislike
         # (e.g. "pageSize exceeds maximum") in the body.
@@ -273,12 +518,19 @@ class Phase1Scraper:
             raise RuntimeError(f"GraphQL errors ({operation}): {data['errors']}")
         return data["data"]
 
-    async def fetch_auctions(self, client: httpx.AsyncClient, zip_code: str, radius: int) -> List[Dict]:
-        """Fetch auctions from HiBid. Use empty zip for nationwide."""
+    async def fetch_auctions(self, client: httpx.AsyncClient, zip_code: str, radius: int,
+                             search_text: str = "") -> List[Dict]:
+        """Fetch auctions from HiBid. Use empty zip for nationwide.
+
+        ``search_text`` searches HiBid's auction catalog server-side
+        (auction names + content) — powers the "find an auction by
+        name before running Discover" flow. Empty = full listing
+        (the discovery default).
+        """
         variables = {
             "zip": zip_code,
             "miles": radius,
-            "searchText": "",
+            "searchText": search_text or "",
             "categoryId": -1,
             "filter": "ALL",
             "status": "OPEN",
@@ -325,7 +577,14 @@ class Phase1Scraper:
                 # first lot's `timeLeft` and writes it back.
                 filtered.append(a)
                 continue
-            if now <= end_dt <= cutoff:
+            # Lower bound uses DATE comparison rather than timestamp:
+            # an auction whose end_dt is today at 3pm should still
+                # appear in the morning list AND in the late-afternoon
+            # list, even if we couldn't recover an exact closing time
+            # and assumed midnight. This protects against HiBid
+            # date-only payloads slipping past _resolve_auction_end's
+            # enrichment path.
+            if end_dt.date() >= now.date() and end_dt <= cutoff:
                 filtered.append(a)
         return filtered
 
@@ -345,7 +604,30 @@ class Phase1Scraper:
         date_end = a.get('date_end') or ''
         if date_end:
             try:
-                return datetime.fromisoformat(date_end.replace('Z', ''))
+                parsed_end = datetime.fromisoformat(date_end.replace('Z', ''))
+                # HiBid sometimes returns eventDateEnd as a date-only
+                # string (no time component), which fromisoformat reads
+                # as midnight. That breaks "closes today" filtering —
+                # by the time the user checks the dashboard at 2pm,
+                # 00:00 is already in the past and the auction gets
+                # filtered out even though it closes at 7pm tonight.
+                # When time is missing, enrich from date_info if it
+                # carries an "h:mm AM/PM" token; otherwise default to
+                # 23:59 so the auction stays in view for the full day.
+                if parsed_end.hour == 0 and parsed_end.minute == 0:
+                    date_info_str = (a.get('date_info') or '').strip()
+                    time_match = re.findall(
+                        r'(\d{1,2})(?::(\d{2}))?\s*([ap])\.?m\.?',
+                        date_info_str, flags=re.IGNORECASE,
+                    )
+                    if time_match:
+                        h, m, mer = time_match[-1]
+                        hour24 = int(h) % 12 + (12 if mer.lower() == 'p' else 0)
+                        minute = int(m) if m else 0
+                        parsed_end = parsed_end.replace(hour=hour24, minute=minute)
+                    else:
+                        parsed_end = parsed_end.replace(hour=23, minute=59)
+                return parsed_end
             except (ValueError, TypeError):
                 pass
 
@@ -402,18 +684,35 @@ class Phase1Scraper:
                 continue
         return None
 
-    async def _fetch_all_lot_pages(self, client: httpx.AsyncClient, auction_id: int) -> List[Dict]:
+    async def _fetch_all_lot_pages(
+        self,
+        client: httpx.AsyncClient,
+        auction_id: int,
+        search_text: str = "",
+    ) -> List[Dict]:
         """Fetch every lot in an auction.
 
         HiBid's current schema pages at a fixed size of 100 lots with
         `pageNumber` (1-based) as a sibling arg to `input`. We call page 1
         to get totalCount, then paginate through the remaining pages.
+
+        When ``search_text`` is non-empty, HiBid does the filtering
+        server-side — instead of downloading 10k lots per auction and
+        filtering locally, we get back only the matching lots (often
+        zero). This is what powers the "keyword across auctions" scan.
+        HiBid's searchText is case-insensitive and matches against
+        both title (lead) and description, so callers should still
+        apply a refinement filter if they want title-only matching.
         """
         lots: List[Dict] = []
         total_count = 0
 
         # First request: page 1 gives us both results and totalCount
-        variables = {"auctionId": auction_id, "pageNumber": 1}
+        variables = {
+            "auctionId": auction_id,
+            "pageNumber": 1,
+            "searchText": search_text or "",
+        }
         data = await self._graphql(client, "LotSearch", LOT_SEARCH_QUERY, variables)
         paged = (data.get("lotSearch") or {}).get("pagedResults") or {}
         batch = paged.get("results") or []
@@ -427,7 +726,11 @@ class Phase1Scraper:
         import math
         last_page = min(math.ceil(total_count / LOT_PAGE_SIZE), MAX_LOT_PAGES)
         for page_number in range(2, last_page + 1):
-            variables = {"auctionId": auction_id, "pageNumber": page_number}
+            variables = {
+                "auctionId": auction_id,
+                "pageNumber": page_number,
+                "searchText": search_text or "",
+            }
             data = await self._graphql(client, "LotSearch", LOT_SEARCH_QUERY, variables)
             paged = (data.get("lotSearch") or {}).get("pagedResults") or {}
             batch = paged.get("results") or []
@@ -456,8 +759,14 @@ class Phase1Scraper:
 
     async def fetch_lots_for_auction(self, client: httpx.AsyncClient, auction_id: int,
                                      auction_name: str = "", date_end: str = "",
-                                     source: str = "Local Pickup"):
+                                     source: str = "Local Pickup",
+                                     search_text: str = "",
+                                     auction_meta: Dict = None):
         """Fetch + process one auction's lots.
+
+        When ``search_text`` is non-empty, HiBid filters lots
+        server-side — most auctions return zero matching lots, so the
+        keyword-scan path completes in seconds instead of minutes.
 
         Returns a dict: {
             "lots": [processed_lot, ...],
@@ -477,7 +786,9 @@ class Phase1Scraper:
             "auction_name": auction_name,
         }
         try:
-            lots = await self._fetch_all_lot_pages(client, auction_id)
+            lots = await self._fetch_all_lot_pages(
+                client, auction_id, search_text=search_text,
+            )
             result["raw_count"] = len(lots)
 
             # Compute closing_fmt for the auction. Primary source: the
@@ -530,7 +841,15 @@ class Phase1Scraper:
                 # both no-bids and active-bidding states.
                 next_bid = state.get('minBid', 0.0) or 0.0
                 effective_bid = max(current_bid, next_bid)
-                total_cost = self.estimate_total_cost(effective_bid)
+                # Per-auction premium (parsed from HiBid buyerPremium
+                # text) beats the config-wide default. Real premiums
+                # observed: 0% (US Marshals) through 22% — the flat
+                # 15% default understates cost on high-premium
+                # auctions, the dangerous direction.
+                _premium_mult = (auction_meta or {}).get('premium_mult')
+                total_cost = self.estimate_total_cost(
+                    effective_bid, premium_mult=_premium_mult,
+                )
 
                 # Auctioneer's value range, e.g. "10.00 - 50.00 USD".
                 # Used as a sanity check against eBay/Mercari comp medians.
@@ -551,12 +870,48 @@ class Phase1Scraper:
                     hd_thumbnail_url = first.get('hdThumbnailLocation') or ''
                     fullsize_url = first.get('fullSizeLocation') or ''
 
+                # Per-lot shipping flag from HiBid's GraphQL. Many
+                # auctions (especially estate-liquidation and Hill-Country
+                # style) mix shippable small items with pickup-only large
+                # items in the same catalog. Trust the per-lot flag when
+                # present; fall back to the auction-level `source` arg
+                # only when the field is unexpectedly null.
+                lot_ship = lot.get('shippingOffered')
+                if lot_ship is True:
+                    effective_source = 'Ship'
+                elif lot_ship is False:
+                    effective_source = 'Local Pickup'
+                elif 'local pickup only' in (description or '').lower():
+                    # Belt-and-suspenders: some auctioneers skip the
+                    # structured flag and write "Local Pickup Only" in
+                    # the lot description instead. Text is authoritative.
+                    effective_source = 'Local Pickup'
+                else:
+                    effective_source = source
+
+                # UNREACHABLE pickup-only detection. `source` (the arg)
+                # is the AUCTION-level classification: 'Ship' means the
+                # auction was found via the nationwide query — it is NOT
+                # within the user's pickup radius. A pickup-only lot in
+                # such an auction can never be acquired: the auctioneer
+                # won't ship it and the user won't drive 1,200 miles.
+                # 7/6 Hayworth (Pompeii, MI — user in Houston): 6-foot
+                # metal shelves and post-hole diggers were A-graded at
+                # $0 ship because their pickup-only flag made them look
+                # like local wins. Consumed by the buy-score (hard F),
+                # the comps filter (skip — no credits), and the header
+                # badge.
+                unreachable_pickup = (
+                    source == 'Ship' and effective_source == 'Local Pickup'
+                )
+
                 processed_lots.append({
+                    "unreachable_pickup": unreachable_pickup,
                     "lot_id": lot_id,
                     "auction": auction_name,
                     "auction_link": f"https://hibid.com/auction/{auction_id}",
                     "closing_date": closing_fmt,
-                    "source": source,
+                    "source": effective_source,
                     "title": title,
                     "lot_link": f"https://hibid.com/lot/{lot_id}",
                     "category": category,
@@ -574,6 +929,13 @@ class Phase1Scraper:
                     "hd_thumbnail_url": hd_thumbnail_url,
                     "fullsize_url": fullsize_url,
                     "image_count": len(pictures),
+                    # Per-auction commercial terms (same value on every
+                    # lot of an auction). Consumed by _compute_max_bid /
+                    # _compute_buy_score (premium + ship hint) and the
+                    # analysis-view header (conditional-shipping badge).
+                    "auction_buyer_premium_pct": _premium_mult,
+                    "auction_cond_ship": (auction_meta or {}).get('cond_ship', False),
+                    "auction_ship_hint": (auction_meta or {}).get('ship_hint'),
                 })
             result["lots"] = processed_lots
         except Exception as e:
@@ -583,7 +945,9 @@ class Phase1Scraper:
     async def _fetch_lots_batch(self, client: httpx.AsyncClient, auctions: List[Dict],
                                 source: str, batch_size: int = 20,
                                 progress_callback=None, progress_offset: int = 0,
-                                grand_total: int = None, phase_label: str = ""):
+                                grand_total: int = None, phase_label: str = "",
+                                search_text: str = "",
+                                auction_meta_map: Dict[int, Dict] = None):
         """Fetch lots for a list of auctions in concurrent batches.
 
         Returns a dict: {
@@ -617,7 +981,11 @@ class Phase1Scraper:
             batch = auctions[i:i + batch_size]
             tasks = [
                 self.fetch_lots_for_auction(
-                    client, a['auction_id'], a['name'], a.get('date_end', ''), source
+                    client, a['auction_id'], a['name'], a.get('date_end', ''), source,
+                    search_text=search_text,
+                    auction_meta=(auction_meta_map or {}).get(
+                        int(a['auction_id'])
+                    ),
                 )
                 for a in batch
             ]
@@ -678,7 +1046,7 @@ class Phase1Scraper:
             if progress_callback:
                 progress_callback(current, total, label)
 
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(verify=_HTTPX_VERIFY) as client:
             # Parallelize the local + nationwide GraphQL calls. They were
             # sequential before — total Phase 1a was ~10s for two ~5s
             # calls in series. Running them concurrently cuts that to
@@ -745,7 +1113,12 @@ class Phase1Scraper:
                 pre_close_count = len(remote_auctions)
                 remote_auctions = self._filter_by_closing_date(remote_auctions)
                 remote_auctions = sorted(
-                    remote_auctions, key=lambda a: a.get('date_end', ''),
+                    # `or ''` (not a dict default): date_end is always
+                    # PRESENT but can be None when HiBid returns
+                    # eventDateEnd:null — sorting None against ISO
+                    # strings raises TypeError and killed nationwide
+                    # discovery (confirmed by the 7/11 NaN sweep).
+                    remote_auctions, key=lambda a: a.get('date_end') or '',
                 )
                 for a in remote_auctions:
                     a['source'] = 'Ship'
@@ -825,7 +1198,7 @@ class Phase1Scraper:
         """
         out: Dict[int, Dict[str, list]] = {}
         total = len(auctions)
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(verify=_HTTPX_VERIFY) as client:
             for i in range(0, total, batch_size):
                 chunk = auctions[i:i + batch_size]
                 tasks = [
@@ -884,8 +1257,16 @@ class Phase1Scraper:
 
     async def fetch_lots_for_selected(
         self, selected_auctions: List[Dict], progress_callback=None,
+        search_text: str = "",
     ) -> pd.DataFrame:
         """Fetch full lot detail for a caller-supplied list of auctions.
+
+        When ``search_text`` is non-empty, HiBid filters lots server-side
+        across every auction in ``selected_auctions``. Auctions with zero
+        matching lots return an empty payload (single GraphQL call, no
+        pagination needed) — turning a multi-minute full fetch into a
+        seconds-long targeted scan. Used by the "keyword across auctions"
+        feature in the dashboard.
 
         Returns a DataFrame. Diagnostic counts (raw_count, filtered_by_*,
         per_auction breakdown, errors) are attached to `df.attrs` so the UI
@@ -914,7 +1295,19 @@ class Phase1Scraper:
         per_auction: List[Dict] = []
         errors: List[Dict] = []
 
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(verify=_HTTPX_VERIFY) as client:
+            # Per-auction commercial terms (buyer premium, shipping
+            # blurb) — one cheap call per 50 auctions, fetched before
+            # the lot pages so every processed lot can carry its
+            # auction's premium multiplier + ship hint.
+            try:
+                _meta_map = await self.fetch_auction_meta(
+                    client,
+                    [a['auction_id'] for a in selected_auctions],
+                )
+            except Exception:
+                _meta_map = {}
+
             if local_auctions:
                 # Phase label gets joined with "{label} — {current}/{total}
                 # auctions fetched" downstream, so keep the label compact
@@ -929,6 +1322,8 @@ class Phase1Scraper:
                     client, local_auctions, "Local Pickup",
                     progress_callback=progress_callback, progress_offset=0,
                     grand_total=grand_total, phase_label=local_label,
+                    search_text=search_text,
+                    auction_meta_map=_meta_map,
                 )
                 agg_lots.extend(r["lots"])
                 raw_count += r["raw_count"]
@@ -947,6 +1342,8 @@ class Phase1Scraper:
                     progress_callback=progress_callback,
                     progress_offset=len(local_auctions),
                     grand_total=grand_total, phase_label=nationwide_label,
+                    search_text=search_text,
+                    auction_meta_map=_meta_map,
                 )
                 agg_lots.extend(r["lots"])
                 raw_count += r["raw_count"]

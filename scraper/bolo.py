@@ -183,6 +183,85 @@ _HARD_SKIP_PATTERNS: List[str] = [
 ]
 
 
+# ---------------------------------------------------------------------
+# Accessory-context guard ("compatible-with disqualifier").
+# "Case for iPad", "lens for Canon EOS", "band fits Apple Watch" are
+# cheap third-party accessories — the brand name appears in the title
+# but the lot is NOT a brand item. When EVERY occurrence of a brand
+# alias in the haystack is directly preceded by one of these phrases,
+# the alias hit is rejected. One un-prefixed occurrence anywhere keeps
+# the match alive ("Canon EOS R5 with lens for Canon" is still an R5).
+# The regex is anchored at end-of-prefix ($) and tested against the
+# ~40 chars before each alias occurrence.
+# Production false positives that motivated this: "Noise Canceling
+# Headphone Case for Bose" (A-graded as Bose headphones), "for Canon",
+# "for iPad" accessory lots in the 743768 audit.
+# ---------------------------------------------------------------------
+_COMPAT_CONTEXT_RE = re.compile(
+    r"(?:\bfor|\bfits?|\bcompatible\s+with|\bworks\s+with|"
+    r"\breplacement\s+for|\bdesigned\s+for|\bmade\s+for|\bto\s+fit)"
+    r"\s+(?:the\s+|your\s+|all\s+|select\s+|most\s+)?$"
+)
+
+# ---------------------------------------------------------------------
+# Media-context guard for apparel-family brands.
+# Movie/TV titles collide with clothing brand names: "DVD Movies -
+# Buck, Wrangler, Jericho, Dakota" matched the Wrangler/Lee vintage
+# BOLO in production (6/12 Longview audit). When media markers are
+# present, ALIAS-ONLY matches for apparel-family categories are
+# rejected. Strong (alias + model) matches still pass — a real
+# "Wrangler 936 Cowboy Cut" mentioned alongside a DVD keeps matching.
+# Deliberately NOT applied to nostalgia/electronics categories, where
+# DVD-bearing lots are legitimate BOLO targets (Hannah Montana DVD
+# player, Tamagotchi + DVD bundles).
+# "film" is deliberately absent — it would kill camera-film lots.
+# ---------------------------------------------------------------------
+_MEDIA_CONTEXT_RE = re.compile(
+    r"\b(?:dvds?|blu-?rays?|vhs|laserdisc|movies?|tv\s+series|"
+    r"episodes|season\s+\d|complete\s+series)\b"
+)
+# Trigger-index tokenizer (PERF 7/13). Extracts literal alphanumeric
+# tokens (≥2 chars) from alias pattern sources and from lot haystacks
+# so the matcher can gate on a fast word-set intersection instead of a
+# 361KB combined regex. Stopwords drop the boundary-class scaffolding
+# artifacts ("za"/"z0" from `[A-Za-z0-9]`) that leak out of pattern
+# sources — over-capturing a real trigger would only cost speed, but
+# dropping one would miss matches, so the stopword set stays minimal.
+_TRIGGER_TOKEN_RE = re.compile(r'[a-z0-9]{2,}')
+_TRIGGER_STOPWORDS = frozenset({'za', 'z0'})
+
+_MEDIA_GUARDED_CATEGORIES = frozenset({
+    # Full apparel-family category list from clothing_brand_bolo.json,
+    # western_wear_bolo.json, and vintage_clothing_bolo.json. Keep in
+    # sync when adding apparel categories — a category missing here
+    # means movie titles can alias-match that category's brands
+    # (the original Wrangler bug was exactly this: 'vintage_denim'
+    # wasn't guarded).
+    "clothing", "athleisure", "boho_contemporary", "boots", "luxury",
+    "luxury_mid", "outdoor", "premium_contemporary", "sneakers",
+    "vintage_denim", "vintage_graphic", "vintage_heritage",
+    "western_wear", "workwear", "denim",
+})
+
+
+def _all_alias_hits_are_accessory_context(alias_pat, haystack: str) -> bool:
+    """True when every alias occurrence sits in 'for {brand}' context.
+
+    Scans each regex hit of ``alias_pat`` and tests the preceding ~40
+    characters against _COMPAT_CONTEXT_RE. Returns False the moment
+    any occurrence is NOT accessory-prefixed (that occurrence keeps
+    the brand match alive). Cheap: only runs on alias hits, which are
+    rare relative to total lots scanned.
+    """
+    saw_any = False
+    for m in alias_pat.finditer(haystack):
+        saw_any = True
+        prefix = haystack[max(0, m.start() - 40):m.start()]
+        if not _COMPAT_CONTEXT_RE.search(prefix):
+            return False
+    return saw_any
+
+
 _BRAND_ALIASES: Dict[str, List[str]] = {
     # JSON header → list of literal phrases to match in the haystack
     "Loungefly":                              ["loungefly", "loungefy", "lounge fly", "stitch shoppe", "mickey main attraction", "main attraction series"],
@@ -1244,7 +1323,12 @@ _BRAND_ALIASES: Dict[str, List[str]] = {
     "Rolex accessories":                      ["rolex", "tudor"],
     "Omega accessories":                      ["omega"],
     "Patek Philippe accessories":             ["patek philippe", "patek"],
-    "Audemars Piguet accessories":            ["audemars piguet", " ap "],
+    # Bare " ap " alias removed 7/12 — beyond the obvious acronym
+    # collisions (AP exam, AP news), the title+description JOIN can
+    # split a word across the boundary and manufacture the token out
+    # of thin air: a truncated title ending "…Ankle Wr" + description
+    # starting "ap for Sprain" matched 4 junk lots in one A2Z run.
+    "Audemars Piguet accessories":            ["audemars piguet", "ap royal oak"],
     "Cartier accessories":                    ["cartier"],
     "Other Swiss luxury accessories":         [
         "vacheron constantin", "vacheron",
@@ -1754,6 +1838,34 @@ _BRAND_ALIASES: Dict[str, List[str]] = {
         "pgi-280xl", "cli-281xl",
         "pgi-1200xl", "pgi-2200xl",
     ],
+    "HP LaserJet toner": [
+        # Requested 7/12 — genuine HP laser toner. "A" = standard
+        # yield, "X" = high yield; sealed genuine boxes resell $25-150.
+        "hp toner", "hp laserjet toner",
+        "hp 05a", "hp 12a", "hp 26a", "hp 26x", "hp 30a", "hp 30x",
+        "hp 42a", "hp 48a", "hp 55a", "hp 58a", "hp 58x", "hp 64a",
+        "hp 78a", "hp 80a", "hp 83a", "hp 85a", "hp 89a", "hp 90a",
+        "hp 202a", "hp 202x", "hp 206a", "hp 206x",
+        "hp 410a", "hp 410x", "hp 414a", "hp 414x",
+        # Bare part numbers (with and without HP prefix on the lot)
+        "cf226a", "cf226x", "cf258a", "cf258x", "cf230a", "cf230x",
+        "cf248a", "cf280a", "cf280x", "cf283a", "ce285a", "ce255a",
+        "cc364a", "q2612a", "cf500a", "cf510a",
+        "w2110a", "w2111a", "w2112a", "w2113a",
+        "w2020a", "w2021a", "w2022a", "w2023a",
+        "cf410a", "cf410x", "cf411a", "cf412a", "cf413a",
+    ],
+    "Canon toner": [
+        # Requested 7/12 — Canon imageCLASS / CRG laser toner.
+        "canon toner", "canon imageclass toner",
+        "canon 045", "canon 046", "canon 051", "canon 052",
+        "canon 054", "canon 055", "canon 055h", "canon 057",
+        "canon 057h", "canon 067", "canon 118", "canon 119",
+        "canon 121", "canon 128", "canon 131", "canon 137",
+        "crg-045", "crg-046", "crg-051", "crg-052", "crg-054",
+        "crg-055", "crg-057", "crg-067", "crg-118", "crg-119",
+        "crg-121", "crg-128", "crg-131", "crg-137",
+    ],
     "Brother printer supplies": [
         "brother lc101", "brother lc103", "brother lc203",
         "brother lc205", "brother lc207", "brother lc209",
@@ -1773,6 +1885,18 @@ _BRAND_ALIASES: Dict[str, List[str]] = {
         "brother dr-360", "brother dr-630", "brother dr-720",
         "brother dr-730", "brother dr-820", "brother dr-830",
         "brother dr-223", "brother dr-227",
+        # Bare/unhyphenated toner codes (7/12) — estate-lot titles
+        # often write "TN760" or lead with the bare code ("Lot: TN-760
+        # x3 sealed"). The brother-prefixed hyphen forms above miss
+        # those.
+        "brother tn760", "brother tn850", "brother tn660",
+        "brother tn450", "brother tn730", "brother tn880",
+        "tn-450", "tn-660", "tn-730", "tn-760", "tn-770",
+        "tn-820", "tn-850", "tn-880", "tn-223", "tn-227",
+        "tn450", "tn660", "tn730", "tn760", "tn770",
+        "tn820", "tn850", "tn880",
+        "dr-420", "dr-630", "dr-730", "dr-820",
+        "brother toner", "brother drum unit",
     ],
     "Specialty / industrial inks": [
         "fujifilm dx 100", "fujifilm dx100",
@@ -3188,6 +3312,21 @@ _BRAND_ALIASES: Dict[str, List[str]] = {
         "hummel", "m.i. hummel", "mi hummel", "goebel hummel",
         "goebel figurine",
     ],
+    # Disney character figurines (disney_figurine, added 2026-07-28). All
+    # distinctive enough for alias-only matches; the JSON models[] refine
+    # to specific pieces when present.
+    "Jim Shore Disney Traditions": [
+        "jim shore", "disney traditions", "heartwood creek",
+    ],
+    "Disney Showcase / Couture de Force": [
+        "disney showcase", "couture de force",
+    ],
+    "Walt Disney Classics Collection (WDCC)": [
+        "wdcc", "walt disney classics collection", "walt disney classics",
+    ],
+    "Grand Jester Studios Disney": [
+        "grand jester studios", "grand jester",
+    ],
     "Lladró figurines": [
         "lladro", "lladró",
     ],
@@ -3333,6 +3472,13 @@ _BRAND_ALIASES: Dict[str, List[str]] = {
     # mainline blue-card Hot Wheels (commodity tier) match alias-only
     # which the user can manually skip.
     "Hot Wheels collector variants": [
+        # Specific collector variants only — DO NOT add a generic
+        # "hot wheels" alias here. The Wolf/Bone 5/21 audit had 21 BOLO
+        # false-positives on modern mainline cars (Spongebob, Cosworth,
+        # BMW 507, etc.) because the previous catch-all alias fired on
+        # every Hot Wheels lot. Mainline blue-card resells at $1-3 and
+        # should NOT surface as a BOLO hit. Treasure Hunts / Super THs /
+        # Redlines / RLC / pop-culture lines are the real premium tier.
         "hot wheels treasure hunt", "hot wheels th",
         "hot wheels super treasure hunt", "hot wheels super th",
         "hot wheels redline", "hot wheels rlc",
@@ -3343,7 +3489,6 @@ _BRAND_ALIASES: Dict[str, List[str]] = {
         "hot wheels star wars", "hot wheels marvel",
         "hot wheels pop culture", "hot wheels entertainment",
         "hot wheels hall of fame",
-        "hot wheels",  # broad fallback (alias_only; specific aliases above route to strong match)
         "matchbox lesney", "matchbox models of yesteryear",
         "matchbox 1-75",
     ],
@@ -3651,6 +3796,65 @@ class BoloMatcher:
         self._brand_meta = brand_meta
         self._mtimes = mtimes
         self._any_alias_re = any_alias_re
+
+        # ---- Word-level trigger index (PERF 7/13) --------------------
+        # The 361KB / 5,333-alternative combined regex above cost ~210ms
+        # PER LOT because a per-branch lookbehind kills the engine's
+        # first-char optimization. Replace it in the hot path with an
+        # inverted index: every literal token in a brand's alias
+        # pattern → the indices of brand_patterns needing it. A lot is
+        # tokenized ONCE, and only brands whose trigger words actually
+        # appear get their (real, boundary-correct) alias_pat tested.
+        # Superset-safe: each literal token IS required by its pattern,
+        # so a brand absent from the candidate set provably cannot match.
+        # Patterns with no extractable literal token (rare) go in
+        # `_always_test` and are checked every lot.
+        self._trigger_index: Dict[str, list] = {}
+        self._always_test: list = []
+        for _bi, (_canon, _ap, _mp) in enumerate(brand_patterns):
+            _toks = _TRIGGER_TOKEN_RE.findall(_ap.pattern.lower())
+            # Drop regex keyword noise that appears literally in sources.
+            _toks = [t for t in _toks if t not in _TRIGGER_STOPWORDS]
+            if not _toks:
+                self._always_test.append(_bi)
+                continue
+            for _t in set(_toks):
+                self._trigger_index.setdefault(_t, []).append(_bi)
+
+        # ---- Model-pattern buckets (PERF 7/13) -----------------------
+        # The Pass-2 model-only sub-passes each filtered ALL 9,735 model
+        # patterns by category/name on EVERY lot (precious-metal Pass 2e
+        # ran with no context gate at all). Precompute the buckets once
+        # so each pass iterates only its own handful. Built by iterating
+        # model_patterns in order, so within-bucket order — and the
+        # first-match-wins behavior — is identical to the old filtered
+        # loops.
+        self._model_pats_by_cat: Dict[str, list] = {}
+        for _mp in model_patterns:
+            _c = (brand_meta.get(_mp[0]) or {}).get('category')
+            self._model_pats_by_cat.setdefault(_c, []).append(_mp)
+        self._model_pats_band_tee = [
+            _mp for _mp in model_patterns
+            if "Vintage" in _mp[0] and "tee" in _mp[0].lower()
+        ]
+        self._model_pats_watch_acc = [
+            _mp for _mp in model_patterns if "accessories" in (_mp[0] or "")
+        ]
+        self._model_pats_loungefly = [
+            _mp for _mp in model_patterns if _mp[0] == "Loungefly"
+        ]
+        # Trigger-word set for the precious-metal Pass 2e — the only
+        # model-only pass with no context gate (it ran its ~65 patterns
+        # + a 133-phrase disqualifier check on EVERY lot, ~23% of match
+        # time). Gate it on a fast word-set intersection: if the lot
+        # shares none of these patterns' literal tokens, no precious-
+        # metal model can match. Superset-safe (each token is required
+        # by its pattern), so behavior is unchanged.
+        self._precious_trigger_words: set = set()
+        for _c, _n, _p in self._model_pats_by_cat.get('precious_metal', ()):
+            for _t in _TRIGGER_TOKEN_RE.findall(_p.pattern.lower()):
+                if _t not in _TRIGGER_STOPWORDS:
+                    self._precious_trigger_words.add(_t)
         # Mtime fingerprint changed → in-memory cache is now stale.
         # We reset to None; next match() call will lazy-load (which
         # will see the fingerprint mismatch and start fresh).
@@ -3854,52 +4058,89 @@ class BoloMatcher:
         # Use the precompiled combined-OR regex as a fast pre-filter
         # (~10-50× faster than a Python loop over all alias patterns
         # for the no-match-anywhere case, which is most rows).
-        if self._any_alias_re is not None:
-            any_alias_hit = self._any_alias_re.search(haystack) is not None
-        else:
-            # Fallback for when combined regex couldn't be built
-            any_alias_hit = any(
-                ap.search(haystack) for _, ap, _ in self._brand_patterns
-            )
-        if not any_alias_hit:
-            for sp in self._skip_patterns:
-                if sp.search(haystack):
-                    return None
+        # Candidate gate via the word-level trigger index (PERF 7/13,
+        # replaces the 361KB / 5,333-alt combined regex that cost ~210ms
+        # PER LOT). Tokenize the haystack ONCE; a brand is a candidate
+        # only if one of its literal trigger words is present. Superset-
+        # safe — each literal token IS required by its pattern, so a
+        # brand with no trigger word present provably cannot match, and
+        # the real boundary-correct alias_pat.search below confirms the
+        # rest. Cold 82k-lot scans drop from ~55 min to seconds.
+        _hay_words = set(_TRIGGER_TOKEN_RE.findall(haystack))
+        _cand: set = set(self._always_test)
+        for _w in _hay_words:
+            _bis = self._trigger_index.get(_w)
+            if _bis:
+                _cand.update(_bis)
 
-        # Pass 1: alias + model (strongest match). Iterate in JSON
-        # order so the curated tier-1 brands get evaluated first.
+        # Pass 1: alias + model (strongest match). Iterate candidates in
+        # JSON/tier order so curated tier-1 brands are evaluated first.
         # When an alias hits but no model matches, register an
-        # alias-only fallback and KEEP SCANNING — a later entry
-        # might have a strong (alias + model) match for the same
-        # brand family. Common case: two entries share an alias
-        # ("KitchenAid" → stand mixer + appliance parts) and we
-        # want to surface whichever model list matches the title.
-        # Strong always beats alias-only.
+        # alias-only fallback and KEEP SCANNING — a later entry might
+        # have a strong (alias + model) match for the same brand family.
+        # `_matched_any_alias` mirrors the old `any_alias_hit`: set the
+        # instant a raw alias pattern matches (before disqualifier /
+        # guard rejection), because the skip-list must be suppressed
+        # whenever ANY alias matched, exactly as before.
         fallback_alias_only: Optional[Dict[str, Any]] = None
-        for canonical, alias_pat, model_pats in self._brand_patterns:
-            if not alias_pat.search(haystack):
-                continue
-            # Per-brand disqualifier check: e.g., precious-metals
-            # entries reject when "silver-plated" / "gold-tone" /
-            # "platinum membership" appears in the haystack — those
-            # are base-metal commodity / unrelated-context lots that
-            # would otherwise false-positive on a metal-content alias.
-            _meta = self._brand_meta.get(canonical) or {}
-            _disqs = _meta.get("disqualifier_phrases") or []
-            if _disqs and any(d in haystack for d in _disqs):
-                continue
-            for m_name, m_pat in model_pats:
-                if m_pat.search(haystack):
-                    return self._build_match(canonical, m_name, confidence="strong")
-            # Alias hit, no model — keep this as the best fallback
-            # but keep scanning in case a later entry matches stronger.
-            if fallback_alias_only is None:
-                fallback_alias_only = self._build_match(
-                    canonical, None, confidence="alias_only"
-                )
+        _matched_any_alias = False
+        if _cand:
+            # Media context computed once per haystack (cheap regex) —
+            # consumed by the apparel-category alias-only guard below.
+            _has_media_context = _MEDIA_CONTEXT_RE.search(haystack) is not None
+            for _bi in sorted(_cand):
+                canonical, alias_pat, model_pats = self._brand_patterns[_bi]
+                if not alias_pat.search(haystack):
+                    continue
+                _matched_any_alias = True
+                # Per-brand disqualifier check: e.g., precious-metals
+                # entries reject when "silver-plated" / "gold-tone" /
+                # "platinum membership" appears in the haystack — those
+                # are base-metal commodity / unrelated-context lots that
+                # would otherwise false-positive on a metal-content alias.
+                _meta = self._brand_meta.get(canonical) or {}
+                _disqs = _meta.get("disqualifier_phrases") or []
+                if _disqs and any(d in haystack for d in _disqs):
+                    continue
+                # Accessory-context guard: "case for iPad" / "lens for
+                # Canon" is a third-party accessory, not a brand item.
+                # Rejects the entry only when EVERY alias occurrence is
+                # accessory-prefixed — applies to strong AND alias-only
+                # paths ("lens for Canon EOS R5" would otherwise be a
+                # strong alias+model match on the R5 model pattern).
+                if _all_alias_hits_are_accessory_context(alias_pat, haystack):
+                    continue
+                for m_name, m_pat in model_pats:
+                    if m_pat.search(haystack):
+                        return self._build_match(canonical, m_name, confidence="strong")
+                # Alias hit, no model — keep this as the best fallback
+                # but keep scanning in case a later entry matches stronger.
+                # Media-context guard: movie/TV titles collide with apparel
+                # brand names ("DVD Movies - Buck, Wrangler, Jericho").
+                # Alias-only apparel matches are rejected on media lots;
+                # strong matches above already returned and are unaffected.
+                if fallback_alias_only is None:
+                    if (_has_media_context
+                            and (_meta.get("category") or "")
+                            in _MEDIA_GUARDED_CATEGORIES):
+                        continue
+                    fallback_alias_only = self._build_match(
+                        canonical, None, confidence="alias_only"
+                    )
 
         if fallback_alias_only is not None:
             return fallback_alias_only
+
+        # Skip-list — runs only when NO alias actually matched (same as
+        # the original `if not any_alias_hit` gate, just relocated to
+        # after Pass 1 since the trigger index yields candidates, not a
+        # definitive alias-hit boolean). A skip phrase suppresses a
+        # would-be model-only (Pass 2) match; a real alias match above
+        # already returned and is unaffected.
+        if not _matched_any_alias:
+            for sp in self._skip_patterns:
+                if sp.search(haystack):
+                    return None
 
         # Pass 2: model-only. For brands like "Vintage band tees" that
         # have no alias (because the brand IS the model — "Metallica"
@@ -3907,13 +4148,7 @@ class BoloMatcher:
         # alone in a non-clothing lot is noisy. We require at least
         # one tee/shirt context word in the haystack to fire.
         if any(w in haystack for w in (" tee", "t-shirt", "tshirt", " shirt", "tour shirt", "concert")):
-            for canonical, m_name, m_pat in self._model_patterns:
-                # Only fire model-only for the "Vintage band tees" /
-                # "Vintage movie/TV/brand promo" entries — every other
-                # brand has its name in the haystack anyway and pass 1
-                # would have caught it.
-                if "Vintage" not in canonical or "tee" not in canonical.lower():
-                    continue
+            for canonical, m_name, m_pat in self._model_pats_band_tee:
                 if m_pat.search(haystack):
                     return self._build_match(canonical, m_name, confidence="model_only")
 
@@ -3928,17 +4163,16 @@ class BoloMatcher:
         # implicit cases. Per-brand disqualifier check still applies
         # so silver-plate / gold-tone / platinum-membership false
         # positives stay rejected.
-        for canonical, m_name, m_pat in self._model_patterns:
-            _meta = self._brand_meta.get(canonical) or {}
-            if _meta.get("category") != "precious_metal":
-                continue
-            _disqs = _meta.get("disqualifier_phrases") or []
-            if _disqs and any(d in haystack for d in _disqs):
-                continue
-            if m_pat.search(haystack):
-                return self._build_match(
-                    canonical, m_name, confidence="model_only"
-                )
+        if _hay_words & self._precious_trigger_words:
+            for canonical, m_name, m_pat in self._model_pats_by_cat.get('precious_metal', ()):
+                _meta = self._brand_meta.get(canonical) or {}
+                _disqs = _meta.get("disqualifier_phrases") or []
+                if _disqs and any(d in haystack for d in _disqs):
+                    continue
+                if m_pat.search(haystack):
+                    return self._build_match(
+                        canonical, m_name, confidence="model_only"
+                    )
 
         # Pass 2f: Musical-instrument model-only.
         # Many titles include the model name without a brand-aliased
@@ -3979,10 +4213,7 @@ class BoloMatcher:
             "cartridge", "needle", "stylus", "turntable",
             "ukulele",
         )):
-            for canonical, m_name, m_pat in self._model_patterns:
-                _meta = self._brand_meta.get(canonical) or {}
-                if _meta.get("category") != "musical_instrument":
-                    continue
+            for canonical, m_name, m_pat in self._model_pats_by_cat.get('musical_instrument', ()):
                 if m_pat.search(haystack):
                     return self._build_match(
                         canonical, m_name, confidence="model_only"
@@ -4020,9 +4251,7 @@ class BoloMatcher:
             " bracelet", " pouch", " winder", " hangtag",
             " hang tag", " booklet", " case",
         )):
-            for canonical, m_name, m_pat in self._model_patterns:
-                if "accessories" not in (canonical or ""):
-                    continue
+            for canonical, m_name, m_pat in self._model_pats_watch_acc:
                 if m_pat.search(haystack):
                     return self._build_match(
                         canonical, m_name, confidence="model_only"
@@ -4066,9 +4295,7 @@ class BoloMatcher:
             _lf_disqs = _lf_meta.get("disqualifier_phrases") or []
             _lf_blocked = _lf_disqs and any(d in haystack for d in _lf_disqs)
             if not _lf_blocked:
-                for canonical, m_name, m_pat in self._model_patterns:
-                    if canonical != "Loungefly":
-                        continue
+                for canonical, m_name, m_pat in self._model_pats_loungefly:
                     if m_pat.search(haystack):
                         return self._build_match(
                             canonical, m_name, confidence="model_only"
